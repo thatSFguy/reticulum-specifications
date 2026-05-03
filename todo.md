@@ -73,6 +73,14 @@ to remove their markers:
 
 ## Open `⚠️` items needing a runtime verifier
 
+- [ ] **`tools/verify_proof_packet.py` to lock in §6.5.** Run two
+      side-by-side scenarios against upstream RNS: opportunistic DATA
+      with `use_implicit_proof = True` (default) and with `= False`,
+      capture the resulting PROOF packet's body length, and assert
+      it's 64 / 96 respectively with the matching content layout.
+      Also exercise a Link DATA proof and confirm it's always 96B
+      regardless of the config setting. Lock in the §6.5 wire shapes.
+
 - [ ] **`tools/verify_rnode_split.py` to lock in §8.3.** The RNode
       air-frame split-packet protocol is now documented in SPEC.md §8.3
       against direct citations in `markqvist/RNode_Firmware/Framing.h`,
@@ -138,14 +146,22 @@ re-research.
       use the correct LINKPROOF context name. The previously-existing
       §10 "Test vectors" and §11 "Source map" were renumbered to §11
       and §12 to put §10 in the protocol-stack flow.
-- [ ] **SPEC.md §6.5 expansion: regular (non-LRPROOF) PROOF body.** The
-      mandatory PROOF receipt for every CTX_NONE Link DATA packet. Body
-      is `packet_hash(32) || signature(64)` (`RNS/Link.py::prove_packet`
-      line 384-393), with a hardcoded explicit-mode comment hinting at
-      a future implicit-mode toggle that elides the packet_hash prefix.
-      Adding a `tools/verify_proof_packet.py` that runs a real link
-      transfer and asserts the proof body shape is the right
-      verification.
+- [x] **SPEC.md §6.5 expansion: regular (non-LRPROOF) PROOF body.**
+      Done. SPEC.md §6.5 now has six sub-sections covering explicit
+      (96B `packet_hash || signature`) vs implicit (64B
+      `signature`-only) forms, the upstream default
+      (`Reticulum.__use_implicit_proof = True` per
+      `RNS/Reticulum.py:259` — opportunistic DATA proofs default to
+      the implicit form on the wire), the Link DATA proof exception
+      (always explicit per `RNS/Link.py:383-394`), the
+      length-dispatch receiver-side, where the proof packet is
+      addressed (`packet_hash[:16]` as a synthetic ProofDestination
+      vs `link.link_id` for Link proofs), wire-byte ladders for both
+      forms. The previously-misleading SPEC §2.5 entry for
+      `LINKPROOF (0xFD)` is corrected — it's a defined-but-unused
+      constant in RNS 1.2.0; the actual proof packets carry
+      `context = NONE (0x00)`. todo for `tools/verify_proof_packet.py`
+      moves to "needs a runtime verifier" section.
 - [ ] **SPEC.md §6 sub-section: 3-byte MTU/mode signalling field.**
       Present on LINKREQUEST and LRPROOF iff
       `Reticulum.link_mtu_discovery() == True` and the next-hop

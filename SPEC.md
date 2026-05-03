@@ -123,7 +123,7 @@ Full context inventory from `RNS/Packet.py:72-92` (RNS 1.2.0):
 | `0xFA` | KEEPALIVE | Link keepalive (sent periodically while a Link is idle) |
 | `0xFB` | LINKIDENTIFY | Backchannel-identify proof on an established Link (§5 backchannel) |
 | `0xFC` | LINKCLOSE | Link teardown notification |
-| `0xFD` | LINKPROOF | Receipt for a CTX_NONE Link DATA packet (§6.5) |
+| `0xFD` | LINKPROOF | Defined but **not actually emitted** by upstream RNS 1.2.0 in this revision. Both `Identity.prove` and `Link.prove_packet` build their proof packets with `context = NONE (0x00)` — the proof-ness is conveyed by `packet_type = PROOF (3)`, not by this context byte. Reserved for a future revision; see §6.5 |
 | `0xFE` | LRRTT | Link RTT measurement reply |
 | `0xFF` | LRPROOF | Link request proof (§6.2) |
 
@@ -462,13 +462,101 @@ encrypt_key  = session_key[32..64]
 
 Subsequent DATA packets on the link use the Link-derived-key Token format (section 3.1, no ephemeral_pub prefix).
 
-### 6.5 Mandatory packet receipts
+### 6.5 Packet receipts (regular `PROOF` packets)
 
-After processing each `NONE` DATA packet on an active link, the receiver MUST send back a `PROOF`-type packet with `context = LINKPROOF (0xFD)` whose body is the 32-byte SHA-256 of the received packet's hashable part. Without this, the sender's retransmit queue fires and the same packet arrives repeatedly, eventually exceeding the link's KEEPALIVE budget and tearing down the link. This is `Packet.prove_packet` upstream — non-optional for any client that wants to receive content over a Link without spamming the sender.
+A `PROOF`-type packet (`packet_type = 3`, `context = NONE (0x00)`) is the receipt that closes the loop on every CTX_NONE DATA packet — both opportunistic DATA addressed to a SINGLE destination and DATA flowing on an active Link. Without it, the sender's `PacketReceipt` never resolves, its retransmit queue fires repeatedly, and on a Link the KEEPALIVE budget is exhausted and the link torn down.
+
+This section specifies the regular PROOF body. Two related proof formats are documented elsewhere and are NOT compatible with this format:
+
+- **`LRPROOF (context = 0xFF)`** is the link-establishment proof (§6.2). Different body, different signature input.
+- **`RESOURCE_PRF (context = 0x05)`** is the proof for a completed Resource transfer (§10.8). Different body (`resource_hash || full_proof`), no signature.
+
+#### 6.5.1 Two body formats: explicit vs implicit
+
+Regular PROOFs come in two wire forms (`RNS/Packet.py:413-414`):
+
+```
+EXPL_LENGTH = HASHLENGTH//8 + SIGLENGTH//8 = 32 + 64 = 96 bytes
+IMPL_LENGTH = SIGLENGTH//8                 =      64 = 64 bytes
+
+explicit body  =  packet_hash(32) || signature(64)
+implicit body  =                     signature(64)
+```
+
+Where:
+
+- `packet_hash = Identity.full_hash(original_packet.get_hashable_part())` — the full SHA-256 (32 bytes, **not** truncated to 16) of the prove-target packet's hashable part. `get_hashable_part` is the same recipe used for `link_id` derivation in §6.3, so the proof binds to the version of the packet that survived any HEADER_1↔HEADER_2 conversion in transit (the high nibble of flags, hops byte, and any HEADER_2 transport_id are stripped before hashing).
+- `signature` is the destination's (or link's) Ed25519 signature **over `packet_hash`**, NOT over the proof body itself. The signing key is the destination's long-term Ed25519 private key for an opportunistic DATA proof, or the link-derived signing key for a Link DATA proof.
+
+The two forms are distinguished **purely by length** at the receiver. `PacketReceipt.validate_proof` (`RNS/Packet.py:497-548`) dispatches on `len(proof) == 96` (explicit) vs `len(proof) == 64` (implicit); lengths matching neither are rejected outright. There is no flag bit or context byte that signals which form is being used — wire length is the only signal.
+
+#### 6.5.2 Choosing which form to emit
+
+Sender side, two distinct policies:
+
+**Opportunistic DATA addressed to a SINGLE destination** — `RNS.Identity.prove(packet, destination)` at `RNS/Identity.py:912-923`:
+
+```python
+def prove(self, packet, destination=None):
+    signature = self.sign(packet.packet_hash)
+    if RNS.Reticulum.should_use_implicit_proof():
+        proof_data = signature                                  # 64 bytes
+    else:
+        proof_data = packet.packet_hash + signature             # 96 bytes
+    proof = RNS.Packet(destination_or_proof_dest, proof_data,
+                       RNS.Packet.PROOF, attached_interface=...)
+    proof.send()
+```
+
+The default upstream value is `Reticulum.__use_implicit_proof = True` (`RNS/Reticulum.py:259`), so **upstream emits the 64-byte implicit form by default**. The 96-byte explicit form is only emitted when the operator's `[reticulum]` config sets `use_implicit_proof = No`. A clean-room implementation that hardcodes either single form will fail to interop with peers running the other one — receiver-side validators handle both, but a hardcoded sender writing the wrong length to the wire is not negotiable.
+
+**DATA on an active Link** — `RNS.Link.prove_packet(packet)` at `RNS/Link.py:383-394`:
+
+```python
+def prove_packet(self, packet):
+    signature = self.sign(packet.packet_hash)
+    proof_data = packet.packet_hash + signature                 # 96 bytes — always
+    proof = RNS.Packet(self, proof_data, RNS.Packet.PROOF)
+    proof.send()
+```
+
+with the upstream comment `# TODO: Hardcoded as explicit proof for now`. Link DATA proofs are **always** the 96-byte explicit form in RNS 1.2.0 regardless of the `use_implicit_proof` setting, and the matching `validate_link_proof` at `RNS/Packet.py:449-494` has the implicit-form branch commented out with the same note. Today, Link DATA proofs are explicit-only on both ends; an implementation may match this behavior with a single hardcoded length on the link path, but should be ready to revisit if upstream re-enables the implicit branch (no fixed timeline).
+
+#### 6.5.3 Where the proof packet is addressed
+
+The dest_hash position in the proof packet's outer header depends on which side of which transport the proven packet was on:
+
+- **Opportunistic DATA proof:** `dest_hash = packet_hash[:16]` (the 16-byte truncation of the full SHA-256 of the proved packet's hashable part, used as a synthetic `ProofDestination` — `RNS/Packet.py:390-396`). The proof rides through `Transport.outbound` and follows the reverse path home via the receiver's `reverse_table`.
+- **Link DATA proof:** `dest_hash = link.link_id` (the 16-byte link id, just like all other Link traffic; `RNS/Packet.py:182-184` notes this position is filled by `destination.link_id` whenever the destination object is a Link). The proof rides on the link itself.
+
+#### 6.5.4 Wire summary
+
+```
+explicit form (96 bytes total body):
+[ 1B flags ][ 1B hops ][ 16B dest_hash || link_id ][ 1B context=0x00 ]
+[ 32B SHA256(get_hashable_part(original_packet)) ]
+[ 64B Ed25519_signature(SHA256(get_hashable_part(original_packet))) ]
+
+implicit form (64 bytes total body):
+[ 1B flags ][ 1B hops ][ 16B dest_hash || link_id ][ 1B context=0x00 ]
+[ 64B Ed25519_signature(SHA256(get_hashable_part(original_packet))) ]
+```
+
+Note `context = 0x00 (NONE)` in both cases — the proof-ness is conveyed by `packet_type = PROOF (3)` in the flag byte, not by a context. This is in contrast to LRPROOF (which uses `context = 0xFF`) and RESOURCE_PRF (which uses `context = 0x05`). The `LINKPROOF (0xFD)` context constant defined at `RNS/Packet.py:90` is reserved but not actually used by either prove path in RNS 1.2.0.
+
+#### 6.5.5 Receiver tolerance
+
+A new implementation's PROOF validator MUST accept both 64- and 96-byte bodies for opportunistic DATA proofs (per `validate_proof`'s length-dispatch above) so it interops with peers running either policy. Hardcoding only one form at the validator silently fails on traffic from a peer with the opposite setting. Length-dispatch is also the only place the validator ever distinguishes the two — there is no "I want explicit" hint a sender can express.
+
+A receiver that gets a PROOF whose length matches neither form treats it as malformed and returns `False` from `validate_proof`; no NACK is sent to the originator.
+
+#### 6.5.6 Why this matters for Link interop
+
+After processing each `NONE` DATA packet on an active link, the receiver MUST emit the explicit-form PROOF described above. Without it, the sender's retransmit queue fires and the same packet arrives repeatedly, eventually exceeding the link's KEEPALIVE budget and tearing down the link. This is `Packet.prove_packet` upstream — non-optional for any client that wants to receive content over a Link without spamming the sender.
 
 ### 6.6 Source
 
-`RNS/Link.py`, `RNS/Packet.py::prove`. The webclient's `reference/js-reference/link.js` is a faithful port.
+`RNS/Link.py`, `RNS/Packet.py::prove`, `RNS/Identity.py::prove`, `RNS/PacketReceipt.py::validate_proof`. The webclient's `reference/js-reference/link.js` is a faithful port.
 
 ---
 
