@@ -73,6 +73,20 @@ to remove their markers:
 
 ## Open `⚠️` items needing a runtime verifier
 
+- [ ] **`tools/verify_rnode_split.py` to lock in §8.3.** The RNode
+      air-frame split-packet protocol is now documented in SPEC.md §8.3
+      against direct citations in `markqvist/RNode_Firmware/Framing.h`,
+      `Config.h`, `Utilities.h`, and `RNode_Firmware.ino`, plus the
+      clean-room reimplementation in `thatSFguy/reticulum-lora-repeater/src/Radio.cpp`.
+      A runtime verifier would: build a 300-byte synthetic Reticulum
+      packet, run it through a Python implementation of the TX-side
+      header rules, and confirm the byte-level frames match what
+      `RNode_Firmware.ino:716-742` would emit (header byte high nibble
+      random + low-nibble FLAG_SPLIT bit, both frames sharing the same
+      header, split point at 255 bytes total per LoRa frame). RX-side
+      verifier should drive the state-table at SPEC.md §8.3 and confirm
+      the four reassembly cases.
+
 - [ ] **Lock in the §6.2 / §6.3 corrections with `verify_link_handshake.py`.**
       The wire-byte order of the LRPROOF body (`signature || responder_X25519_pub || signalling`,
       not `link_id || responder_X25519_pub || signature || signalling`) and

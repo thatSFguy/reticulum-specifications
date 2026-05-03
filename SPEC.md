@@ -454,9 +454,96 @@ escape: 0x7E → 0x7D 0x5E   (FLAG ^ ESC_MASK)
 
 No command byte, no RSSI/SNR sidecar — the HDLC payload IS the raw Reticulum packet. Source: `RNS/Interfaces/TCPInterface.py::HDLC`.
 
-### 8.3 RNode 1-byte LoRa frame header
+### 8.3 RNode air-frame header and split-packet protocol
 
-Inside CMD_DATA over KISS, the RNode firmware passes the LoRa payload through transparently with a single 1-byte header that encodes the LoRa frame type. KISS hosts treat this as opaque application data and pass it straight through to/from the Reticulum stack.
+The 1-byte header described here lives **between RNodes on the LoRa air-frame**, not on the KISS host channel. The upstream RNode firmware adds it on every TX and strips it on every RX before forwarding the payload to the host as `CMD_DATA`. KISS hosts (RNS, NomadNet, Sideband, etc.) NEVER see this byte. Two RNodes that talk LoRa to each other use it to glue two LoRa frames into one Reticulum packet of up to 508 bytes; an alternative implementation that talks LoRa to an RNode (e.g. a clean-room repeater firmware) MUST construct and parse this header bit-exactly, or its TX will be invisible and its RX will mistake the header byte for the first payload byte.
+
+#### Header byte layout
+
+From `markqvist/RNode_Firmware/Framing.h:105-108`:
+
+```
+bit 7..4 : seq         (NIBBLE_SEQ   = 0xF0) — random sequence id, set on each TX
+bit 3..1 : reserved    (currently always 0)
+bit 0    : FLAG_SPLIT  (NIBBLE_FLAGS = 0x0F, FLAG_SPLIT = 0x01)
+SEQ_UNSET = 0xFF                            — sentinel: "no first half buffered"
+```
+
+Helpers (`Utilities.h:1218-1224`):
+
+```c
+inline bool    isSplitPacket(uint8_t h) { return (h & FLAG_SPLIT); }   // 0x01 mask
+inline uint8_t packetSequence(uint8_t h){ return h >> 4; }             // 0..15
+```
+
+Constants (`Config.h:59-61`):
+
+```c
+#define MTU         508    // max reassembled Reticulum packet payload (2 × 254)
+#define SINGLE_MTU  255    // max LoRa frame size (header + up to 254 payload bytes)
+#define HEADER_L    1      // header overhead per LoRa frame
+```
+
+#### Transmit (`RNode_Firmware.ino:716-742`)
+
+```c
+uint8_t header = random(256) & 0xF0;                      // fresh random seq nibble
+if (size > SINGLE_MTU - HEADER_L) header |= FLAG_SPLIT;   // split iff payload > 254
+LoRa->beginPacket();
+LoRa->write(header);
+for (i=0; i < size; i++) {
+    LoRa->write(tbuf[i]);
+    if (written == 255 && isSplitPacket(header)) {        // first frame full
+        LoRa->endPacket();
+        LoRa->beginPacket();
+        LoRa->write(header);                              // SAME header byte on frame 2
+        written = 1;
+    }
+}
+LoRa->endPacket();
+```
+
+Behavioral facts that matter for interop:
+
+1. **Sequence nibble is randomized on every fresh TX**, not incremented. Two consecutive split packets from the same node will have different (random) seq nibbles. This is the trick a memory-fading reader might recall as "the header rotates between transmissions" — it's per-packet randomization, not a per-retransmit byte rotation. There is no retransmit-driven byte rotation or rechunk; LoRa transmission is fire-and-forget at this layer, and a higher-layer retransmit (e.g. an RNS PROOF timeout firing again) just re-enters this function and gets a fresh random seq nibble.
+2. **Both frames of a split share the same header byte byte-for-byte** — same seq nibble, same FLAG_SPLIT bit. The receiver pairs them by exact equality of the seq nibble.
+3. **The split point is at exactly 255 bytes total in the LoRa frame** (1 header + 254 payload). The second frame is `header || remainder`, where `remainder` is whatever is left after 254 bytes of payload have been emitted. Maximum reassembled packet payload is `2 × 254 = 508` bytes — Reticulum's `HW_MTU` for the RNode interface is set to match.
+4. **Single-frame packets (payload ≤ 254)** still carry the 1-byte header but with `FLAG_SPLIT == 0`. The seq nibble is still random per TX.
+
+#### Receive / reassembly (`RNode_Firmware.ino:359-446`)
+
+State on the receiver: `seq` (default `SEQ_UNSET = 0xFF`) tracks the seq nibble of any buffered first-half. Per inbound LoRa frame:
+
+| Inbound `FLAG_SPLIT` | Buffered `seq` state | Inbound seq | Action |
+|---|---|---|---|
+| 1 | `SEQ_UNSET` (none) | any | Buffer this frame as the first half. Store its seq. |
+| 1 | matches inbound seq | == buffered | Append. **Reassembly complete**. Reset buffer. |
+| 1 | doesn't match | != buffered | Discard buffered first-half. Replace with this frame as a new first-half. |
+| 0 | `SEQ_UNSET` (none) | n/a | Deliver this single-frame packet directly. |
+| 0 | first-half present | n/a | Discard the buffered first-half; deliver this single-frame packet. |
+
+In other words: the receiver holds **at most one** in-progress first-half, keyed by its random seq nibble. Any inbound frame that doesn't match (different seq, or non-split, or simply a long enough silence) replaces or discards it.
+
+#### Reassembly timeout — implementation-defined
+
+Upstream RNode firmware does **not** have an explicit time-based timeout for a buffered first-half — it relies on subsequent traffic (any inbound frame) to clear stale state via the table above. The clean-room repeater at `thatSFguy/reticulum-lora-repeater/src/Radio.cpp:189-194` adds a defensive **500 ms** timeout: if no second half arrives within that window, the buffered first-half is discarded. This is implementation-private: a packet that takes longer than 500 ms to fully transmit (very low SF + large payload) would be lost on a repeater following the clean-room timeout but would survive against an unbounded upstream RNode receiver as long as no other LoRa traffic landed in between.
+
+A new alternative implementation should either match upstream's "no explicit timeout" or pick a value tied to the worst-case airtime of two `SINGLE_MTU` frames at the configured SF/BW, not a flat 500 ms.
+
+#### Sequence-collision airtime ceiling
+
+Because the seq nibble is 4 bits of randomness chosen per TX, two unrelated split packets from the same sender that overlap in time at any receiver will collide with probability 1/16 per pair. At sane LoRa duty cycles this is a non-issue, but it bounds the protocol — a sender that emits split packets back-to-back faster than the air can ferry them risks a reassembled packet that mixes halves of two distinct senders' outputs. The receiver has no way to detect this short of validating the resulting Reticulum packet (which a corrupt mix would fail at the HMAC step). Don't burst.
+
+#### Source map
+
+| File | What it pins down |
+|---|---|
+| `RNode_Firmware/Framing.h:105-108` | `NIBBLE_SEQ`, `NIBBLE_FLAGS`, `FLAG_SPLIT`, `SEQ_UNSET` constants |
+| `RNode_Firmware/Config.h:59-61` | `MTU`, `SINGLE_MTU`, `HEADER_L` |
+| `RNode_Firmware/Utilities.h:1218-1224` | `isSplitPacket`, `packetSequence` accessors |
+| `RNode_Firmware/RNode_Firmware.ino:716-742` | TX-side header construction and split logic |
+| `RNode_Firmware/RNode_Firmware.ino:359-446` | RX-side reassembly state machine |
+| `reticulum-lora-repeater/src/Radio.cpp:35-45, 188-316, 351-405` | Clean-room reimplementation; adds 500 ms reassembly timeout |
 
 ---
 
