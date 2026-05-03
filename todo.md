@@ -204,11 +204,25 @@ re-research.
       summary. `flows/path-discovery.md` walks the 9-step chronology
       with two wire-byte ladders (single-hop leaf-owns-target and
       two-hop transit-relay-knows-path).
-- [ ] **SPEC.md §1.3 expansion: identity on-disk format.** §1.3 names
-      the byte order (Ed25519 first, X25519 second, opposite of the
-      public-key concat) but not the file structure. `RNS/Identity.py::to_file`
-      is the reference. Without this, identities can't be exported /
-      imported across implementations.
+- [x] **SPEC.md §1.3 expansion: identity on-disk format.** Done — and
+      the previous wording was actually wrong about the byte order!
+      Empirically verified by reading `Identity.get_private_key()` at
+      `RNS/Identity.py:694-698` and `load_private_key` at line 706-717,
+      then round-tripping `to_file(path)` and reading back the bytes
+      against `test-vectors/identities.json`: the on-disk order is
+      X25519_priv(32) || Ed25519_priv(32), **same** as the public_key
+      concatenation, NOT opposite as the previous spec text claimed.
+      Implementations following the prior wording would have corrupted
+      identity files when interoperating with upstream Python RNS.
+      §1.3 now covers: 64-byte raw blob with no header/version/checksum/
+      encryption; the from_bytes HAZARD note (raw random bytes skip the
+      `cryptography` library's keypair invariants); cross-implementation
+      portability is automatic since there's nothing in the file but
+      the bytes; a ⚠️ "Spec correction" callout warning future readers
+      that prior revisions had this wrong. `tools/verify_destination_hash.py`
+      gets a new §1.3 round-trip section that writes via `to_file`,
+      reads back, asserts the byte slice matches the test vector, and
+      reloads via `from_file` to confirm identity_hash invariance.
 
 ### Tier 2 — required for a client to be useful in the wild
 

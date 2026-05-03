@@ -50,7 +50,50 @@ Common pre-computed `name_hash` values:
 
 ### 1.3 Private key on-disk format
 
-The Python serializer writes private-key bytes as `Ed25519_priv(32) || X25519_priv(32)` — Ed25519 first, X25519 second. This is the **opposite** of the public_key concatenation order (`RNS/Identity.py:from_file` and `to_file`). Implementations that store/load identities to disk in a Python-compatible format must respect this.
+`RNS.Identity.to_file(path)` writes the raw 64-byte private-key blob with **no header, no version byte, no checksum, no encryption**. The byte order is the **same** as the public_key concatenation in §1.1 — verified by `tools/verify_destination_hash.py`'s existing `Identity.from_bytes` round-trip:
+
+```
+prv_bytes_blob  =  X25519_priv(32) || Ed25519_priv(32)         // 64 bytes total
+```
+
+`Identity.get_private_key()` at `RNS/Identity.py:694-698` returns this exact concatenation:
+
+```python
+def get_private_key(self):
+    return self.prv_bytes + self.sig_prv_bytes
+    #      ^^^^^^^^^^^^^   X25519 priv (set at line 679 from X25519PrivateKey.generate())
+    #                       ^^^^^^^^^^^^^^^   Ed25519 priv (set at line 682)
+```
+
+`Identity.load_private_key(prv_bytes)` at line 706-717 slices it back the same way:
+
+```python
+self.prv_bytes     = prv_bytes[:32]   # X25519
+self.sig_prv_bytes = prv_bytes[32:]   # Ed25519
+```
+
+`to_file` is a thin wrapper that writes `get_private_key()` to the path; `from_file` reads back with no extra parsing.
+
+#### File-system facts
+
+- **Size:** exactly 64 bytes. No magic, no length prefix.
+- **Encryption:** none. Anyone with read access can fully impersonate the identity.
+- **Permissions:** upstream doesn't `chmod` the file; clients are expected to put it in a directory protected by OS permissions (`~/.reticulum/storage` on Linux/macOS, `%APPDATA%/Reticulum/storage` on Windows by default).
+- **Filename:** caller-controlled. RNS itself uses `transport_identity` for the transport node and lets app-level callers choose for delivery destinations (LXMF puts these in `LXMF.LXMRouter.storagepath`).
+
+#### Constructing from raw bytes — `from_bytes` HAZARD
+
+`Identity.from_bytes(prv_bytes)` at line 611-623 takes the same 64-byte concat and reconstitutes an `Identity`. The upstream docstring explicitly warns:
+
+> **HAZARD!** Never use this to generate a new key by feeding random data in prv_bytes.
+
+The reason: `X25519PrivateKey.from_private_bytes` and `Ed25519PrivateKey.from_private_bytes` both accept arbitrary 32-byte values without scalar clamping or rejection — a clean-room implementation that feeds raw random data into `from_bytes` skips the keypair-generation invariants enforced by the upstream `cryptography` library's `.generate()` methods (e.g. X25519 scalar clamping per RFC 7748 §5). Always generate fresh keys via the `cryptography` (or equivalent) library's keypair generator, then concatenate; never invent your own bytes.
+
+#### Cross-implementation portability
+
+The format is portable across implementations because there's nothing in it but the raw bytes. A 64-byte file written by Python RNS is byte-identical to one written by any clean-room implementation that follows this section, and both produce the same `identity_hash` and `lxmf.delivery` `destination_hash` when fed back through §1.1 and §1.2 — test vectors at [`test-vectors/identities.json`](test-vectors/identities.json) demonstrate the round-trip against RNS 1.2.0.
+
+> ⚠️ **Spec correction:** Earlier revisions of this section described the on-disk order as Ed25519 first, X25519 second ("opposite of the public_key concatenation"). That was wrong — verified by re-running `Identity.to_file` and reading back the bytes against the test vector at `test-vectors/identities.json`, the actual order is X25519 first, Ed25519 second, identical to the public_key order. Implementations following the prior spec wording would have corrupted identity files when interoperating with upstream Python RNS.
 
 ---
 

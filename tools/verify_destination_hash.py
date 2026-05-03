@@ -1,5 +1,5 @@
 """
-Verifier for SPEC.md S1.1 (identity composition) and S1.2 (destination hash).
+Verifier for SPEC.md S1.1, S1.2, S1.3.
 
 Reads test-vectors/identities.json and, for each vector:
   - Loads the private-key bytes via RNS.Identity.from_bytes (the upstream API
@@ -12,6 +12,10 @@ Reads test-vectors/identities.json and, for each vector:
     expected.destination_hash_hex.
   - Cross-checks RNS.Destination.hash(identity_hash, *name.split(".")) ==
     expected.destination_hash_hex (i.e. upstream agrees with the by-hand recipe).
+  - S1.3 round-trip: writes the identity via `to_file`, reads the bytes back
+    from disk, confirms they are exactly the 64-byte X25519||Ed25519 concat
+    with no header / version byte / checksum / encryption, then loads via
+    `from_file` and confirms the resulting identity hash matches the original.
 
 Exit code 0 on PASS, non-zero on FAIL.
 """
@@ -22,6 +26,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 
 import RNS
 
@@ -77,7 +82,42 @@ def verify_vector(v: dict) -> None:
              f"  RNS.Destination.hash: {rns_dest_hash.hex()}\n"
              f"  want:                 {expect['destination_hash_hex']}")
 
-    print(f"PASS {label}: identity, identity_hash, dest_hash for {full!r}")
+    # S1.3: to_file / from_file round-trip + on-disk byte-order verification
+    fp = tempfile.NamedTemporaryFile(delete=False)
+    fp.close()
+    try:
+        if not identity.to_file(fp.name):
+            fail(f"{label}: Identity.to_file returned False")
+
+        with open(fp.name, "rb") as fh:
+            disk = fh.read()
+
+        if len(disk) != 64:
+            fail(f"{label}: on-disk identity is {len(disk)} bytes, want 64 (no header/checksum)")
+
+        # Per S1.3 the on-disk order is X25519_priv(32) || Ed25519_priv(32)
+        if disk[:32].hex() != inputs["x25519_priv_hex"]:
+            fail(f"{label}: on-disk bytes [0:32] != X25519 priv\n"
+                 f"  got:  {disk[:32].hex()}\n"
+                 f"  want: {inputs['x25519_priv_hex']}")
+        if disk[32:].hex() != inputs["ed25519_priv_hex"]:
+            fail(f"{label}: on-disk bytes [32:64] != Ed25519 priv\n"
+                 f"  got:  {disk[32:].hex()}\n"
+                 f"  want: {inputs['ed25519_priv_hex']}")
+
+        # from_file must reconstitute the same identity_hash
+        reloaded = RNS.Identity.from_file(fp.name)
+        if reloaded is None:
+            fail(f"{label}: Identity.from_file returned None")
+        if reloaded.hash.hex() != expect["identity_hash_hex"]:
+            fail(f"{label}: from_file identity hash mismatch\n"
+                 f"  got:  {reloaded.hash.hex()}\n"
+                 f"  want: {expect['identity_hash_hex']}")
+    finally:
+        os.unlink(fp.name)
+
+    print(f"PASS {label}: identity, identity_hash, dest_hash, "
+          "on-disk round-trip for {!r}".format(full))
 
 
 def main():

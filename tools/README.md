@@ -23,7 +23,7 @@ Populated against RNS 1.2.0 / LXMF 0.9.6:
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|
-| `verify_destination_hash.py` | §1.1, §1.2 — identity composition + `dest_hash = SHA256(name_hash \|\| identity_hash)[:16]` | ✅ |
+| `verify_destination_hash.py` | §1.1, §1.2, §1.3 — identity composition, `dest_hash = SHA256(name_hash \|\| identity_hash)[:16]`, on-disk private-key round-trip via `to_file`/`from_file` | ✅ |
 | `verify_packet_header.py` | §2.1, §2.2, §2.3 — flag byte layout, HEADER_1/HEADER_2 form, originator HEADER_1→HEADER_2 conversion via upstream `Transport.outbound` | ✅ |
 | `verify_announce_app_data.py` | §4.3 — LXMF announce app_data 2-element form, parser tolerance | ✅ |
 | `verify_path_request.py` | §1.2 well-known hashes, §7.1 LXMF path-preamble gating | ✅ |
