@@ -189,16 +189,21 @@ re-research.
       handshakes when one side emits signalling and the other
       doesn't. §6.1 and §6.2 inline references updated to point at
       §6.6 for the bit layout. Existing §6.6 "Source" renamed to §6.7.
-- [ ] **SPEC.md §7.2 expansion + new flow `flows/path-discovery.md`:
-      path-response announce vs periodic announce.** When a node
-      fulfills a `path?` request it emits an announce with
-      `path_response=True`, which sets `context = PATH_RESPONSE = 0x0B`
-      on the announce packet (`RNS/Packet.py:83`). Receivers
-      distinguish via `packet.context == RNS.Packet.PATH_RESPONSE`
-      (`RNS/Transport.py:1989-1991`); announce handlers default to
-      ignoring path-responses unless they set
-      `receive_path_responses = True` on themselves. Spec mentions §7.2
-      "respond by re-announcing" but doesn't name the wire context.
+- [x] **SPEC.md §7.2 expansion + new flow `flows/path-discovery.md`:
+      path-response announce vs periodic announce.** Done. SPEC.md
+      §7.2 now has six sub-sections: parse rules for the path-request
+      packet, tag-based dedup via `discovery_pr_tags`, the five-way
+      dispatch in `Transport.path_request` (local responder /
+      transit-knows-path / local-client-forward / discovery-recursive
+      / drop), the path-response announce wire format (regular
+      announce body + `context = PATH_RESPONSE = 0x0B`), the
+      `PR_TAG_WINDOW = 30s` body-cache mechanism that lets multiple
+      relays receive the same wire bytes for dedup convergence,
+      timing rules (`PATH_REQUEST_GRACE = 0.4s` + `PATH_REQUEST_RG =
+      1.5s` for roaming-mode), and a minimum-leaf-responsibility
+      summary. `flows/path-discovery.md` walks the 9-step chronology
+      with two wire-byte ladders (single-hop leaf-owns-target and
+      two-hop transit-relay-knows-path).
 - [ ] **SPEC.md §1.3 expansion: identity on-disk format.** §1.3 names
       the byte order (Ed25519 first, X25519 second, opposite of the
       public-key concat) but not the file structure. `RNS/Identity.py::to_file`

@@ -712,12 +712,112 @@ A `path?` request itself is a regular DATA packet (verified by `tools/verify_pat
 
 **Every node — including non-transport leaf clients — that knows the requested target MUST respond by re-announcing.** This is the only way the requester learns a path back. If you implement only the "send a path request" half but not the "respond to incoming requests for our own destination" half, peers can never message you after the path expires (typically within minutes after your last announce).
 
-The minimum responsibility for a non-transport leaf:
+#### 7.2.1 Path-request packet parse rules
 
-1. Detect inbound DATA packets with `dest_hash == path_request_dest`.
-2. Parse first 16 bytes of payload as `target_hash`.
-3. If `target_hash == our_destination_hash`, immediately call `sendAnnounce()`.
-4. Otherwise (target is some other destination), do nothing — leaf clients can't fulfill path requests for destinations they don't OWN.
+The path-request handler at `RNS/Transport.py:2800-2843` parses inbound packets addressed to `path_request_destination` (the dest_hash in §7.1). The handler is registered as the destination's `packet_callback` at `Transport.py:237-240`, so any DATA packet to that dest_hash flows through it.
+
+```python
+def path_request_handler(data, packet):
+    if len(data) >= 16:
+        destination_hash = data[:16]                                  # mandatory 16B target
+        if len(data) > 32:
+            requesting_transport_instance = data[16:32]               # optional 16B transport_id
+        else:
+            requesting_transport_instance = None
+
+        # tag bytes — required, anything past the fixed prefix
+        tag_bytes = data[32:] if len(data) > 32 else (data[16:] if len(data) > 16 else None)
+        if tag_bytes is None:                                         # tagless requests are dropped
+            return
+        if len(tag_bytes) > 16:
+            tag_bytes = tag_bytes[:16]                                # cap to 16B
+```
+
+Three observations that matter for interop:
+
+1. **Tagless requests are dropped.** A path? packet with exactly 16 bytes payload (just `target_dest_hash`, no tag) is logged at DEBUG level and discarded. The tag is what makes the request unique enough to dedup — without it, a relay would loop forever on retransmits of the same packet. A clean-room implementation MUST emit at least one tag byte; the upstream emitter (`RNS.Transport.request_path`) uses 16 random bytes.
+2. **The transport_id field is optional and detected by length.** If the payload is exactly 32 bytes the second 16B slot is the tag; if it's >32 bytes the second 16B is `transport_id` and the rest is the tag. This is consistent with the §7.1 description (leaf: 32B; transport: 48B) but the boundary case `len == 32` lands in the leaf-client interpretation.
+3. **The tag is capped at 16 bytes.** Any tail beyond that is silently truncated. Senders may emit longer tags but receivers normalize to 16B for dedup table keys.
+
+#### 7.2.2 Tag-based deduplication
+
+The handler builds `unique_tag = destination_hash || tag_bytes` and consults `Transport.discovery_pr_tags` (`Transport.py:2829-2839`):
+
+```python
+unique_tag = destination_hash + tag_bytes
+
+with Transport.discovery_pr_tags_lock:
+    if not unique_tag in Transport.discovery_pr_tags:
+        Transport.discovery_pr_tags.append(unique_tag)
+        Transport.path_request(destination_hash,
+                               from_local_client(packet),
+                               packet.receiving_interface,
+                               requestor_transport_id=requesting_transport_instance,
+                               tag=tag_bytes)
+    else:
+        # ignore duplicate path request
+```
+
+`discovery_pr_tags` is bounded at `Transport.max_pr_tags = 32000` entries (`Transport.py:126`); older entries are aged out by the periodic `Transport.jobs` cycle. **Every node — leaf or transport — that wants to respond to path requests MUST maintain this dedup table** or it will respond to every retransmit, and a transport-enabled node will additionally re-forward to all other interfaces, generating a broadcast storm.
+
+The `unique_tag = dest_hash || tag` format means the same tag bytes against different destination_hashes are distinct — so two different requesters racing for the same target with happenstance-identical random tags don't suppress each other. Senders MUST use a fresh random tag per fresh request (the upstream emitter calls `Identity.get_random_hash()`); reusing tags across requests for the same destination_hash makes the second request appear to be a duplicate.
+
+#### 7.2.3 The five-way dispatch in `Transport.path_request`
+
+`RNS/Transport.py:2846-2973`. After dedup, the handler calls into `path_request()` which decides how to respond. Five mutually-exclusive branches in priority order:
+
+1. **`destination_hash` is local** (i.e. it's one of our own registered destinations, line 2873-2875):
+   ```python
+   local_destination.announce(path_response=True, tag=tag,
+                              attached_interface=attached_interface)
+   ```
+   We answer by emitting a path-response announce (§7.2.4 below) on the interface the request arrived on. **This is the only branch a leaf client must implement** — the others are transport-mode behaviours.
+
+2. **Path is known via the path_table AND `(transport_enabled OR is_from_local_client)`** (line 2877-2938): retrieve the cached announce packet from the path table, set its hops to the cached value, and queue it for retransmit. If the next hop happens to be the requestor itself (path-loop indicator), drop instead. This is the transport-mode path-resolver: a relay that already knows where the destination lives answers on its behalf, saving the requester from another hop of broadcast.
+
+3. **Request is from a local-client interface, no path known** (line 2940-2947): forward the request to every OTHER interface so the broader mesh can answer. Generates a fresh random tag for the forwarded request to avoid loop-back through the same dedup table.
+
+4. **`transport_enabled` AND no path known AND interface allows discovery** (line 2949-2963): record a `discovery_path_requests` entry (capped at `PATH_REQUEST_TIMEOUT = 15s`) and forward the request to every other interface, **preserving the original tag** to prevent loops. This is recursive transport-mode discovery — we don't know the destination but we'll go ask the rest of the mesh.
+
+5. **No path known and not transport-enabled** (line 2972-2973): log "no path known" and drop. Leaf clients hit this branch when they receive a path? for someone else's destination.
+
+Branch 1 is the only MUST for any node that wants to be reachable. Branches 2-4 are transport-node behaviours; a leaf client safely ignores them by never being in `transport_enabled` mode.
+
+#### 7.2.4 Path-response announce wire format
+
+When branch 1 fires, `Destination.announce(path_response=True, tag=tag, ...)` runs. The wire bytes are **identical to a regular announce (§4.1)** except the outer Reticulum packet's context byte is set to `PATH_RESPONSE = 0x0B` instead of `NONE = 0x00` (`RNS/Destination.py:307-308`):
+
+```python
+if path_response: announce_context = RNS.Packet.PATH_RESPONSE
+else:             announce_context = RNS.Packet.NONE
+```
+
+The body — public_key || name_hash || random_hash || [ratchet_pub] || signature || app_data — is built identically; the random_hash carries a fresh emission timestamp, the signature is computed over the same signed_data per §4.2. A receiver running the validation flow in §4.5 can't tell from the announce body that this is a response to a query rather than a periodic re-announce; only the context byte distinguishes them.
+
+A `tag` argument hands a previously-built path-response announce body back unchanged when the same tag is requested twice within `Destination.PR_TAG_WINDOW = 30s` (`RNS/Destination.py:260-278`). This is what prevents a flood of identical path-response announces when several relays simultaneously forward the same path? request to a leaf — the leaf serves the cached body to all of them with the same wire bytes, lining up dedup decisions on every transit relay.
+
+#### 7.2.5 Timing: `PATH_REQUEST_GRACE` and roaming
+
+When branch 2 fires (transit relay answering on behalf of a remote destination), the rebroadcast is delayed by `PATH_REQUEST_GRACE = 0.4s` (`Transport.py:80, 2917`) — extra grace to let directly-reachable peers respond first if they're in earshot. On `MODE_ROAMING` interfaces an additional `PATH_REQUEST_RG = 1.5s` is added on top (`Transport.py:81, 2922-2923`) so well-connected fixed nodes get a chance to answer before mobile ones.
+
+Branch 1 (local destination answers) fires immediately with no grace, since the leaf is the authoritative source for its own destination — there's no point waiting for someone else to potentially answer faster.
+
+Local-client originators also bypass the grace period (`Transport.py:2909-2910`): a relay answering for a destination that lives on a local-client interface can send back the cached announce instantly because the answer doesn't need to compete with peer-mesh announces.
+
+#### 7.2.6 Minimum responsibility for a leaf
+
+The minimum path-request response logic for a non-transport leaf, in protocol terms:
+
+1. Receive a DATA packet with `dest_hash == 6b9f66014d9853faab220fba47d02761`.
+2. Parse `target_dest_hash = data[:16]` and `tag_bytes = data[16:32]` (or `data[32:48]` if `len(data) > 32`).
+3. Drop if `len(tag_bytes) == 0` (tagless requests).
+4. Drop if `(target_dest_hash, tag_bytes)` already in the dedup table.
+5. If `target_dest_hash == our_destination_hash` for any of our registered destinations: emit a path-response announce (§7.2.4) on the receiving interface, with the request's tag passed through to allow caching.
+6. Otherwise: do nothing — leaves can't fulfill path requests for destinations they don't OWN.
+
+Steps 4 and 5 are both required. Skipping the dedup table makes the leaf storm the network with redundant announces; skipping the local-destination check means peers can never message you after the path expires.
+
+For a chronological walk-through of the full request → response → path-table cycle, see [`flows/path-discovery.md`](flows/path-discovery.md).
 
 ### 7.3 Ratchet rotation per announce
 
