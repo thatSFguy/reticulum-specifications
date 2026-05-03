@@ -253,7 +253,7 @@ re-research.
       doesn't mention stamps at all. Authoritative source:
       `LXMF/LXMessage.py::validate_stamp`, `LXMF/LXMRouter.py:1741-1774`
       (the stamp-check branch in `lxmf_delivery`).
-- [ ] **SPEC.md §13 (new): NomadNet page protocol.** Distinct from
+- [x] **SPEC.md §11 (new): REQUEST/RESPONSE protocol covers NomadNet pages.** Distinct from
       LXMF — pages fetched over a Link with `context = CTX_REQUEST (0x09)`
       / `CTX_RESPONSE (0x0a)` (already in §2.5 contexts table). Request
       body is a path string + field map; response is a body bytes blob.

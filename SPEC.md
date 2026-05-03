@@ -1720,7 +1720,135 @@ This also means swapping in a new link session key mid-transfer would break decr
 
 ---
 
-## 11. Test vectors
+## 11. REQUEST/RESPONSE protocol (NomadNet pages, propagation `/get`, custom RPC)
+
+A generic over-Link RPC mechanism. NomadNet uses it for page fetches; LXMF propagation uses it for offline-message retrieval; any application can register handlers for arbitrary paths. There is no separate "NomadNet wire format" — NomadNet is just one consumer of this protocol.
+
+This section specifies the wire bytes; the application-layer paths (e.g. NomadNet's `/page/index.mu`) are caller-defined.
+
+### 11.1 Wire form — REQUEST (initiator → server)
+
+`RNS/Link.py::request` line 478-527. After an active Link is established (§6), the initiator builds:
+
+```python
+request_path_hash = SHA256(path.encode("utf-8"))[:16]
+unpacked_request  = [time.time(), request_path_hash, data]
+packed_request    = umsgpack.packb(unpacked_request)
+```
+
+Then dispatches based on size:
+
+| `len(packed_request)` | Wire form |
+|---|---|
+| `≤ link.mdu` | One Link DATA packet, `context = REQUEST (0x09)`, body = `packed_request` |
+| `> link.mdu`  | Resource transfer (§10), with `request_id = SHA256(packed_request)[:16]`, `is_response = False` (sets `u = True` in the Resource advertisement flags per §10.4) |
+
+The msgpack array layout:
+
+```
+[0]  timestamp            float (seconds since unix epoch, requester's clock)
+[1]  request_path_hash    bytes(16) — SHA-256 of the requested path string, truncated
+[2]  data                 application-defined bytes (often msgpack itself, or None)
+```
+
+`request_id` is the 16-byte truncated hash of `packed_request` — used by the receiver to correlate the inbound RESPONSE with this REQUEST. For single-packet REQUESTs the request_id is computed receiver-side from the packet body bytes; for Resource REQUESTs the request_id is carried explicitly in the advertisement's `q` field (§10.4).
+
+### 11.2 Wire form — RESPONSE (server → initiator)
+
+`RNS/Link.py::handle_request` line 853-904. The server's response generator returns a value, and the dispatcher picks the wire form by size:
+
+```python
+packed_response = umsgpack.packb([request_id, response])
+
+if len(packed_response) <= link.mdu:
+    RNS.Packet(link, packed_response, DATA, context = RESPONSE).send()
+else:
+    response_resource = RNS.Resource(packed_response, link,
+                                     request_id=request_id, is_response=True,
+                                     auto_compress=auto_compress)
+```
+
+| Wire form | Trigger |
+|---|---|
+| Link DATA packet, `context = RESPONSE (0x0A)`, body = `umsgpack([request_id, response])` | response fits in `link.mdu` |
+| Resource transfer, `request_id` field set, `is_response = True` (advertisement flag `p`) | response too large |
+
+The `request_id` in element [0] of the response msgpack lets the initiator match the response to the original outbound REQUEST in `Link.pending_requests` even when several requests are in flight on the same Link (`Link.handle_response` line 906-925).
+
+#### File responses
+
+If the server's response generator returns a `(file_handle, metadata)` tuple, the response goes out as a Resource carrying the file's bytes with optional msgpack metadata in the Resource advertisement's `metadata` slot — `RNS/Link.py:888-895`:
+
+```python
+if type(response) == tuple and isinstance(response[0], io.BufferedReader):
+    file_handle = response[0]
+    metadata    = response[1] if len(response) > 1 else None
+    response_resource = RNS.Resource(file_handle, link,
+                                     metadata=metadata, request_id=request_id,
+                                     is_response=True, auto_compress=auto_compress)
+```
+
+This is how NomadNet ships large pages with attached MIME-type / size hints — the file goes through the §10 Resource pipeline; the metadata hits the advertisement's `m` slot reserved for the resource hashmap **but** also gets a separate metadata-prefix slot per §10.2 step 1 (the 3-byte length-prefixed msgpack-packed metadata blob inserted before the random_hash).
+
+### 11.3 Path hash collision avoidance
+
+`request_path_hash` is the 16-byte truncation of `SHA256(path)` — collision space is 2^128, effectively no collisions in practice. The server's `request_handlers` dict is keyed by this hash:
+
+```python
+# RNS/Destination.py::register_request_handler
+request_path_hash = SHA256(path.encode("utf-8"))[:16]
+self.request_handlers[request_path_hash] = (path, response_generator, allow, allowed_list, auto_compress)
+```
+
+A server registers a path string; clients hash the path and look it up. The path string itself is not on the wire — only its hash. This means the server can publish opaque path tokens that resist enumeration: a client must already know the path string to fetch the resource at it. NomadNet uses human-readable paths like `/page/index.mu` because the clients (Sideband, the NomadNet client) need them to be discoverable; a private file-server use case can use random tokens for security-by-obscurity.
+
+### 11.4 Authorization (`allow` modes)
+
+Registered via `Destination.register_request_handler(path, response_generator, allow=...)`:
+
+| Mode | Constant | Effect |
+|---|---|---|
+| `ALLOW_NONE` | `0x00` | Reject every request (handler is a stub for testing). |
+| `ALLOW_LIST` | `0x01` | Accept iff the requester has identified themselves on the link (via `link.identify(identity)`) AND their identity_hash is in `allowed_list`. |
+| `ALLOW_ALL` | `0x02` | Accept any request that arrives on this Link, regardless of caller identity. |
+
+`Link.identify(identity)` runs `LINKIDENTIFY (context = 0xFB)` packets; this is how the requester proves which long-term identity is making the request without re-running a fresh Link handshake. Most public NomadNet pages use `ALLOW_ALL`; private pages and propagation-node operator commands use `ALLOW_LIST`.
+
+### 11.5 RequestReceipt — initiator-side state machine
+
+`RNS/Link.py:1348-1448`. When `Link.request()` returns a `RequestReceipt`, the initiator can attach:
+
+- `response_callback(receipt)` — fires when the response has fully arrived (single packet OR resource concluded).
+- `failed_callback(receipt)` — fires on timeout or link teardown.
+- `progress_callback(receipt)` — fires each time more bytes arrive (for Resource responses; reports `receipt.progress` 0.0..1.0).
+
+Default timeout is `link.rtt × link.traffic_timeout_factor + Resource.RESPONSE_MAX_GRACE_TIME × 1.125` — typically a few seconds plus a generous response-side grace. Caller can override via the `timeout=` kwarg.
+
+### 11.6 NomadNet specifics (informational, not normative)
+
+NomadNet pages are served over this protocol with these conventions:
+
+- Path format: `/page/foo.mu` — the `.mu` extension marks "micron"-formatted pages (NomadNet's lightweight markup).
+- Request data: optional msgpack dict of form-field values (e.g. `{"username": "alice"}`).
+- Response: either inline page bytes (for static pages) or a file handle + metadata (for large pages or downloads).
+
+None of these are wire-spec — they're caller conventions on top of §13. A Reticulum client that can't render micron markup can still fetch pages and display the raw bytes; the protocol layer doesn't care about content.
+
+### 11.7 Source map
+
+| File | What |
+|---|---|
+| `RNS/Link.py:478-527` | `Link.request()` — initiator-side packing and dispatch by size |
+| `RNS/Link.py:853-904` | `Link.handle_request()` — server-side path lookup + auth + response dispatch |
+| `RNS/Link.py:906-925` | `Link.handle_response()` — initiator-side response correlation |
+| `RNS/Link.py:1348-1448` | `RequestReceipt` — callback machinery |
+| `RNS/Destination.py::register_request_handler` | Server-side handler registration |
+| `RNS/Destination.py:35-40` | `ALLOW_NONE/ALLOW_LIST/ALLOW_ALL` constants |
+| `RNS/Packet.py:81-82` | `REQUEST = 0x09`, `RESPONSE = 0x0A` context constants |
+
+---
+
+## 12. Test vectors
 
 See [`test-vectors/`](test-vectors/). Currently populated:
 
@@ -1732,7 +1860,7 @@ An implementation that round-trips every test vector — both directions — sho
 
 ---
 
-## 12. Source map
+## 13. Source map
 
 Upstream Python sources, in rough order of frequency-of-reference:
 
