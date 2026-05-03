@@ -18,6 +18,8 @@ Each finding is grounded in upstream source citations (file + line) so it can be
 ## What's here
 
 - [`SPEC.md`](SPEC.md) — the single combined spec document, organized by protocol layer
+- [`flows/`](flows/) — chronological end-to-end narratives (e.g. "send a message"), cross-referencing SPEC.md sections
+- [`tools/`](tools/) — self-contained Python verifier scripts that test SPEC.md claims against upstream RNS / LXMF
 - [`test-vectors/`](test-vectors/) — known-good byte sequences each implementation should be able to round-trip (intent: grow into a compliance suite)
 
 As content grows, `SPEC.md` will be split into per-layer files (packet header, identity, announce, token-crypto, LXMF, link, resource, transport).
