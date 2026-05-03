@@ -506,9 +506,110 @@ Different msgpack encoders produce subtly different byte sequences for the same 
 
 If either matches, the signature is valid. Strict raw-only verification fails interop with anything that's been through a msgpack re-encode somewhere in the chain.
 
-### 5.7 Source
+### 5.7 LXMF stamps and tickets (anti-spam)
 
-`LXMF/LXMessage.py` for pack/unpack; `LXMF/LXMF.py` for the app_data extraction helpers.
+`LXMF.LXMessage.payload[4]` (the optional 5th element of the msgpack body — see §5.3) is a **stamp**: a proof-of-work value that lets a recipient gate inbound messages against unsolicited senders. Modern Sideband installs (≥ 1.x) treat unstamped messages as low-trust and may drop them at the application layer.
+
+#### 5.7.1 Stamp wire format
+
+`LXMessage.STAMP_SIZE = HASHLENGTH//8 = 32 bytes` (`LXMF/LXStamper.py`). The stamp is appended to the payload msgpack array as the 5th element only if the receiver requires one or the sender has an outbound ticket. Wire form is just 32 raw bytes inside a `bin8/bin16` msgpack envelope.
+
+When stripping the stamp during signature verification (§5.6), the receiver removes element [4] from the unpacked array and re-encodes the first 4 elements as `packed_payload` for hash computation. This is what lets a sender add or remove a stamp without invalidating the Ed25519 signature.
+
+#### 5.7.2 Stamp generation (proof-of-work)
+
+`LXMF/LXStamper.py::generate_stamp(message_id, target_cost)` and `::stamp_valid(stamp, target_cost, workblock)`. The algorithm:
+
+1. **Workblock construction** — expensive HKDF-driven memory inflation:
+   ```python
+   def stamp_workblock(material, expand_rounds=3000):       # WORKBLOCK_EXPAND_ROUNDS
+       workblock = b""
+       for n in range(expand_rounds):
+           workblock += RNS.Cryptography.hkdf(
+               length=256,
+               derive_from=material,
+               salt=RNS.Identity.full_hash(material + msgpack.packb(n)),
+               context=None)
+       return workblock                                     # 768 KiB total
+   ```
+   `material` is the 32-byte `message_id` (= `SHA256(dest_hash || src_hash || msgpack_payload)`). 3000 rounds of 256-byte HKDF produces a 768 KiB workblock — designed to be cache-unfriendly enough that GPU/ASIC speedup is limited.
+
+2. **Stamp search** — find a 32-byte value such that `SHA256(workblock || stamp)` has at least `target_cost` leading zero bits:
+   ```python
+   def stamp_valid(stamp, target_cost, workblock):
+       target = 1 << (256 - target_cost)
+       return int.from_bytes(SHA256(workblock + stamp), "big") <= target
+   ```
+   The `target_cost` is the Hamming-distance-from-2^256 in bit-leading-zeros — `target_cost = 8` means the result must be ≤ `2^248`, i.e. start with at least 8 zero bits.
+
+3. **Stamp value** — for received valid stamps, `stamp_value(workblock, stamp)` returns the actual leading-zero count, which can exceed the recipient's required cost. Exceeded cost = "extra effort spent" and is exposed to the application for prioritization.
+
+The default `WORKBLOCK_EXPAND_ROUNDS = 3000` (regular stamps), `WORKBLOCK_EXPAND_ROUNDS_PN = 1000` (propagation-node stamps — cheaper because store-and-forward already throttles), `WORKBLOCK_EXPAND_ROUNDS_PEERING = 25` (peering keys between propagation nodes — even cheaper).
+
+#### 5.7.3 Tickets — pre-shared shortcut around proof-of-work
+
+A **ticket** is a 16-byte (`TICKET_LENGTH = TRUNCATED_HASHLENGTH//8`) shared secret a recipient hands to a known sender, letting them skip the PoW step. With a ticket, the "stamp" becomes:
+
+```python
+stamp = SHA256(ticket || message_id)[:32]      # truncated to STAMP_SIZE
+```
+
+(`LXMessage.py::get_stamp` line 297). The recipient validates by trying every ticket they've issued the sender against the inbound stamp:
+
+```python
+# LXMessage.py::validate_stamp line 270-280
+for ticket in tickets:
+    if self.stamp == RNS.Identity.truncated_hash(ticket + self.message_id):
+        self.stamp_value = LXMessage.COST_TICKET
+        return True
+```
+
+`COST_TICKET` is a sentinel value (not a real cost) that just marks "valid by ticket".
+
+Tickets are exchanged via the **`FIELD_TICKET = 0x0C`** key in the `fields` dict of an inbound message:
+
+```python
+# LXMRouter.lxmf_delivery, line 1741-1752
+if message.signature_validated and FIELD_TICKET in message.fields:
+    ticket_entry = message.fields[FIELD_TICKET]   # [expires_unix_seconds, ticket_bytes]
+    if type(ticket_entry) == list and len(ticket_entry) > 1:
+        if time.time() < ticket_entry[0]:
+            self.remember_ticket(message.source_hash, ticket_entry)
+```
+
+Format: `fields[FIELD_TICKET] = [expires_unix_seconds(int), ticket(bytes, 16)]`. Stored under the sender's `source_hash` in the receiver's persistent ticket cache. Subsequent outbound messages from the receiver to the same sender automatically use this ticket via `LXMessage.outbound_ticket`. Tickets expire at `expires_unix_seconds`; expired tickets are evicted and the next outbound message falls back to PoW.
+
+#### 5.7.4 The full stamp-cost field inventory
+
+LXMF announces (§4.3) carry a `stamp_cost` integer in the `app_data` msgpack array's element [1]. A receiver tells potential senders "you must do this much PoW to message me" by setting their delivery destination's `stamp_cost` and re-announcing. Senders who get this announce store the cost in `RNS.Identity.known_destinations[dest_hash][3].app_data` and apply it to outbound messages via `LXMRouter.outbound_stamp_costs`.
+
+When a receiver gets a message:
+
+- If `delivery_destination.stamp_cost == None`: no stamp required; messages without one are accepted.
+- If `delivery_destination.stamp_cost != None` AND the inbound message has no valid stamp AND `_enforce_stamps == True`: the message is **dropped** (`LXMRouter.py:1768-1770`).
+- If `_enforce_stamps == False` (default): the message is accepted regardless, and the application is told via `message.stamp_valid` whether the stamp checked out.
+
+A clean-room implementation that doesn't implement stamps at all will:
+- Successfully send to peers with `stamp_cost = None`.
+- Be silently rejected by peers with `stamp_cost != None` AND `_enforce_stamps`.
+- Be flagged as "untrusted" / "spam" in receiver UIs that promote stamp validation to a UX signal even without enforcement.
+
+For interop coverage today, "implement PoW for outbound; tolerate-but-don't-validate inbound" is the minimum. Full ticket support is a Tier-3 nice-to-have.
+
+#### 5.7.5 Source map
+
+| File | What |
+|---|---|
+| `LXMF/LXStamper.py:18-46` | `stamp_workblock`, `stamp_value`, `stamp_valid` |
+| `LXMF/LXMessage.py:41` | `TICKET_LENGTH = 16` |
+| `LXMF/LXMessage.py:270-291` | `validate_stamp` (ticket-then-PoW dispatch) |
+| `LXMF/LXMessage.py:293-324` | `get_stamp` (ticket-or-PoW emission) |
+| `LXMF/LXMRouter.py:1741-1774` | inbound dispatch — ticket cache + stamp validation + drop logic |
+| `LXMF/LXMF.py:19` | `FIELD_TICKET = 0x0C` constant |
+
+### 5.8 Source
+
+`LXMF/LXMessage.py` for pack/unpack; `LXMF/LXMF.py` for the app_data extraction helpers; `LXMF/LXStamper.py` for stamps; `LXMF/LXMRouter.py` for the receive-side stamp/ticket dispatch.
 
 ---
 

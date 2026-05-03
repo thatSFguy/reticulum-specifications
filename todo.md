@@ -246,7 +246,7 @@ re-research.
       `plaintext == link_id` auth check), teardown reason codes
       (`TIMEOUT/INITIATOR_CLOSED/DESTINATION_CLOSED`), and the
       six-step minimum-receiver-responsibility recipe.
-- [ ] **SPEC.md §5.x (new): LXMF stamps + tickets for spam control.**
+- [x] **SPEC.md §5.x (new): LXMF stamps + tickets for spam control.**
       `LXMF.Stamp` (proof-of-work field in the optional 5th element of
       the msgpack payload), `FIELD_TICKET` lookup. Modern Sideband 1.x
       treats missing-stamp messages as spam in the UI. Spec currently
