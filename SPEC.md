@@ -721,7 +721,128 @@ The `[reticulum]` config option `link_mtu_discovery = No` makes `Reticulum.link_
 
 A receiver doesn't need its own copy of the disable switch — it just stops seeing trailing signalling bytes from peers that have it disabled. Its own MTU reporting on the LRPROOF return path runs unaffected for peers that send it.
 
-### 6.7 Source
+### 6.7 KEEPALIVE and link teardown
+
+A Link goes through five states (`RNS/Link.py:110-114`): `PENDING → HANDSHAKE → ACTIVE → STALE → CLOSED`. `KEEPALIVE` and `LINKCLOSE` are the two control-plane packet types that drive transitions out of `ACTIVE`.
+
+#### 6.7.1 KEEPALIVE (`context = 0xFA`)
+
+Cadence (`RNS/Link.py:844-846`):
+
+```python
+def __update_keepalive(self):
+    self.keepalive = max(min(self.rtt * (KEEPALIVE_MAX / KEEPALIVE_MAX_RTT), KEEPALIVE_MAX), KEEPALIVE_MIN)
+    self.stale_time = self.keepalive * STALE_FACTOR
+```
+
+with constants `KEEPALIVE_MAX = 360s`, `KEEPALIVE_MIN = 5s`, `KEEPALIVE_MAX_RTT = 1.75s`, `STALE_FACTOR = 2`. The interval is `RTT × 205.7` clamped to `[5, 360]` seconds. Before the first RTT is measured (set in `validate_proof`), the link uses `KEEPALIVE = KEEPALIVE_MAX = 360s`.
+
+The watchdog (`Link.__watchdog_job`, line 751-821) fires on every active link. When `now >= last_inbound + keepalive` AND the local node is the **initiator**, it emits a KEEPALIVE:
+
+```python
+def send_keepalive(self):
+    keepalive_packet = RNS.Packet(self, bytes([0xFF]), context=RNS.Packet.KEEPALIVE)
+    keepalive_packet.send()
+```
+
+Body is a single byte `0xFF` — the "ping" sentinel. The packet is Token-encrypted with the link's session key per §3.1 link-derived form, so the wire body is `iv(16) || ciphertext(...) || hmac(32)`; the decrypted plaintext is just `b'\xff'`.
+
+The **responder** receives this in `Link.receive` at `RNS/Link.py:1149-1153` and answers with the "pong" sentinel:
+
+```python
+elif packet.context == RNS.Packet.KEEPALIVE:
+    if not self.initiator and packet.data == bytes([0xFF]):
+        keepalive_packet = RNS.Packet(self, bytes([0xFE]), context=RNS.Packet.KEEPALIVE)
+        keepalive_packet.send()
+```
+
+So:
+- **Ping** = initiator → responder, body `0xFF`.
+- **Pong** = responder → initiator, body `0xFE`.
+- Only the initiator originates KEEPALIVE traffic. The responder never spontaneously pings.
+
+Both sentinel bytes are arbitrary; what actually matters for keep-alive purposes is that *any* inbound traffic on the link refreshes `last_inbound` (the watchdog's anchor for staleness decisions). KEEPALIVE packets, like all link DATA, also generate the mandatory PROOF receipt per §6.5, which is itself inbound traffic on the return path. So a successful ping/pong exchange resets the staleness clock on **both** sides via three round-trip artifacts: ping → pong → pong-proof.
+
+A clean-room responder MUST emit the pong on inbound `0xFF`; without it the initiator's watchdog will declare the link stale on the next cycle.
+
+#### 6.7.2 STALE → CLOSED transition
+
+When `now >= last_inbound + stale_time` (= `2 × keepalive`), the watchdog moves the link from `ACTIVE` to `STALE` (line 796-800), then on its next pass emits a teardown packet and transitions to `CLOSED` (line 805-810):
+
+```python
+elif self.status == Link.STALE:
+    sleep_time = 0.001
+    self.__teardown_packet()                  # see §6.7.3
+    self.status = Link.CLOSED
+    self.teardown_reason = Link.TIMEOUT
+    self.link_closed()
+```
+
+`teardown_reason` is set to `Link.TIMEOUT` (constant value `0x01`) so the application's `link_closed_callback` can distinguish "the peer went dark" from "the peer cleanly closed".
+
+There is also an explicit-cleanup path: after a STALE-induced teardown the watchdog adds a final grace period of `RTT × KEEPALIVE_TIMEOUT_FACTOR + STALE_GRACE` (= `RTT × 4 + 5s`) at line 797 to allow a delayed reply to bring the link back into ACTIVE before final teardown — but in upstream RNS 1.2.0 the `STALE → CLOSED` transition runs immediately on the next watchdog pass without consulting that grace period. The grace constant lives in case a future revision restores the soft-stale window.
+
+#### 6.7.3 LINKCLOSE (`context = 0xFC`)
+
+Either side can cleanly tear down a link by calling `Link.teardown()` (line 699-708), which sends a single LINKCLOSE packet and transitions the local state to `CLOSED`:
+
+```python
+def __teardown_packet(self):
+    teardown_packet = RNS.Packet(self, self.link_id, context=RNS.Packet.LINKCLOSE)
+    teardown_packet.send()
+```
+
+Wire form:
+- `packet_type = DATA (0)`, `context = 0xFC`, `dest_hash = link_id`.
+- Body is the **16-byte link_id**, Token-encrypted by the link's session key.
+
+The peer's receiver path at `RNS/Link.py:1061-1063` calls `teardown_packet(packet)` (line 710-722):
+
+```python
+def teardown_packet(self, packet):
+    plaintext = self.decrypt(packet.data)
+    if plaintext == self.link_id:                # auth check
+        self.status = Link.CLOSED
+        if self.initiator:
+            self.teardown_reason = Link.DESTINATION_CLOSED
+        else:
+            self.teardown_reason = Link.INITIATOR_CLOSED
+        self.link_closed()
+```
+
+The body's plaintext **MUST** equal `link_id` for the close to take effect — this is the on-link auth check. A peer that doesn't share the session key can't decrypt the body, and even if it could, the link_id check rejects bodies with arbitrary content. Combined with the Token HMAC, this gives both "encrypted" and "authenticated" guarantees on the teardown signal.
+
+After `link_closed()` (line 724-743) runs:
+
+- All `incoming_resources` and `outgoing_resources` are cancelled (cancels propagate into the §10 Resource state machine).
+- The Link's session keys (`self.shared_key`, `self.derived_key`) are zeroed by reassignment to `None` — the upstream comment at line 700-702 notes this is the forward-secrecy property: "encryption keys are purged. New keys will be used if a new link to the same destination is established."
+- The `link_closed_callback` registered via `set_link_closed_callback` fires.
+- The Link is removed from its destination's `links` list (responders only — initiators don't have a destination-list entry).
+
+#### 6.7.4 Teardown reason codes
+
+`Link.teardown_reason` is set to one of (`RNS/Link.py:116-118`):
+
+| Constant | Hex | Meaning |
+|---|---|---|
+| `TIMEOUT` | `0x01` | Watchdog STALE → CLOSED transition. No LINKCLOSE was received. |
+| `INITIATOR_CLOSED` | `0x02` | This side is the responder; the initiator sent a LINKCLOSE. |
+| `DESTINATION_CLOSED` | `0x03` | This side is the initiator; the responder sent a LINKCLOSE. |
+
+These are local-state values, not on the wire — the LINKCLOSE packet itself doesn't carry a reason code. The recipient just infers whether the close came from the other side based on whether they're initiator or responder.
+
+#### 6.7.5 Receiver responsibilities (minimum)
+
+For a clean-room implementation that wants links to survive idle periods longer than a few seconds:
+
+1. Keep a per-link `last_inbound` timestamp updated on every inbound packet on the link (DATA, PROOF, KEEPALIVE — anything).
+2. On the **initiator** side, run a watchdog that emits a `0xFF` KEEPALIVE every `link.keepalive` seconds since `last_inbound`. Default `link.keepalive = 360s` is fine until you measure RTT.
+3. On the **responder** side, reply to every `0xFF` KEEPALIVE with a `0xFE` KEEPALIVE. Don't originate.
+4. On both sides, transition to `CLOSED` if `last_inbound + 2*keepalive` elapses with no traffic, AND emit a `LINKCLOSE` packet so the peer doesn't have to wait for its own watchdog to time out.
+5. On every inbound `LINKCLOSE`, decrypt, verify body equals `link_id`, transition to `CLOSED`.
+6. On `CLOSED`, zero the session keys and cancel any in-progress Resources.
+
+### 6.8 Source
 
 `RNS/Link.py`, `RNS/Packet.py::prove`, `RNS/Identity.py::prove`, `RNS/PacketReceipt.py::validate_proof`. The webclient's `reference/js-reference/link.js` is a faithful port.
 

@@ -236,10 +236,16 @@ re-research.
       propagation nodes is undocumented. Cross-flow:
       `flows/send-propagated-lxmf.md` (already a `⏳` entry in
       `flows/README.md`).
-- [ ] **SPEC.md §6 expansion: KEEPALIVE / link teardown protocol.**
-      `CTX_KEEPALIVE = 0xfd` packets — exact wire body, exact cadence
-      (`Link.KEEPALIVE` constant), exact teardown packet (`Link.PROOF`
-      context). Real clients drop links incorrectly without this.
+- [x] **SPEC.md §6 expansion: KEEPALIVE / link teardown protocol.**
+      Done in §6.7 (old §6.7 Source moved to §6.8). Five
+      sub-sections: KEEPALIVE wire form (`0xFA` context, initiator-
+      originated `0xFF` ping → responder `0xFE` pong, body
+      Token-encrypted), cadence (`RTT × 205.7` clamped to `[5,360]s`),
+      STALE→CLOSED watchdog transitions, LINKCLOSE wire form
+      (`0xFC` context, body = 16-byte `link_id` Token-encrypted with
+      `plaintext == link_id` auth check), teardown reason codes
+      (`TIMEOUT/INITIATOR_CLOSED/DESTINATION_CLOSED`), and the
+      six-step minimum-receiver-responsibility recipe.
 - [ ] **SPEC.md §5.x (new): LXMF stamps + tickets for spam control.**
       `LXMF.Stamp` (proof-of-work field in the optional 5th element of
       the msgpack payload), `FIELD_TICKET` lookup. Modern Sideband 1.x
@@ -271,13 +277,11 @@ re-research.
       to bring up the radio. All defined in `RNode_Firmware/Framing.h:24-95`.
       Spec just says "send Reticulum packets via CMD_DATA" — that's
       not enough.
-- [ ] **SPEC.md §6.5 second sub-bullet: implicit vs explicit proof
-      mode.** `RNS.Reticulum.should_use_implicit_proof()` mode trims
-      the proof body to just the signature (no `packet_hash` prefix),
-      saving 32 bytes. `RNS/Link.py:386-389` has the explicit form
-      hard-coded with the implicit branch commented out, but at least
-      one upstream branch toggles it — a client that hard-codes the
-      explicit form will eventually meet a peer in implicit mode.
+- [x] **SPEC.md §6.5 second sub-bullet: implicit vs explicit proof
+      mode.** Done as part of the §6.5 expansion (Tier 1 #3). The
+      length-dispatch validator at `PacketReceipt.validate_proof`
+      and the `should_use_implicit_proof()` config switch are
+      documented in §6.5.1-§6.5.2 with full citations.
 
 ### Tier 3 — required to act as a transport node / relay
 
