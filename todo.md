@@ -98,6 +98,165 @@ to remove their markers:
       that drives an upstream LINKREQUEST → LRPROOF → ACTIVE handshake and
       asserts byte-level layouts + `link_id` invariance under HEADER_1↔HEADER_2.
 
+## Spec gaps for a functional client (priority-ordered)
+
+The items below are missing pieces that prevent a client built only from
+this spec (plus the existing flows/) from interoperating with upstream.
+Tier 1 = required to talk at all to the mesh as a leaf LXMF client.
+Tier 2 = required for a client that's actually useful (chat that works
+in the wild). Tier 3 = required to act as a transport node / relay.
+
+Where I've already done the source reading, I've left the file/line
+citations inline so whoever picks the item up can start without
+re-research.
+
+### Tier 1 — required for a barebones leaf LXMF client to interop
+
+- [ ] **`flows/receive-announce.md` + SPEC.md §4.5 announce validation
+      rules.** Without this, a client can't learn that any peers exist;
+      `known_destinations` and `known_ratchets` stay empty and every
+      outbound message fails at `recall(dest_hash)`. Hooks:
+      `RNS/Identity.py::validate_announce` at line 496 (full body
+      parse with branching on `context_flag` for the optional ratchet
+      slot, signed_data construction
+      `dest_hash || pub || name_hash || random_hash || ratchet || app_data`,
+      blackhole check, dest_hash recomputation, public-key collision
+      rejection, ratchet ingestion via `_remember_ratchet`);
+      `RNS/Transport.py:1623-2024` (the announce dispatch path —
+      signature-only quick check that calls `interface.received_announce()`,
+      ingress-rate limiting via `should_ingress_limit`, path-table
+      population, `random_blob` replay/loop dedup, and the
+      `announce_handlers` callback fan-out with `aspect_filter` matching
+      and `PATH_RESPONSE = 0x0B` context distinction — see
+      `RNS/Packet.py:83`).
+- [ ] **SPEC.md §12 / `flows/send-resource.md`: Reticulum Resource
+      fragmentation.** Any LXMF body larger than `LINK_PACKET_MAX_CONTENT`
+      ≈ 360 B is sent as an `RNS.Resource`, not a single Link DATA
+      packet. Without this you can't send or receive long messages,
+      attachments, or NomadNet pages > 1 MTU. `flows/send-link-lxmf.md`
+      currently flags this as a known gap. Authoritative source:
+      `RNS/Resource.py` (block sizes, sequence numbers, resource-proof
+      message). Cross-flow: `LXMF/LXMessage.py::__as_resource` line 651.
+- [ ] **SPEC.md §6.5 expansion: regular (non-LRPROOF) PROOF body.** The
+      mandatory PROOF receipt for every CTX_NONE Link DATA packet. Body
+      is `packet_hash(32) || signature(64)` (`RNS/Link.py::prove_packet`
+      line 384-393), with a hardcoded explicit-mode comment hinting at
+      a future implicit-mode toggle that elides the packet_hash prefix.
+      Adding a `tools/verify_proof_packet.py` that runs a real link
+      transfer and asserts the proof body shape is the right
+      verification.
+- [ ] **SPEC.md §6 sub-section: 3-byte MTU/mode signalling field.**
+      Present on LINKREQUEST and LRPROOF iff
+      `Reticulum.link_mtu_discovery() == True` and the next-hop
+      interface advertises an HW MTU. Encode/decode helpers at
+      `RNS/Link.py::signalling_bytes` line 148; consumers at
+      `mtu_from_lr_packet` / `mode_from_lr_packet` /
+      `mtu_from_lp_packet` / `mode_from_lp_packet`. Spec currently
+      shows this slot as "[signalling(3)]" with no byte definition —
+      a client that emits a wrong format gets wrong MTU on the link.
+- [ ] **SPEC.md §7.2 expansion + new flow `flows/path-discovery.md`:
+      path-response announce vs periodic announce.** When a node
+      fulfills a `path?` request it emits an announce with
+      `path_response=True`, which sets `context = PATH_RESPONSE = 0x0B`
+      on the announce packet (`RNS/Packet.py:83`). Receivers
+      distinguish via `packet.context == RNS.Packet.PATH_RESPONSE`
+      (`RNS/Transport.py:1989-1991`); announce handlers default to
+      ignoring path-responses unless they set
+      `receive_path_responses = True` on themselves. Spec mentions §7.2
+      "respond by re-announcing" but doesn't name the wire context.
+- [ ] **SPEC.md §1.3 expansion: identity on-disk format.** §1.3 names
+      the byte order (Ed25519 first, X25519 second, opposite of the
+      public-key concat) but not the file structure. `RNS/Identity.py::to_file`
+      is the reference. Without this, identities can't be exported /
+      imported across implementations.
+
+### Tier 2 — required for a client to be useful in the wild
+
+- [ ] **SPEC.md: Propagation node protocol.** Offline message retrieval
+      via store-and-forward propagation nodes. Without this, every
+      message requires both peers online simultaneously. Authoritative
+      source: `LXMF/LXMRouter.py::process_propagated`, the
+      `lxmf.propagation` peering exchange (`peer()` / `sync()` between
+      nodes — `LXMRouter.py:1892+, 2118+`). The `propagated` method is
+      already in `LXMessage.py` but the wire protocol between
+      propagation nodes is undocumented. Cross-flow:
+      `flows/send-propagated-lxmf.md` (already a `⏳` entry in
+      `flows/README.md`).
+- [ ] **SPEC.md §6 expansion: KEEPALIVE / link teardown protocol.**
+      `CTX_KEEPALIVE = 0xfd` packets — exact wire body, exact cadence
+      (`Link.KEEPALIVE` constant), exact teardown packet (`Link.PROOF`
+      context). Real clients drop links incorrectly without this.
+- [ ] **SPEC.md §5.x (new): LXMF stamps + tickets for spam control.**
+      `LXMF.Stamp` (proof-of-work field in the optional 5th element of
+      the msgpack payload), `FIELD_TICKET` lookup. Modern Sideband 1.x
+      treats missing-stamp messages as spam in the UI. Spec currently
+      doesn't mention stamps at all. Authoritative source:
+      `LXMF/LXMessage.py::validate_stamp`, `LXMF/LXMRouter.py:1741-1774`
+      (the stamp-check branch in `lxmf_delivery`).
+- [ ] **SPEC.md §13 (new): NomadNet page protocol.** Distinct from
+      LXMF — pages fetched over a Link with `context = CTX_REQUEST (0x09)`
+      / `CTX_RESPONSE (0x0a)` (already in §2.5 contexts table). Request
+      body is a path string + field map; response is a body bytes blob.
+      Without this, a client can do LXMF chat but can't render NomadNet
+      content (nodes serving content, telemetry, micron pages).
+- [ ] **SPEC.md §1.4 (new): GROUP destinations.** `RNS.Destination.GROUP`
+      type uses symmetric AES-256-CBC with a pre-shared key; different
+      encrypt/decrypt paths in `RNS/Destination.py:601+` (`prv` is a
+      symmetric-key wrapper, not an X25519 priv). Almost no clients
+      implement this but the protocol allows it.
+- [ ] **SPEC.md §8.4 (new): CSMA / airtime tracking.** LoRa-only —
+      carrier-sense + random backoff that prevents transmitter
+      collisions on shared channel. The clean-room repeater explicitly
+      flags "no CSMA" as a phase-2 simplification. A serious LoRa
+      client needs `RNS.Reticulum.ANNOUNCE_CAP`-aware backoff and the
+      `airtime_bins` accounting from `RNode_Firmware.ino:683-712`.
+- [ ] **SPEC.md §8.5 (new): RNode KISS configuration handshake.**
+      Beyond §8.3 (split-packet protocol), a client opening an RNode
+      drives `CMD_DETECT` / `CMD_FREQUENCY` / `CMD_BANDWIDTH` /
+      `CMD_SF` / `CMD_CR` / `CMD_TXPOWER` / `CMD_RADIO_STATE` over KISS
+      to bring up the radio. All defined in `RNode_Firmware/Framing.h:24-95`.
+      Spec just says "send Reticulum packets via CMD_DATA" — that's
+      not enough.
+- [ ] **SPEC.md §6.5 second sub-bullet: implicit vs explicit proof
+      mode.** `RNS.Reticulum.should_use_implicit_proof()` mode trims
+      the proof body to just the signature (no `packet_hash` prefix),
+      saving 32 bytes. `RNS/Link.py:386-389` has the explicit form
+      hard-coded with the implicit branch commented out, but at least
+      one upstream branch toggles it — a client that hard-codes the
+      explicit form will eventually meet a peer in implicit mode.
+
+### Tier 3 — required to act as a transport node / relay
+
+- [ ] **SPEC.md §7.7 (new): DATA forwarding rules.** Forwarding non-
+      local DATA per `path_table[dest][NEXT_HOP]`, with hop increment,
+      MTU-fit check, blackhole avoidance, and IFAC re-signing.
+      Currently mentioned only obliquely in §2.3 / §7.6. The full
+      forwarding logic is the bulk of `RNS/Transport.py::inbound`'s
+      ~800-line dispatch table at lines 1499-1620. The repeater repo
+      patches microReticulum to enable this — see commit
+      `Add DATA and PROOF forwarding patches for transport repeating`.
+- [ ] **SPEC.md §4.6 (new): ANNOUNCE rebroadcasting.** Including the
+      announce-cap (`RNS.Reticulum.ANNOUNCE_CAP`, default 2% airtime),
+      the announce queue, the `path_responses` cache, and the
+      `random_blob` history that lets a relay drop replays. Most of
+      `RNS/Transport.py:1196-1300, 1810-1969`.
+- [ ] **SPEC.md §7.8 (new): path table management.** TTL-based expiry
+      (`Transport.AP_PATH_TIME`, `ROAMING_PATH_TIME`, `DESTINATION_TIMEOUT`),
+      eviction on stale-link, persistence-across-reboot file format.
+      Hooks: `RNS/Transport.py:747-769` (stale_paths accumulator) and
+      the `paths` file under `storagepath`.
+- [ ] **SPEC.md §7.9 (new): tunnels and shared-instance protocol.**
+      `tunnels`, `discovery_path_requests`, `RNS/Reticulum.py::is_connected_to_shared_instance`
+      — how a process talks to a co-resident `rnsd`. Spec's §7.6
+      covers one symptom (TCP OUT default) but not the actual
+      shared-instance wire format.
+- [ ] **SPEC.md §6.x (new): reverse table + link transport.** When a
+      Link's path crosses a relay, the relay must forward both
+      directions of every Link DATA + PROOF using
+      `Transport.reverse_table` (`RNS/Transport.py:2087-2204`).
+      Distinct from path-table forwarding — different lookup, different
+      lifecycle.
+
 ## Spec polishing (lower priority)
 
 - [ ] **Split `SPEC.md` into per-layer files** as the document grows
@@ -110,10 +269,3 @@ to remove their markers:
 - [ ] **Add a "last-verified-against-rns" line** to SPEC.md
       frontmatter (per `agent.md` §7) so readers know which RNS
       version the spec was tested against.
-
-- [ ] **Document the Reticulum Resource fragmentation protocol** —
-      currently absent from SPEC.md but needed for multi-packet LXMF
-      over Link (NomadNet pages > 1 MTU, large file transfers).
-
-- [ ] **Document the Propagation `/get` pull protocol** for offline
-      message retrieval. Used by Sideband when peers are out of range.
