@@ -122,14 +122,22 @@ re-research.
       (`random_hash` is 5 random bytes + 5 bytes big-endian uint40
       unix_seconds, not 10 random bytes); SPEC.md §2.5 contexts table
       now lists `0x0B PATH_RESPONSE`.
-- [ ] **SPEC.md §12 / `flows/send-resource.md`: Reticulum Resource
-      fragmentation.** Any LXMF body larger than `LINK_PACKET_MAX_CONTENT`
-      ≈ 360 B is sent as an `RNS.Resource`, not a single Link DATA
-      packet. Without this you can't send or receive long messages,
-      attachments, or NomadNet pages > 1 MTU. `flows/send-link-lxmf.md`
-      currently flags this as a known gap. Authoritative source:
-      `RNS/Resource.py` (block sizes, sequence numbers, resource-proof
-      message). Cross-flow: `LXMF/LXMessage.py::__as_resource` line 651.
+- [x] **SPEC.md §10 / `flows/send-resource.md`: Reticulum Resource
+      fragmentation.** Done. SPEC.md §10 covers the wire-level MUST
+      rules: 13 sub-sections from "when Resource runs" through wire
+      contexts (ADV / REQ / RESOURCE / HMU / PRF / ICL / RCL),
+      hashmap collision-guard, sliding window, multi-segment cutover
+      at MAX_EFFICIENT_SIZE = 1 MiB - 1, and the encryption-then-split
+      layering. `flows/send-resource.md` walks the chronology in 10
+      steps with a wire-byte ladder diagram. Side fixes during the
+      drafting: SPEC.md §2.5 contexts table now lists ALL upstream
+      contexts (was missing all RESOURCE_*, REQUEST/RESPONSE,
+      COMMAND, CHANNEL, LINKIDENTIFY, LINKCLOSE, LRRTT entries) and
+      corrects KEEPALIVE from 0xFD (which is actually LINKPROOF) to
+      0xFA per `RNS/Packet.py:87`. SPEC.md §6.5 wording updated to
+      use the correct LINKPROOF context name. The previously-existing
+      §10 "Test vectors" and §11 "Source map" were renumbered to §11
+      and §12 to put §10 in the protocol-stack flow.
 - [ ] **SPEC.md §6.5 expansion: regular (non-LRPROOF) PROOF body.** The
       mandatory PROOF receipt for every CTX_NONE Link DATA packet. Body
       is `packet_hash(32) || signature(64)` (`RNS/Link.py::prove_packet`

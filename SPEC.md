@@ -101,16 +101,31 @@ Byte 1 is `hops`, an 8-bit counter that each transit relay increments by 1. `0` 
 
 Single byte after the destination hash (offset 18 for HEADER_1, offset 34 for HEADER_2). Common values:
 
+Full context inventory from `RNS/Packet.py:72-92` (RNS 1.2.0):
+
 | Hex | Name | Used for |
 |---|---|---|
-| `0x00` | CTX_NONE | Default; opportunistic LXMF DATA, regular packets |
-| `0x09` | CTX_REQUEST | Link REQUEST (NomadNet page fetch, propagation /get) |
-| `0x0a` | CTX_RESPONSE | Link RESPONSE matching a REQUEST |
-| `0x0b` | PATH_RESPONSE | An `ANNOUNCE` packet emitted in response to a `path?` request — distinguishes it from a periodic re-announce. Receivers handle the two paths differently (see §7.2 and §4.5) |
-| `0xfd` | CTX_KEEPALIVE | Link keepalive |
-| `0xff` | LRPROOF | Link request proof |
-
-Other context values exist (per `RNS/Packet.py`) — these are the most-used in the LXMF-via-Link path.
+| `0x00` | NONE | Generic / opportunistic DATA packet |
+| `0x01` | RESOURCE | One part (chunk) of a Resource transfer (§10) |
+| `0x02` | RESOURCE_ADV | Resource advertisement |
+| `0x03` | RESOURCE_REQ | Resource part request (from receiver to sender) |
+| `0x04` | RESOURCE_HMU | Resource hashmap update (next-segment hashmap) |
+| `0x05` | RESOURCE_PRF | Resource proof (a PROOF-type packet using this context) |
+| `0x06` | RESOURCE_ICL | Resource cancel from the initiator |
+| `0x07` | RESOURCE_RCL | Resource cancel from the receiver / reject of an advertisement |
+| `0x08` | CACHE_REQUEST | Cache lookup over a Link |
+| `0x09` | REQUEST | Link REQUEST (NomadNet page fetch, propagation `/get`) |
+| `0x0A` | RESPONSE | Link RESPONSE matching a REQUEST |
+| `0x0B` | PATH_RESPONSE | An ANNOUNCE emitted in response to a `path?` request — distinguishes it from a periodic re-announce. Receivers handle the two paths differently (see §7.2 and §4.5) |
+| `0x0C` | COMMAND | Channel-style remote-execution command |
+| `0x0D` | COMMAND_STATUS | Status reply for a COMMAND |
+| `0x0E` | CHANNEL | Link channel multiplexed payload |
+| `0xFA` | KEEPALIVE | Link keepalive (sent periodically while a Link is idle) |
+| `0xFB` | LINKIDENTIFY | Backchannel-identify proof on an established Link (§5 backchannel) |
+| `0xFC` | LINKCLOSE | Link teardown notification |
+| `0xFD` | LINKPROOF | Receipt for a CTX_NONE Link DATA packet (§6.5) |
+| `0xFE` | LRRTT | Link RTT measurement reply |
+| `0xFF` | LRPROOF | Link request proof (§6.2) |
 
 ### 2.6 Source
 
@@ -449,7 +464,7 @@ Subsequent DATA packets on the link use the Link-derived-key Token format (secti
 
 ### 6.5 Mandatory packet receipts
 
-After processing each `CTX_NONE` DATA packet on an active link, the receiver MUST send back a `PROOF` packet (no context byte specifics) whose payload is the 32-byte SHA-256 of the received packet's hashable part. Without this, the sender's retransmit queue fires and the same packet arrives repeatedly, eventually exceeding the link's KEEPALIVE budget and tearing down the link. This is `Packet.prove_packet` upstream — non-optional for any client that wants to receive content over a Link without spamming the sender.
+After processing each `NONE` DATA packet on an active link, the receiver MUST send back a `PROOF`-type packet with `context = LINKPROOF (0xFD)` whose body is the 32-byte SHA-256 of the received packet's hashable part. Without this, the sender's retransmit queue fires and the same packet arrives repeatedly, eventually exceeding the link's KEEPALIVE budget and tearing down the link. This is `Packet.prove_packet` upstream — non-optional for any client that wants to receive content over a Link without spamming the sender.
 
 ### 6.6 Source
 
@@ -721,7 +736,213 @@ logged before any filtering converts hours of "messages aren't arriving" debuggi
 
 ---
 
-## 10. Test vectors
+## 10. Resource fragmentation protocol
+
+A **Resource** transfers a payload that exceeds the per-packet content limit of an established Reticulum Link. It is the only way to carry an LXMF body, NomadNet page, or file larger than ~360 bytes (`LINK_PACKET_MAX_CONTENT`) over a Link. Resource is built **on top of** an active Link — it relies on the Link's session key for encryption (§3.1 link-derived form) and on the Link's bidirectional DATA channel for control traffic.
+
+The complete reference is `RNS/Resource.py` (1383 lines in RNS 1.2.0); `RNS/Packet.py:72-78` defines the context constants. This section describes the wire-level invariants a clean-room implementation must respect; many implementation choices (window sizing heuristics, watchdog timers, EIFR computation) are private and listed only when their absence would cause an interop break.
+
+### 10.1 When Resource runs
+
+Three triggers in upstream:
+
+1. **`LXMessage.send()` for `DIRECT` method with `representation == RESOURCE`.** Set automatically when the encrypted-form LXMF body exceeds `LINK_PACKET_MAX_CONTENT` (`LXMF/LXMessage.py:415-421`).
+2. **NomadNet page request fulfillment** — a server returning a page whose body exceeds the link MTU.
+3. **Direct file transfers** via `rncp` and similar utilities.
+
+### 10.2 Initiator-side preparation
+
+Given input data and an `RNS.Link` in `ACTIVE` state (`RNS/Resource.py:248-478`):
+
+1. **Optional metadata prefix.** If the caller supplied a `metadata` dict, msgpack-pack it and prepend `length(3 bytes, big-endian uint24) || packed_metadata` to the body. The `has_metadata` (`x`) flag in the advertisement signals this. Receivers strip the prefix during reassembly (line 699-707).
+2. **Optional bz2 compression.** If `auto_compress` is true and the data fits within `auto_compress_limit` (default 64 MiB), the body is bz2-compressed and the `compressed` (`c`) flag is set. If compression doesn't shrink the data, the uncompressed form is sent and `c` is cleared.
+3. **Random hash prefix.** A 4-byte (`Resource.RANDOM_HASH_SIZE`) random hash is prepended to the (compressed-or-not) body. This is the `r` field in the advertisement and is part of the input to `hash` and `expected_proof`.
+4. **Link encryption.** The full `random_hash || (compressed?) data` blob is encrypted using `link.encrypt(...)` — i.e. the link-derived Token form (§3.1), no ephemeral_pub prefix. The `encrypted` (`e`) flag is set.
+5. **Hash and proof material.**
+   - `data_with_random = random_hash || (compressed?) plaintext`
+   - `hash = SHA256(data_with_random || random_hash)` (32 bytes)
+   - `truncated_hash = hash[:16]`
+   - `expected_proof = SHA256(data_with_random || hash)` (32 bytes) — what the receiver will eventually return in the RESOURCE_PRF packet.
+6. **Part split.** The encrypted body is sliced into parts of size `SDU = link.mtu - HEADER_MAXSIZE - IFAC_MIN_SIZE`. Each part becomes a packed `RNS.Packet(link, part_data, context=RESOURCE)`; the packed wire bytes are stored in `parts[i]` for later sending.
+7. **Hashmap.** Each part is fingerprinted to `MAPHASH_LEN = 4 bytes`. The full hashmap is `b"".join(map_hashes)`. **Hash collisions within the COLLISION_GUARD_SIZE = 2 × WINDOW_MAX + HASHMAP_MAX_LEN window are detected at construction time** — if two parts hash to the same 4-byte map_hash within that window, the random hash is regenerated and the whole hashmap is recomputed. Without this guard, the receiver can't disambiguate which part it just received from a part-request that named a colliding map_hash.
+
+After preparation: `total_parts = ceil(size / SDU)`; `total_size` includes metadata; `total_segments = ceil(total_size / MAX_EFFICIENT_SIZE)` where `MAX_EFFICIENT_SIZE = 1 MiB - 1 = 1_048_575`.
+
+### 10.3 Wire packet contexts used during a Resource transfer
+
+All of these are sent on the established Link and use the Link's session key for encryption (or are unencrypted PROOF-type, depending on context):
+
+| Context | Direction | Type | Body |
+|---|---|---|---|
+| `RESOURCE_ADV (0x02)` | initiator → receiver | DATA | msgpack dict (§10.4) |
+| `RESOURCE (0x01)` | initiator → receiver | DATA | one part of the encrypted body, raw |
+| `RESOURCE_REQ (0x03)` | receiver → initiator | DATA | request bytes (§10.5) |
+| `RESOURCE_HMU (0x04)` | initiator → receiver | DATA | hashmap continuation (§10.7) |
+| `RESOURCE_PRF (0x05)` | receiver → initiator | PROOF | `resource_hash(32) || full_proof(32)` |
+| `RESOURCE_ICL (0x06)` | initiator → receiver | DATA | resource_hash(32) — initiator cancel |
+| `RESOURCE_RCL (0x07)` | receiver → initiator | DATA | resource_hash(32) — receiver reject/cancel |
+
+### 10.4 RESOURCE_ADV — the advertisement
+
+The first packet in the transfer. Body is `umsgpack.packb(dict)` with these keys (`RNS/Resource.py:1336-1358`):
+
+| Key | Type | Meaning |
+|---|---|---|
+| `t` | int | **Transfer size** — encrypted byte length on the wire |
+| `d` | int | **Data size** — original uncompressed plaintext byte length |
+| `n` | int | **Number of parts** in this segment |
+| `h` | bytes(32) | **Resource hash** — `SHA256(data || random_hash)` |
+| `r` | bytes(4) | **Random hash** prefix |
+| `o` | bytes(32) | **Original hash** of the first segment (= `h` if single-segment) |
+| `i` | int | **Segment index** (1-based) |
+| `l` | int | **Total segments** |
+| `q` | bytes(?) or None | **Request id** if this Resource carries the response to a Link REQUEST |
+| `f` | int | **Flags byte** (see below) |
+| `m` | bytes | **Hashmap fragment** for THIS advertisement segment — up to `HASHMAP_MAX_LEN = ⌊(LINK_MDU - 134)/4⌋` 4-byte map_hashes |
+
+The flags byte `f` packs six booleans (`Resource.py:1310, 1377-1382`):
+
+```
+bit 0 : e — encrypted
+bit 1 : c — compressed
+bit 2 : s — split (multi-segment)
+bit 3 : u — is_request (this Resource is the body of a Link REQUEST)
+bit 4 : p — is_response (this Resource is the body of a Link RESPONSE)
+bit 5 : x — has_metadata
+```
+
+`HASHMAP_MAX_LEN` matters: the entire hashmap may not fit in one ADV. If `n > HASHMAP_MAX_LEN`, the receiver reconstructs subsequent map segments via RESOURCE_HMU packets after exhausting the first slice (§10.7).
+
+The advertisement is sent once on `Resource.advertise()`; if no part requests arrive within the watchdog timeout, it is retransmitted up to `MAX_ADV_RETRIES = 4` times before the resource is cancelled (`Resource.py:573-590`).
+
+### 10.5 RESOURCE_REQ — receiver requests parts
+
+Sent by the receiver to ask for a window's worth of specific parts (`Resource.py:934-983`). Body layout:
+
+```
+hashmap_exhausted_flag(1)  || [last_map_hash(4) if exhausted]
+|| resource_hash(32)
+|| requested_map_hashes(N × 4 bytes)
+```
+
+Where:
+
+- `hashmap_exhausted_flag` is `0x00 (HASHMAP_IS_NOT_EXHAUSTED)` if the receiver still has unrequested map_hashes from the most-recently-known hashmap segment, or `0xFF (HASHMAP_IS_EXHAUSTED)` if it has consumed all of them and needs the next hashmap segment.
+- If `exhausted == 0xFF`, the request continues with the **last** map_hash the receiver knows from the current segment (4 bytes). The sender uses this to determine which segment of the hashmap to send back via RESOURCE_HMU.
+- `resource_hash` is the 32-byte `h` from the advertisement.
+- The trailing `requested_map_hashes` is a concatenation of `N` × 4-byte map_hashes the receiver wants delivered. `N` is at most `WINDOW` (initial 4, dynamically grown — see §10.10).
+
+Receivers who already have the part for a requested map_hash don't issue requests for it; the request is constructed only from `parts[search_start:search_start+window]` where `parts[i] is None` (`Resource.py:944-960`).
+
+### 10.6 RESOURCE part packets
+
+For each map_hash in a RESOURCE_REQ, the sender locates the matching pre-packed part within `parts[receiver_min_consecutive_height : receiver_min_consecutive_height + COLLISION_GUARD_SIZE]` and emits it as a regular Link DATA packet with `context = RESOURCE (0x01)` (`Resource.py:1011-1023`). The body is just the part's encrypted data — no metadata, no sequence number. The receiver matches the inbound part to its hashmap by recomputing its 4-byte map_hash and inserting it into `parts[i]` at the position where `hashmap[i]` matches (`Resource.py:866-885`).
+
+Two interop traps:
+
+1. **Map_hashes are not guaranteed unique across the whole resource** — only within `COLLISION_GUARD_SIZE` of any sliding-window position. A receiver that searches the entire hashmap for a matching part-hash can mis-place a part if two distant parts collide. The reference receiver searches only `hashmap[consecutive_completed_height : consecutive_completed_height + window]`.
+2. **Parts are link-encrypted but otherwise opaque** — the receiver has no way to validate a part beyond its 4-byte map_hash until the whole resource assembles and the SHA-256 over the reassembled data matches `h`.
+
+### 10.7 RESOURCE_HMU — hashmap update
+
+When the sender receives a RESOURCE_REQ with `exhausted == 0xFF` and a `last_map_hash`, it locates the position of `last_map_hash` in its full hashmap, advances to the **next** `HASHMAP_MAX_LEN` window, and emits the hashmap continuation (`Resource.py:1030-1064`):
+
+```
+body = resource_hash(32) || umsgpack.packb([segment_index(int), hashmap_segment_bytes])
+```
+
+The segment_index is `part_index // HASHMAP_MAX_LEN`. The receiver applies this with `Resource.hashmap_update(segment, hashmap)` to extend its known hashmap and continues issuing RESOURCE_REQ for the new range.
+
+If the part_index doesn't land on a `HASHMAP_MAX_LEN` boundary, the sender treats it as a sequencing error and cancels the resource (`Resource.py:1043-1046`).
+
+### 10.8 RESOURCE_PRF — final proof
+
+When the receiver has assembled the full resource (`received_count == total_parts`), it runs `assemble()` (`Resource.py:672-726`):
+
+1. Concatenate `parts[0..n]` to a single buffer.
+2. `link.decrypt(...)` to plaintext.
+3. Strip the 4-byte `random_hash` prefix.
+4. If `compressed`: bz2-decompress.
+5. Recompute `SHA256(plaintext_with_random || random_hash)` and compare to `h`.
+6. If match: peel off metadata if `x` is set, write `data` to the destination; status = `COMPLETE`.
+7. If mismatch: status = `CORRUPT`; cancel.
+
+On `COMPLETE`, the receiver emits the proof:
+
+```
+proof_data = resource_hash(32) || full_proof(32)
+where full_proof = SHA256(data_with_random || resource_hash)
+```
+
+sent as `RNS.Packet(link, proof_data, packet_type=PROOF, context=RESOURCE_PRF)` (`Resource.py:755-766`). The `full_proof` is exactly what the initiator pre-computed as `expected_proof` in §10.2 step 5 — it can validate the proof bytewise without re-running the SHA-256.
+
+The initiator's `validate_proof` (`Resource.py:785-824`) checks `proof_data[32:] == self.expected_proof` and transitions status to `COMPLETE`. If the resource is multi-segment (`s == True`), the next segment's advertisement is sent immediately upon proof of the current segment.
+
+### 10.9 RESOURCE_ICL / RESOURCE_RCL — cancellation
+
+Either side can cancel; the body is just `resource_hash(32)`:
+
+- **`RESOURCE_ICL (0x06)`** — initiator cancel. Sent when the initiator decides to abort (e.g. the user kills the upload, the link MTU shrinks below the resource's pre-packed parts, the watchdog gives up after `MAX_RETRIES = 16`).
+- **`RESOURCE_RCL (0x07)`** — receiver reject / cancel. Sent on advertisement reject (`Resource.reject(adv_packet)` at line 155-163, e.g. resource too large per app callback) or on receiver-side abort.
+
+Either form transitions the resource to `FAILED`, releases the parts, and notifies the link's resource-concluded callback.
+
+### 10.10 Sliding window and rate adaptation
+
+The receiver controls request-pacing via a sliding window:
+
+```
+WINDOW          = 4    # initial outstanding requests
+WINDOW_MIN      = 2
+WINDOW_MAX_SLOW = 10   # default cap
+WINDOW_MAX_FAST = 75   # cap once link is observed to be fast
+WINDOW_MAX_VERY_SLOW = 4
+WINDOW_FLEXIBILITY = 4
+```
+
+After each successful round (every requested part arrived), `window += 1` up to `window_max`; `window_min += 1` once `window - window_min > WINDOW_FLEXIBILITY - 1` (`Resource.py:902-906`). The window cap is promoted to `WINDOW_MAX_FAST` after `FAST_RATE_THRESHOLD` consecutive rounds at observed throughput > `RATE_FAST = 50 kbps / 8`, and demoted to `WINDOW_MAX_VERY_SLOW` after `VERY_SLOW_RATE_THRESHOLD = 2` rounds below `RATE_VERY_SLOW = 2 kbps / 8` (`Resource.py:917-927`). These are receiver-private — they're not negotiated, so two implementations with different rate-detection cutoffs interop fine but may emerge with different effective throughput on the same channel.
+
+### 10.11 Multi-segment resources
+
+For payloads larger than `MAX_EFFICIENT_SIZE = 1 MiB - 1`, the resource is split into multiple segments at `MAX_EFFICIENT_SIZE` boundaries (`Resource.py:299-314`). Each segment is its own Resource with its own RESOURCE_ADV; the `i` (segment_index) and `l` (total_segments) fields disambiguate. The `o` (original_hash) field carries the first segment's `h` so the receiver can correlate segments belonging to the same logical transfer.
+
+The sender doesn't pre-prepare every segment up front — it builds segment N+1 in `__prepare_next_segment` while segment N is still being delivered, and sends segment N+1's advertisement only after it has received the proof for segment N (`Resource.py:768-783, 822-824`). This caps memory usage; a 100 MiB transfer doesn't materialize 100 segments simultaneously.
+
+The 3-byte big-endian uint24 metadata length encoding (§10.2 step 1) is what limits per-resource metadata to `METADATA_MAX_SIZE = 16 MiB - 1`.
+
+### 10.12 Compression and encryption layering
+
+Encryption layering is **outermost** — the wire bytes look like:
+
+```
+plaintext           = data_with_random || random_hash    # SHA-256 input
+data_with_random    = random_hash(4) || maybe_compressed_body
+maybe_compressed    = compressed_body iff `c` flag, else uncompressed
+parts[i]            = link.encrypt( data_with_random[i*SDU : (i+1)*SDU] )
+```
+
+Critically, **the link encryption is applied to the WHOLE concatenated data first, then sliced into parts** — not to each part individually. This means part boundaries don't align with cipher block boundaries; a missing part can't be decrypted in isolation. The receiver must accumulate all parts before calling `link.decrypt()` (`Resource.py:676-679`).
+
+This also means swapping in a new link session key mid-transfer would break decryption — the encryption happened with the link's key as it was when the resource was constructed.
+
+### 10.13 Source map for §10
+
+| File | What it pins down |
+|---|---|
+| `RNS/Resource.py:43-156` | Class header, constants, state machine values, `reject` / `accept` |
+| `RNS/Resource.py:248-478` | `Resource.__init__` — preparation, hashmap construction, collision guard |
+| `RNS/Resource.py:520-596` | `__advertise_job`, watchdog, advertisement retransmit |
+| `RNS/Resource.py:672-726` | `assemble` — receiver reassembly, decrypt, decompress, hash-match |
+| `RNS/Resource.py:755-829` | `prove` and `validate_proof` |
+| `RNS/Resource.py:831-932` | `receive_part` — receiver-side part insertion + window adjust |
+| `RNS/Resource.py:934-983` | `request_next` — receiver-side RESOURCE_REQ construction |
+| `RNS/Resource.py:985-1064` | `request` — initiator-side fulfillment + RESOURCE_HMU emission |
+| `RNS/Resource.py:1237-1383` | `ResourceAdvertisement` — pack/unpack of the ADV msgpack dict |
+| `RNS/Packet.py:72-78` | RESOURCE_* context constants |
+
+---
+
+## 11. Test vectors
 
 See [`test-vectors/`](test-vectors/). Currently populated:
 
@@ -733,7 +954,7 @@ An implementation that round-trips every test vector — both directions — sho
 
 ---
 
-## 11. Source map
+## 12. Source map
 
 Upstream Python sources, in rough order of frequency-of-reference:
 

@@ -100,8 +100,9 @@ Initial confidence assessment (subjective, not authoritative — re-do this audi
 | §7.6 `TCPServerInterface.OUT` override | Source-cited; matches behavior observed in the mobile-app's local-transport experiments. |
 | §8 KISS / HDLC framing | High — both work in production on the reference clients |
 | §9.1–§9.8 Implementation gotchas | Each was a real bug that bit a real implementation. High confidence each is real; some lack formal test scripts. |
-| §10 Test vectors | The vectors themselves are verified; the test-vectors/ directory needs to be populated in this repo (currently empty placeholder). |
-| §11 Source map | High |
+| §10 Resource fragmentation | Source-cited from `RNS/Resource.py` against RNS 1.2.0; not yet runtime-verified in this repo's `tools/`. |
+| §11 Test vectors | The vectors themselves are verified; the test-vectors/ directory needs to be populated in this repo (currently partially populated). |
+| §12 Source map | High |
 
 **Concrete next-task list** for the agent picking this up:
 
