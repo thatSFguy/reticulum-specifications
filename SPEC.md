@@ -2695,7 +2695,103 @@ A single one-time clock sync (BLE config, web flasher, manual button-press at kn
 
 ---
 
-## 16. Test vectors
+## 16. Bounded-state inventory (memory limits at a glance)
+
+Embedded clean-room implementations need to know up front which data structures grow with traffic and which are bounded by protocol-level caps. This section is a single-table reference for every bounded structure across §1-§15.
+
+### 16.1 Per-node state caps
+
+| Structure | Cap | Where | Notes |
+|---|---|---|---|
+| `Transport.path_table` | (unbounded — count grows with mesh size) | §12.4 | Grows with the number of distinct destinations the node has heard about. Bounded effectively by TTL eviction (§12.4.2): AP_PATH_TIME (1h), ROAMING_PATH_TIME (4h), PATHFINDER_E (30d). On a tiny LoRa mesh this is dozens of entries; on a global Reticulum mesh routed through a TCP backbone it can be thousands. |
+| `path_table[dest][IDX_PT_RANDBLOBS]` (per-destination random_blob history) | `Transport.MAX_RANDOM_BLOBS = 32` | §4.5 step 6.3, §12.3.2 | Sliding window. Caps memory growth from one destination's announce stream. |
+| `Transport.announce_table` | (unbounded — populated only for in-flight announces awaiting rebroadcast) | §12.3 | Drains via `Transport.jobs` retransmit timer, capped at `PATHFINDER_R = 4` retries each. Effective cap: number of announces seen × time. |
+| `Transport.discovery_pr_tags` | `Transport.max_pr_tags = 32000` | §7.2.2 | Path-request dedup table. Older entries aged out by `Transport.jobs`. |
+| `Transport.path_requests` | (unbounded — one entry per recently-issued path? request) | §7.1 | Aged out at `Transport.PATH_REQUEST_GATE_TIMEOUT = 120s`. |
+| `Transport.discovery_path_requests` | (unbounded) | §7.2.3, §12.6.1 | Aged out at `Transport.PATH_REQUEST_TIMEOUT = 15s`. |
+| `Transport.link_table` (transit-relay link state) | (unbounded) | §12.2.4, §12.5 | One per Link the relay is forwarding for; cleared on link teardown or stale aging. |
+| `Transport.reverse_table` | (unbounded) | §12.5.3 | One entry per in-flight DATA→PROOF round-trip; popped on use, aged at `Transport.REVERSE_TIMEOUT = 30s`. |
+| `Transport.tunnels` | (unbounded) | §12.6.2 | One per tunnel-able interface; aged at `Transport.TUNNEL_TIMEOUT`. |
+| `Transport.packet_hashlist` (dedup ring) | `Transport.hashlist_maxsize = 1,000,000` | §13.4 | Half is purged on next `Transport.jobs` after the cap is hit. |
+| `Transport.active_links` | (unbounded — one per active Link the node owns or relays) | §6 | |
+| `Transport.pending_links` | (unbounded — one per Link in PENDING/HANDSHAKE state) | §6.7 | Aged out at `Link.ESTABLISHMENT_TIMEOUT_PER_HOP × hops + KEEPALIVE`. |
+
+### 16.2 Per-interface state caps
+
+| Structure | Cap | Where |
+|---|---|---|
+| `Interface.held_announces` | `Interface.MAX_HELD_ANNOUNCES = 256` | §4.5 step 8 |
+| `Interface.announce_queue` | `Reticulum.MAX_QUEUED_ANNOUNCES` (default ~64; configurable) | §12.3.1 |
+| `Interface.ia_freq_deque` (incoming announce rate) | `Interface.IA_FREQ_SAMPLES` rolling sliding window | §13.1 |
+| `Interface.oa_freq_deque` (outgoing announce rate) | `Interface.OA_FREQ_SAMPLES` rolling sliding window | §13.1 |
+
+### 16.3 Per-destination state caps
+
+| Structure | Cap | Where |
+|---|---|---|
+| `Destination.ratchets` | `Destination.RATCHET_COUNT = 512` | §7.4 |
+| `Destination.path_responses` | (per-tag, aged at `Destination.PR_TAG_WINDOW = 30s`) | §7.2.4 |
+| `Destination.links` (responder-side active links) | (unbounded — one per established Link to this destination) | §6 |
+
+### 16.4 Per-Link state caps
+
+| Structure | Cap | Where |
+|---|---|---|
+| `Link.outgoing_resources` | (unbounded — one per in-flight outgoing Resource on this link) | §10 |
+| `Link.incoming_resources` | (unbounded — one per in-flight incoming Resource on this link) | §10 |
+| `Link.pending_requests` | (unbounded — one per outstanding REQUEST on this link) | §11.5 |
+
+### 16.5 Per-Resource state caps
+
+| Structure | Cap | Where |
+|---|---|---|
+| `Resource.window` | runtime: between `WINDOW_MIN = 2` and `window_max` | §10.10 |
+| `Resource.window_max` | one of `WINDOW_MAX_VERY_SLOW = 4`, `WINDOW_MAX_SLOW = 10`, `WINDOW_MAX_FAST = 75` | §10.10 |
+| `Resource.parts` | `Resource.total_parts = ceil(size / SDU)` | §10.2 step 7 |
+| `Resource.hashmap` | 4 × `total_parts` bytes | §10.2 step 8 |
+| `Resource.req_hashlist` | (unbounded per resource — one entry per RESOURCE_REQ packet seen) | §10.6 |
+
+### 16.6 Identity/cryptography caches
+
+| Structure | Cap | Where |
+|---|---|---|
+| `Identity.known_destinations` | (unbounded) | §4.5 step 6 — main growth vector. Persisted across restart; aged out via `Identity.clean_known_destinations` based on `Identity.RATCHET_EXPIRY = 30 days` for unused entries. |
+| `Identity.known_ratchets` | (unbounded — one per `known_destinations` entry that has ever announced a ratchet) | §4.5 step 6, §7.4 |
+| `Transport.blackholed_identities` | (operator-controlled; empty by default) | §4.5 step 5 |
+
+### 16.7 LXMF-level caps
+
+| Structure | Cap | Where |
+|---|---|---|
+| `LXMRouter.locally_delivered_transient_ids` | (operator-bounded) | §4.5 step 6 / §5.7 dedup |
+| `LXMRouter.outbound_stamp_costs` | (per peer — grows with peer count) | §5.7.4 |
+| `LXMRouter.available_tickets` | (per peer / direction) | §5.7.3 |
+| `LXMRouter.propagation_entries` | (operator-bounded — propagation node only) | §5.8 |
+| `LXMRouter.peers` | (operator-bounded — propagation node only) | §5.8 |
+
+### 16.8 Channel state caps
+
+| Structure | Cap | Where |
+|---|---|---|
+| `Channel.window` | `Channel.WINDOW = 2` initial, growth like §10.10 | §6.8.4 |
+| `Channel.message_factories` | (per-Link, application-defined) | §6.8.3 |
+| `Channel.outbound_queue` / inbound | (unbounded — one entry per in-flight message) | §6.8.4 |
+
+### 16.9 What this means for embedded targets
+
+A typical nRF52 / RAK4631 / Heltec_T114 client carrying ~64KB of usable RAM should:
+
+- Not run as a transport node (skips most of §16.1's largest structures: link_table, reverse_table, tunnels, large path_table). Leaf clients only populate `path_table` for destinations they personally need, dramatically smaller.
+- Cap `Identity.known_destinations` at a sane size (e.g. 50-200 entries) and drop older ones when full. Upstream's unbounded growth is fine on a desktop; embedded clients need explicit eviction. Loss of an entry just means re-discovering via §7.1 path? on next outbound to that destination.
+- Bound `Resource.hashmap` size — a 1 MiB resource has 1024 parts at SDU=1024, so a 4 KiB hashmap. Reject incoming Resources whose advertised `n` would exceed your memory budget; the receiver's `delivery_resource_advertised` callback can return False to reject (§5.8.3 / NomadNet pattern).
+- Stick to `WINDOW_MAX_SLOW = 10` rather than `WINDOW_MAX_FAST = 75` for any Resource transfer to bound part-buffer memory.
+- Avoid registering Channel message types with large `pack()` outputs.
+
+For comparison: a desktop `rnsd` typically settles around 50-200 MB of memory in steady state on a moderately-busy mesh, dominated by `path_table` and `known_destinations` growth.
+
+---
+
+## 17. Test vectors
 
 See [`test-vectors/`](test-vectors/). Currently populated:
 
@@ -2707,7 +2803,7 @@ An implementation that round-trips every test vector — both directions — sho
 
 ---
 
-## 17. Source map
+## 18. Source map
 
 Upstream Python sources, in rough order of frequency-of-reference:
 

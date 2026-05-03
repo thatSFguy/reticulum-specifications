@@ -412,7 +412,14 @@ order: top three save the most debugging hours.
       auto-discovered LAN meshes (the "share_instance" deployment
       pattern with multiple physical hosts).
 
-- [ ] **Appendix: Bounded-state inventory.** A single table of every
+- [x] **§16 (new): Bounded-state inventory.** Done. Eight sub-section
+      tables covering per-node Transport state, per-interface state,
+      per-destination, per-Link, per-Resource, identity caches,
+      LXMF-level, Channel state — every memory-bounded structure across
+      the protocol with its cap and pointer to the explanatory section.
+      Closes with explicit guidance for embedded targets (~64KB-RAM
+      class) on what to bound, what to reject, and what to skip
+      (transport-mode operation). A single table of every
       memory-bounded structure across the protocol with its cap:
       `MAX_RANDOM_BLOBS = 32`, `Transport.max_pr_tags = 32000`,
       `Interface.MAX_HELD_ANNOUNCES = 256`, `Destination.RATCHET_COUNT
