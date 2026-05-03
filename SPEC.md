@@ -2440,7 +2440,106 @@ A client running on a constrained device (less RAM, slower CPU) can scale all of
 
 ---
 
-## 15. Test vectors
+## 15. Time and clock requirements
+
+Reticulum has time-sensitive behaviour scattered across many sections. This is the consolidated reference for what kind of clock you need where, what tolerance the protocol gives you, and what fails on a no-RTC device (Faketec, RAK4631 stock, Heltec_T114, generic nRF52 LoRa boards).
+
+### 15.1 Three clock kinds
+
+| Kind | What it tells you | Typical embedded availability |
+|---|---|---|
+| **Absolute wall time** | Current Unix-seconds (e.g. `1714780800`) | Only with NTP sync, GPS, or hand-set clock |
+| **Boot-relative monotonic seconds** | Seconds since the device booted | Always, via `millis()` / `time.monotonic()` |
+| **High-resolution monotonic** | Sub-second timing for RTT and watchdog | Always, but precision varies |
+
+Most upstream Python code assumes wall time is available because it runs on hosts with NTP. Embedded clean-room implementations need to be careful about which kind each call site needs.
+
+### 15.2 Required: monotonic seconds (every implementation)
+
+These break a single-clock implementation if missing. All can be satisfied by **boot-relative seconds** — they only need order, not absolute value.
+
+| Use | Section | What fails without it |
+|---|---|---|
+| Link RTT measurement | §6.7.1 | `keepalive` interval can't adapt; defaults to `KEEPALIVE_MAX = 360s` worst case |
+| Link watchdog (last_inbound, last_outbound, last_keepalive timestamps) | §6.7 | Link can't detect staleness; lingers forever or tears down spuriously |
+| Resource transfer watchdog (last_activity, advertisement retry timing) | §10 | Resource transfers stall without retry; SENDER_GRACE_TIME never triggers |
+| `Transport.path_requests` rate-limit (`PATH_REQUEST_MI = 20s` minimum interval) | §7.1 | Path? storms — repeats faster than rate limit allows |
+| `Transport.tables_last_culled` periodic eviction trigger | §13.4 | Path/reverse/link tables grow without bound |
+| `Transport.discovery_pr_tags` aging (`PATH_REQUEST_GATE_TIMEOUT = 120s`) | §7.2.2 | Path-request dedup table never evicts old entries |
+| `Interface.ic_burst_freq` rolling deque for ingress rate limiting | §4.5 step 8 | Per-interface ingress limiter can't compute Hz |
+
+### 15.3 Recommended: monotonic-with-no-skew across announces (timestamp encoding)
+
+The §4.1 `random_hash` carries a 5-byte big-endian uint40 timestamp:
+
+```python
+random_hash = get_random_hash()[:5] + int(time.time()).to_bytes(5, "big")
+```
+
+Transit relays read `random_hash[5:10]` as a unix-seconds value and use it for path-table replay-ordering decisions (§4.5 step 6.3). Two requirements:
+
+1. **Monotonic across announces from the same destination.** A new announce should have a higher timestamp than older ones from the same destination, or relays will reject it as "older than what we have cached" in the equal-or-greater-hop branch.
+2. **Comparable to other peers' timestamps.** If all your announces always look like "year 1970" (boot-relative seconds presented as unix), you'll consistently lose path-replay comparisons against peers with real wall time. That's actually fine — your announces just won't replace cached entries from real-time peers — but the inverse case is the §9.10 microReticulum bug: random `random_hash[5:10]` looks "far future" and freezes the path table.
+
+**No-RTC strategy:** emit boot-relative seconds. You'll always look stale to wall-time peers (their announces win in path-replace decisions, which is correct because their data is fresher), and you'll get monotonic-from-boot ordering between your own announces (correct).
+
+**Wrong strategy:** emit fully-random bytes (the §9.10 microReticulum bug). Locks you in as "latest" forever.
+
+### 15.4 Recommended: wall time (LXMF-level)
+
+These use absolute Unix-seconds. A device without wall time can substitute, with caveats:
+
+| Use | Section | Substitution if no wall time |
+|---|---|---|
+| LXMF body `timestamp` (`payload[0]`) | §5.3 | Use boot-relative seconds. Recipients per §9.6 should treat any timestamp before `1577836800` (2020-01-01) as "no clock" and substitute their local receive time. |
+| Outgoing message `LXMessage.timestamp` for sender-side ordering | §5.3 | Same as above. |
+| Stamp ticket expiry (`fields[FIELD_TICKET][0]`) | §5.7.3 | **You can't substitute here.** Tickets you issue with boot-relative seconds will appear to have already-expired-or-already-distant-future expiries to recipients. If your device has no wall time, don't issue tickets — fall back to PoW stamps (§5.7.2). |
+| Propagation node `timebase` field in `/offer` requests | §5.8.5 | Same as random_hash strategy: boot-relative is fine; you'll appear "stale" but your peers' state stays consistent. |
+
+### 15.5 Optional: high-resolution monotonic for diagnostics
+
+These are nice-to-have; missing them just degrades observability:
+
+- Per-packet RX timestamp for RTT decomposition.
+- Airtime accounting (sub-second precision improves `ANNOUNCE_CAP` enforcement; integer seconds is fine).
+- Resource transfer `establishment_rate` calculation.
+
+Use whatever monotonic source your platform provides; even 1 ms resolution from `millis()` is plenty.
+
+### 15.6 What fails on a no-RTC, no-NTP-sync device
+
+A device that boots with no clock at all (`time.time()` returns a small integer, RTC chip absent or empty) and never syncs:
+
+- ✅ **Sending and receiving opportunistic LXMF** works fine. The §9.6 receiver-side fix-up (substitute local receive time when timestamp < 2020) handles your "year 1970" timestamps cleanly.
+- ✅ **Receiving propagated LXMF** works. The propagation node tags messages with its own timestamp; you don't need yours.
+- ✅ **Establishing Links** works. RTT is measured locally and only used for relative cadences.
+- ⚠️ **Periodic re-announces** work, but your `random_hash[5:10]` will always look stale to wall-time peers. Your announces propagate fine; they just don't win path-table replacement races against fresher peers (which is correct — they ARE fresher).
+- ⚠️ **Path-table updates from your own announces** work the first time (no cached entry to compare against), but subsequent re-announces may not replace stale cache entries on transit relays. Practical effect: your destination is reachable but transit relays keep trying older paths longer than ideal.
+- ❌ **Issuing LXMF tickets** doesn't work — the expiry timestamp in `FIELD_TICKET` is meaningless without wall time. Don't issue tickets; rely on PoW stamps.
+- ❌ **Sending propagated LXMF with ticket-based stamp shortcuts** doesn't work for the same reason.
+
+A single one-time clock sync (BLE config, web flasher, manual button-press at known time, GPS, `rnstatus` peer query) flips most of the ⚠️ items to ✅. The repeater repo's BLE config protocol can carry a clock value in the connection handshake; that's the simplest fix.
+
+### 15.7 Source map
+
+| Section | What relies on time |
+|---|---|
+| §4.1 | `random_hash[5:10]` emission timestamp |
+| §4.5 step 6.3 | Path-table replacement using `random_blob` timestamps |
+| §5.3 | LXMF body timestamp |
+| §5.7.3 | LXMF ticket expiry |
+| §5.8.5 | Propagation node timebase field |
+| §6.7.1 | Link KEEPALIVE / RTT cadence |
+| §7.1 | `Transport.path_requests` rate limit |
+| §7.2 | `discovery_pr_tags` aging |
+| §7.5 | Periodic re-announce cadence |
+| §9.6 | Clockless sender LXMF timestamp fix-up |
+| §10 | Resource watchdog timeouts |
+| §13.4 | All `Transport.jobs` periodic intervals |
+
+---
+
+## 16. Test vectors
 
 See [`test-vectors/`](test-vectors/). Currently populated:
 
@@ -2452,7 +2551,7 @@ An implementation that round-trips every test vector — both directions — sho
 
 ---
 
-## 16. Source map
+## 17. Source map
 
 Upstream Python sources, in rough order of frequency-of-reference:
 

@@ -365,7 +365,15 @@ order: top three save the most debugging hours.
       High value because debugging Reticulum is a known multi-hour
       exercise; this would shortcut diagnosis to seconds.
 
-- [ ] **§17 (new): Time / clock requirements roundup.** Currently
+- [x] **§15 (new): Time / clock requirements roundup.** Done.
+      Seven sub-sections covering three clock kinds (wall time vs
+      boot-relative monotonic vs hi-res monotonic), what's required
+      vs recommended vs optional, the no-RTC strategy for
+      `random_hash` timestamps (boot-relative is fine; random
+      bytes are the §9.10 bug), wall-time-only LXMF features
+      (ticket expiry can't substitute), and an explicit
+      what-fails / what-works inventory for clockless devices
+      with their interop consequences. Currently
       scattered across §4.1 (random_hash timestamp), §9.6 (clockless
       LXMF senders), §5.7 (ticket expiry), §6.7 (RTT-driven keepalive),
       §7.5 (re-announce cadence). A no-RTC device (Faketec, RAK4631
