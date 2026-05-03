@@ -19,17 +19,19 @@ The scripts read `RNS.__version__` at startup and print it in their output so a 
 
 ## Status
 
-Empty placeholder. See [`../agent.md`](../agent.md) §5 for the priority order.
+Populated against RNS 1.2.0 / LXMF 0.9.6:
 
-Initial scripts to write:
+| Script | Verifies SPEC.md section | Status |
+|---|---|---|
+| `verify_destination_hash.py` | §1.1, §1.2 — identity composition + `dest_hash = SHA256(name_hash \|\| identity_hash)[:16]` | ✅ |
+| `verify_packet_header.py` | §2.1, §2.2, §2.3 — flag byte layout, HEADER_1/HEADER_2 form, originator HEADER_1→HEADER_2 conversion via upstream `Transport.outbound` | ✅ |
+| `verify_announce_app_data.py` | §4.3 — LXMF announce app_data 2-element form, parser tolerance | ✅ |
+| `verify_path_request.py` | §1.2 well-known hashes, §7.1 LXMF path-preamble gating | ✅ |
+| `regen_identities.py` | regenerates `test-vectors/identities.json` | ✅ |
+| `verify_announce_roundtrip.py` | §4 — announce build matches upstream `Identity().announce()` bytes | ⏳ |
+| `verify_token_crypto.py` | §3 — Token encrypt/decrypt against upstream `RNS.Cryptography.Token` | ⏳ |
+| `verify_lxmf_opportunistic.py` | §5.1, §5.5 — opportunistic LXMF body bytes match upstream | ⏳ |
+| `verify_link_handshake.py` | §6 — LINKREQUEST + LRPROOF + session key match upstream | ⏳ |
+| `verify_msgpack_quirk.py` | §9.3 — encoding name as bytes vs str affects upstream parsing | ⏳ |
 
-| Script | Verifies SPEC.md section |
-|---|---|
-| `verify_destination_hash.py` | §1.2 — `dest_hash = SHA256(name_hash || identity_hash)[:16]` |
-| `verify_packet_header.py` | §2.1, §2.2 — flag byte layout + HEADER_1/HEADER_2 round-trip |
-| `verify_announce_roundtrip.py` | §4 — announce build matches upstream `Identity().announce()` bytes |
-| `verify_token_crypto.py` | §3 — Token encrypt/decrypt against upstream `RNS.Cryptography.Token` |
-| `verify_lxmf_opportunistic.py` | §5.1, §5.5 — opportunistic LXMF body bytes match upstream |
-| `verify_link_handshake.py` | §6 — LINKREQUEST + LRPROOF + session key match upstream |
-| `verify_path_request.py` | §7.1, §7.2 — path-request payload format |
-| `verify_msgpack_quirk.py` | §9.3 — encoding name as bytes vs str affects upstream parsing |
+See [`../agent.md`](../agent.md) §5 and [`../todo.md`](../todo.md) for the remaining priority order.

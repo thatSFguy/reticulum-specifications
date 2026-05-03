@@ -1,0 +1,47 @@
+{
+  "_about": "Identity test vectors. Load via RNS.Identity.from_bytes(bytes.fromhex(inputs.private_key_hex)) and confirm the four expected.* fields match. Regenerate by running this script against the upstream RNS shown in rns_version_at_generation.",
+  "vectors": [
+    {
+      "label": "alice",
+      "destination_full_name": "lxmf.delivery",
+      "inputs": {
+        "x25519_priv_hex": "587e730a70d24e971efa8c146e554996d70bff45b2033d336e2c078dc63d3645",
+        "ed25519_priv_hex": "bef79d95bf6b253827a2e7e81a13ab0b10a908fd158581d1827095b788169e93",
+        "private_key_hex": "587e730a70d24e971efa8c146e554996d70bff45b2033d336e2c078dc63d3645bef79d95bf6b253827a2e7e81a13ab0b10a908fd158581d1827095b788169e93"
+      },
+      "expected": {
+        "public_key_hex": "76fce269b2356a51b6a832a1a25099155acb20733b453f9538aaa8069e854d5a780708b44424373474ee1607c3f2b4a1cd5643de508e106e6b8cf4a10f00ec7c",
+        "identity_hash_hex": "28d43a11abc1094301a59ed3b44f127b",
+        "name_hash_hex": "6ec60bc318e2c0f0d908",
+        "destination_hash_hex": "c33c40a5b030596d95617dc4ca163aae"
+      },
+      "rns_version_at_generation": "1.2.0",
+      "generator_script": "tools/regen_identities.py",
+      "verifies_spec_sections": [
+        "1.1",
+        "1.2"
+      ]
+    },
+    {
+      "label": "bob",
+      "destination_full_name": "lxmf.delivery",
+      "inputs": {
+        "x25519_priv_hex": "0f453e75d564532f2fa671aea79e9a714e4564e1ff833d1df19986fe8a36aa21",
+        "ed25519_priv_hex": "9a6acdad966af7d006cfd393ca8278c608978bcaefa5b5f24db867179f83a863",
+        "private_key_hex": "0f453e75d564532f2fa671aea79e9a714e4564e1ff833d1df19986fe8a36aa219a6acdad966af7d006cfd393ca8278c608978bcaefa5b5f24db867179f83a863"
+      },
+      "expected": {
+        "public_key_hex": "92331490ac7c5db96102f80ffc64d71330907a5aea969b8617b7b2f3e0f8352a274e3172cbb18bdb14ccc1178fd66a8a811be97690d30985c75649a2b07dc76a",
+        "identity_hash_hex": "c090410e5b5bf8956194c1872dccec3b",
+        "name_hash_hex": "6ec60bc318e2c0f0d908",
+        "destination_hash_hex": "9695d17f22fa6e45d2b0cd3439a7ca7e"
+      },
+      "rns_version_at_generation": "1.2.0",
+      "generator_script": "tools/regen_identities.py",
+      "verifies_spec_sections": [
+        "1.1",
+        "1.2"
+      ]
+    }
+  ]
+}

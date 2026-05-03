@@ -46,7 +46,7 @@ Common pre-computed `name_hash` values:
 | `0ad8bff9ff75737c058e` | `nomadnetwork.gossip` |
 | `9efb9c771eeb5ae90ea6` | `rnstransport.broadcasts` |
 | `4848a053c16415bed6c8` | `rnstransport.remote.management` |
-| `6b9f66014d9853faab22` | `rnstransport.path.request` (truncated to 16: `6b9f66014d9853faab220fba47d02761`) |
+| `7926bbe7dd7f9aba88b0` | `rnstransport.path.request` (resulting `dest_hash` with `identity=None`: `6b9f66014d9853faab220fba47d02761`) |
 
 ### 1.3 Private key on-disk format
 
@@ -79,9 +79,7 @@ HEADER_2: flags(1) hops(1) transport_id(16) dest_hash(16) context(1) data(...)  
 
 ### 2.3 Originator HEADER_1 → HEADER_2 conversion
 
-> ⚠️ **UNVERIFIED:** Source-cited but not yet exercised by a verifier in this repo's `tools/`. The behavior described matches `RNS/Transport.py::outbound` line 1074+ but no end-to-end test has confirmed that an implementation that always emits HEADER_1 fails for multi-hop where one that does the conversion succeeds.
-
-This is non-obvious and matters: when an **originator** (not a relay) sends a packet to a destination known to be more than 1 hop away, the originator MUST also do the HEADER_2 conversion. From `RNS/Transport.py::outbound` (~line 1074):
+This is non-obvious and matters: when an **originator** (not a relay) sends a packet to a destination known to be more than 1 hop away, the originator MUST also do the HEADER_2 conversion. From `RNS/Transport.py::outbound` (lines 1074-1083 in RNS 1.2.0; verified by `tools/verify_packet_header.py`):
 
 ```python
 if path_entry[IDX_PT_HOPS] > 1:
@@ -93,7 +91,7 @@ if path_entry[IDX_PT_HOPS] > 1:
         new_raw += packet.raw[2:]                        # original dest_hash + context + payload
 ```
 
-For destinations 0 or 1 hops away, the originator may stay HEADER_1 — the receiving rnsd auto-fills the transport_id when the destination matches a local client (`for_local_client` branch at line 1485). Implementations that always emit HEADER_1 will silently fail to deliver to multi-hop destinations even with a known path.
+For destinations 0 or 1 hops away, the originator may stay HEADER_1 — the receiving rnsd auto-fills the transport_id when the destination matches a local client (`for_local_client` branch at `RNS/Transport.py:1451` in RNS 1.2.0). Implementations that always emit HEADER_1 will silently fail to deliver to multi-hop destinations even with a known path.
 
 ### 2.4 Hop count
 
@@ -178,10 +176,11 @@ Note that `dest_hash` is INCLUDED in the signed data even though it's not in the
 
 ### 4.3 `app_data` format for LXMF delivery destinations
 
-Upstream `LXMF/LXMRouter.py::get_announce_app_data` produces:
+Upstream `LXMF/LXMRouter.py::get_announce_app_data` produces a 2-element msgpack array (verified against LXMF 0.9.6 by `tools/verify_announce_app_data.py`):
 
 ```python
-peer_data = [display_name_bytes, stamp_cost]   # stamp_cost = None unless 1 ≤ N ≤ 254
+# LXMF/LXMRouter.py:986-1002 in LXMF 0.9.6
+peer_data = [display_name, stamp_cost]   # stamp_cost = None unless 1 ≤ N ≤ 254
 return msgpack.packb(peer_data)
 ```
 
@@ -196,9 +195,9 @@ c0         # nil (stamp_cost)
 
 Encoding the display name as msgpack `bin` (`0xc4 NN`) is required for upstream interop — see section 9.3 below. The stamp_cost field can be `int 0` (`0x00`) or `nil` (`0xc0`); upstream's `stamp_cost_from_app_data` doesn't strict-type-check.
 
-A third optional element `[capability_flags]` (e.g. `[SF_COMPRESSION]`) may follow. Older clients may emit a 1-element array (just the name) or a raw UTF-8 string instead of msgpack — see `LXMF/LXMF.py::display_name_from_app_data` for the parser's tolerance branches.
+**A third optional `[capability_flags]` element** (e.g. `[SF_COMPRESSION]`, the only flag currently defined at `LXMF/LXMF.py:108`) is **read by the parser** (`compression_support_from_app_data` at `LXMF/LXMF.py:154-167`) but is **not emitted by the LXMF 0.9.6 producer** — `LXMRouter.py:999` computes `supported_functionality = [SF_COMPRESSION]` but never appends it to `peer_data`. Implementations should accept the 3-element form on inbound (a future LXMF version may re-enable it; older deployments may emit it) but should not rely on receiving it.
 
-> ⚠️ **UNVERIFIED:** The 3-element `[name, stamp_cost, [capabilities]]` variant is observed in `LXMF/LXMRouter.py::get_announce_app_data` source code (it adds `supported_functionality` when relevant) but the exact emission conditions and the wire-byte form across upstream versions has not been tested in this repo. Older 1-element arrays and raw UTF-8 strings are mentioned in upstream comments but no captured example has been verified.
+The parser also tolerates a 1-element msgpack array (just the name) and a raw UTF-8 string ("original announce format" branch at `LXMF/LXMF.py:138-139`) — see `LXMF/LXMF.py::display_name_from_app_data` for all four accepted shapes.
 
 ### 4.4 Announce filtering by `name_hash`
 
@@ -343,17 +342,27 @@ After processing each `CTX_NONE` DATA packet on an active link, the receiver MUS
 
 ## 7. Transport behavior — the parts that bite
 
-### 7.1 Path requests: peers send `path?` before opportunistic LXMF
+### 7.1 Path requests: peers send `path?` before opportunistic LXMF when no path is known
 
-> ⚠️ **UNVERIFIED:** The general claim that path requests precede LXMF DATA is well-supported by `RNS/Transport.py::request_path` source. The specific claim that this *always* happens (vs only when the path entry is stale) has not been verified — observed behavior on BLE was many path-request retransmits without intervening DATA, suggesting peers retry path? until they get a response. Confirm with a runtime test exercising both fresh-path and stale-path cases.
+The path-request preamble in upstream LXMF is **conditional, not unconditional** (verified by `tools/verify_path_request.py` against LXMF 0.9.6):
 
-When `RNS.Transport.outbound` doesn't have a fresh path entry for the destination, it issues a path request before sending the actual DATA. A path request is a regular DATA packet with:
+```python
+# LXMF/LXMRouter.py::handle_outbound, ~line 1672
+if not RNS.Transport.has_path(destination_hash) and lxmessage.method == LXMessage.OPPORTUNISTIC:
+    RNS.log("Pre-emptively requesting unknown path for opportunistic ...", RNS.LOG_DEBUG)
+    RNS.Transport.request_path(destination_hash)
+    lxmessage.next_delivery_attempt = time.time() + LXMRouter.PATH_REQUEST_WAIT
+```
 
-- `dest_hash = SHA256(SHA256("rnstransport.path.request")[:10] || "")[:16] = 6b9f66014d9853faab220fba47d02761`
-- `dest_type = PLAIN`, `transport_type = BROADCAST`, `context = CTX_NONE`
-- payload: `target_dest_hash(16) || random_tag(16)` (32 bytes total — the most common non-transport-instance variant)
+In other words: a `path?` is sent before the LXM **only when no entry exists in `Transport.path_table`** for the target — `has_path()` is just a key-presence check (`RNS/Transport.py:2570-2576`). Existing-but-stale path entries are NOT replaced by this preamble; LXMF instead leans on the periodic `Transport.jobs` cycle to evict expired path entries (`stale_paths` accumulator at `RNS/Transport.py:747+`), after which the next outbound LXM rediscovers the unknown-path branch and triggers the `request_path`. A second `request_path` is issued from the retry path (`LXMRouter.py:2571+`) once `lxmessage.delivery_attempts >= MAX_PATHLESS_TRIES`, so on a flaky path peers can see multiple `path?` retransmits without intervening DATA — that matches BLE-trace observations.
 
-Transport-enabled originators append their own identity hash (16 more bytes) so the responder can route the proof back. Non-transport clients omit this.
+A `path?` request itself is a regular DATA packet (verified by `tools/verify_path_request.py`):
+
+- `dest_hash = SHA256(SHA256("rnstransport.path.request")[:10])[:16] = 6b9f66014d9853faab220fba47d02761`
+- `dest_type = PLAIN`, `transport_type = BROADCAST`, `header_type = HEADER_1`, `context = CTX_NONE`
+- payload (`RNS/Transport.py::request_path`):
+  - **leaf clients** (transport disabled): `target_dest_hash(16) || random_tag(16)` — 32 bytes
+  - **transport-enabled originators**: `target_dest_hash(16) || transport_id(16) || random_tag(16)` — 48 bytes — so the responding announce can be routed back along the request's reverse path
 
 ### 7.2 Responding to path requests
 
@@ -378,9 +387,9 @@ The long-term encryption / signing keys and the `identity_hash` / `destination_h
 
 ### 7.4 Ratchet ring (inbound decrypt tolerance)
 
-Senders cache the most recent ratchet they've seen for each destination. If you rotate your ratchet faster than relays propagate the announce, in-flight messages may arrive encrypted to your *previous* ratchet. To decrypt these, keep a small ring of recent ratchet privkeys (upstream default: 8) and try each in order during decrypt. The fallback to the long-term identity privkey is the ultimate safety net.
+Senders cache the most recent ratchet they've seen for each destination. If you rotate your ratchet faster than relays propagate the announce, in-flight messages may arrive encrypted to your *previous* ratchet. To decrypt these, keep a ring of recent ratchet privkeys and try each in order during decrypt. The fallback to the long-term identity privkey is the ultimate safety net.
 
-> ⚠️ **UNVERIFIED:** The "default 8 ratchets" upstream behavior needs a source citation (search `RNS/Identity.py` for `RATCHET_COUNT` or similar). The reference mobile-app implementation discards old ratchet privkeys on rotation, accepting the in-flight loss window. The minimum-viable client without a ring may still interop usefully — confirm by experiment.
+Upstream's default ring size is **`Destination.RATCHET_COUNT = 512`** (`RNS/Destination.py:85` in RNS 1.2.0), with a minimum rotation interval of `RATCHET_INTERVAL = 30*60` seconds (line 90) and per-ratchet `RATCHET_EXPIRY = 60*60*24*30` seconds (`RNS/Identity.py:69`). A new ratchet is generated on each `rotate_ratchets()` call and prepended to the in-memory list; `_clean_ratchets` truncates back to `RATCHET_COUNT`. The 512 figure is generous and not a hard interop requirement — it's an in-memory bound on the inbound-decrypt try-list.
 
 A minimal client may keep just the current ratchet privkey, accepting that the brief window between rotation and announce-propagation will lose some messages. Mention the trade-off in your implementation notes.
 
@@ -510,15 +519,11 @@ logged before any filtering converts hours of "messages aren't arriving" debuggi
 
 ## 10. Test vectors
 
-> ⚠️ **UNVERIFIED:** The `test-vectors/` directory is currently a placeholder. See [`agent.md`](agent.md) §5 for the bootstrap task list — populating real test vectors with regenerator scripts is the highest-priority next task for a contributor.
+See [`test-vectors/`](test-vectors/). Currently populated:
 
-See [`test-vectors/`](test-vectors/). Each vector includes:
+- **`identities.json`** — Alice and Bob private-key inputs plus their derived `public_key`, `identity_hash`, and `lxmf.delivery` `destination_hash`. Verified by `tools/verify_destination_hash.py`; regenerated by `tools/regen_identities.py`. Covers SPEC.md §1.1 and §1.2.
 
-- Identity inputs (private keys hex)
-- Derived public material (public_key, identity_hash, destination_hash for `lxmf.delivery`)
-- A signed announce packet in full hex
-- Encrypted LXMF DATA (sender, recipient, plaintext, expected ciphertext bytes)
-- Link handshake (LINKREQUEST + LRPROOF + derived session keys)
+> ⚠️ **UNVERIFIED:** The remaining vector categories — signed announce packets, encrypted opportunistic LXMF DATA, and Link handshake (LINKREQUEST + LRPROOF + derived session keys) — are not yet populated. See [`agent.md`](agent.md) §5 and [`todo.md`](todo.md) for the remaining bootstrap work.
 
 An implementation that round-trips every test vector — both directions — should be wire-compatible with upstream Reticulum and LXMF for the covered operations.
 

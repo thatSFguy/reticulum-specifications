@@ -4,7 +4,14 @@ Known-good byte sequences that any Reticulum-compatible implementation should be
 
 ## Status
 
-Empty placeholder. See [`../agent.md`](../agent.md) §5 for the bootstrap task list.
+Partially populated against RNS 1.2.0:
+
+- ✅ `identities.json` — Alice + Bob identity vectors (regenerator: `../tools/regen_identities.py`, verifier: `../tools/verify_destination_hash.py`).
+- ⏳ `announces.json` — not yet populated.
+- ⏳ `lxmf.json` — not yet populated.
+- ⏳ `links.json` — not yet populated.
+
+See [`../agent.md`](../agent.md) §5 and [`../todo.md`](../todo.md) for the remaining bootstrap task list.
 
 ## Format (proposed)
 
