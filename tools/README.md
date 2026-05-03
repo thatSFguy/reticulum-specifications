@@ -25,13 +25,15 @@ Populated against RNS 1.2.0 / LXMF 0.9.6:
 |---|---|---|
 | `verify_destination_hash.py` | §1.1, §1.2, §1.3 — identity composition, `dest_hash = SHA256(name_hash \|\| identity_hash)[:16]`, on-disk private-key round-trip via `to_file`/`from_file` | ✅ |
 | `verify_packet_header.py` | §2.1, §2.2, §2.3 — flag byte layout, HEADER_1/HEADER_2 form, originator HEADER_1→HEADER_2 conversion via upstream `Transport.outbound` | ✅ |
+| `verify_token_crypto.py` | §3 — Token encrypt/decrypt, HKDF salt = identity_hash, HMAC-then-AES order, PKCS#7 padding | ✅ |
 | `verify_announce_app_data.py` | §4.3 — LXMF announce app_data 2-element form, parser tolerance | ✅ |
+| `verify_announce_roundtrip.py` | §4.1, §4.2, §4.5 — announce body layout, signature, dest_hash recompute, tamper rejection | ✅ |
+| `verify_lxmf_opportunistic.py` | §5.1, §5.2, §5.5, §5.6 — full identity → encrypt → decrypt → parse round-trip | ✅ |
+| `verify_proof_packet.py` | §6.5 — implicit (64B) and explicit (96B) proof body forms, validator length-dispatch | ✅ |
+| `verify_link_handshake.py` | §6.1, §6.2, §6.3, §6.6 — LINKREQUEST/LRPROOF body order, link_id derivation, signalling | ✅ |
 | `verify_path_request.py` | §1.2 well-known hashes, §7.1 LXMF path-preamble gating | ✅ |
+| `verify_rnode_split.py` | §8.3 — RNode air-frame split-packet TX/RX state machines | ✅ |
+| `verify_msgpack_quirk.py` | §9.3 — encoding name as bytes vs str affects upstream parsing | ✅ |
 | `regen_identities.py` | regenerates `test-vectors/identities.json` | ✅ |
-| `verify_announce_roundtrip.py` | §4 — announce build matches upstream `Identity().announce()` bytes | ⏳ |
-| `verify_token_crypto.py` | §3 — Token encrypt/decrypt against upstream `RNS.Cryptography.Token` | ⏳ |
-| `verify_lxmf_opportunistic.py` | §5.1, §5.5 — opportunistic LXMF body bytes match upstream | ⏳ |
-| `verify_link_handshake.py` | §6 — LINKREQUEST + LRPROOF + session key match upstream | ⏳ |
-| `verify_msgpack_quirk.py` | §9.3 — encoding name as bytes vs str affects upstream parsing | ⏳ |
 
 See [`../agent.md`](../agent.md) §5 and [`../todo.md`](../todo.md) for the remaining priority order.

@@ -19,7 +19,7 @@ The two views are complementary: SPEC.md tells you what each piece looks like; t
 | [`send-announce.md`](send-announce.md) (build, sign, transmit, ratchet rotation, periodic re-announce) | ✅ |
 | [`forward-announce.md`](forward-announce.md) (transport-node rebroadcast logic, announce_cap, queue) | ✅ |
 | [`send-propagated-lxmf.md`](send-propagated-lxmf.md) (PROPAGATED method, via a propagation node) | ✅ |
-| `receive-propagated-lxmf.md` (recipient pulling messages via `/get`) | ⏳ |
+| [`receive-propagated-lxmf.md`](receive-propagated-lxmf.md) (recipient pulling messages via `/get`) | ✅ |
 
 ## Conventions
 

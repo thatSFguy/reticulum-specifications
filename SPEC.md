@@ -2,6 +2,8 @@
 
 A byte-level reference for implementing Reticulum-compatible clients. This document focuses on what implementations need to interop with the canonical Python implementation ([`markqvist/Reticulum`](https://github.com/markqvist/Reticulum) and [`markqvist/LXMF`](https://github.com/markqvist/LXMF)) plus the existing client ecosystem (Sideband, Nomadnet, MeshChat, the various firmware projects).
 
+**Last verified against:** `RNS 1.2.0` / `LXMF 0.9.6` / `RNode_Firmware` (master at the spec's last revision date). Each section's source citations were re-checked against these versions; runtime verifiers in [`tools/`](tools/) lock the wire-format claims in against actually-running upstream code. When you upgrade past these, re-run every `tools/verify_*.py` and look for `FAIL`s.
+
 Source citations refer to the standard `pip install rns lxmf` install layout (`RNS/`, `LXMF/`).
 
 ---
