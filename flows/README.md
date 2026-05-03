@@ -9,9 +9,10 @@ The two views are complementary: SPEC.md tells you what each piece looks like; t
 | Flow | Status |
 |---|---|
 | [`send-opportunistic-lxmf.md`](send-opportunistic-lxmf.md) | ✅ |
-| `send-link-lxmf.md` (DIRECT method, over a Reticulum Link) | ⏳ |
+| [`receive-opportunistic-lxmf.md`](receive-opportunistic-lxmf.md) | ✅ |
+| [`send-link-lxmf.md`](send-link-lxmf.md) (DIRECT method, over a Reticulum Link) | ✅ |
+| `receive-link-lxmf.md` (inverse of send-link-lxmf, including responder side of the handshake) | ⏳ |
 | `send-propagated-lxmf.md` (PROPAGATED method, via a propagation node) | ⏳ |
-| `receive-opportunistic-lxmf.md` (the inverse of the opportunistic-send flow) | ⏳ |
 | `announce.md` (build, sign, transmit, ratchet rotation) | ⏳ |
 | `path-discovery.md` (request, response, path-table population) | ⏳ |
 
