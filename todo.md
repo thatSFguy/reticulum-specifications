@@ -381,7 +381,14 @@ order: top three save the most debugging hours.
       how to substitute monotonic-seconds" roundup so embedded
       implementers don't have to hunt for the constraints.
 
-- [ ] **§6.x (new): Channel mode (`CHANNEL = 0x0E` context).**
+- [x] **§6.8 (new): Channel mode (`CHANNEL = 0x0E` context).** Done.
+      Six sub-sections: wire form (6-byte BE header msgtype+sequence+
+      length followed by payload, Token-encrypted by link session
+      key), reserved SystemMessageTypes (`SMT_STREAM_DATA = 0xff00`),
+      MSGTYPE registration via `Channel.register_message_type`,
+      reliable delivery via the standard §6.5 PROOF mechanism plus
+      a sliding window, when-to-use-Channel-vs-Resource-vs-REQUEST
+      decision matrix. Old §6.8 Source moved to §6.9.
       Multiplexed-application-data channel that runs over an
       established Link, distinct from DATA/REQUEST/RESPONSE.
       `RNS/Channel.py` is the reference. NomadNet uses it for the

@@ -1155,9 +1155,82 @@ For a clean-room implementation that wants links to survive idle periods longer 
 5. On every inbound `LINKCLOSE`, decrypt, verify body equals `link_id`, transition to `CLOSED`.
 6. On `CLOSED`, zero the session keys and cancel any in-progress Resources.
 
-### 6.8 Source
+### 6.8 Channel mode (`CHANNEL = 0x0E`)
 
-`RNS/Link.py`, `RNS/Packet.py::prove`, `RNS/Identity.py::prove`, `RNS/PacketReceipt.py::validate_proof`. The webclient's `reference/js-reference/link.js` is a faithful port.
+A Channel is a **continuous, bi-directional, message-typed stream** on top of an established Link. Distinct from §11 REQUEST/RESPONSE (single-shot, client-server) and §10 Resources (large unidirectional transfers): Channel messages are short, can flow in either direction at any time, and carry an application-defined type byte the receiver dispatches on. NomadNet uses it for its "channel" API (live chat over a Link), and any application can register custom message types via `RNS.Channel.Channel.register_message_type`.
+
+#### 6.8.1 Wire form
+
+A Channel message rides as a single Link DATA packet with `context = CHANNEL (0x0E)`. The body is **6-byte fixed-prefix header + variable-length payload** (`RNS/Channel.py:192-198`):
+
+```
+msgtype(2)  ||  sequence(2)  ||  length(2)  ||  data(length bytes)
+```
+
+All three header fields are **big-endian unsigned 16-bit integers** (Python `struct.pack(">HHH", msgtype, sequence, length)`):
+
+| Field | Width | Meaning |
+|---|---|---|
+| `msgtype` | uint16 BE | Application-defined message type. Distinguishes the payload schema. |
+| `sequence` | uint16 BE | Per-direction sequence number, starting at 0 and incrementing each emission. Wraps at 65536. |
+| `length` | uint16 BE | Length in bytes of the payload that follows. |
+
+The whole 6-byte header + payload is the Link DATA packet's **plaintext**, which is then Token-encrypted by the link's session key (§3.1 link-derived form, no eph_pub prefix) before transmission.
+
+#### 6.8.2 Reserved system message types
+
+`RNS/Channel.py:45-46`:
+
+```python
+class SystemMessageTypes(enum.IntEnum):
+    SMT_STREAM_DATA = 0xff00
+```
+
+`0xff00` is reserved for upstream's stream-over-channel implementation. Application-defined message types should stay in the `0x0000..0xfeff` range to avoid collisions with reserved system types. There's no centralized registry — each Link's `Channel` instance maintains its own `message_factories` dict mapping `msgtype` to a constructor.
+
+#### 6.8.3 MSGTYPE registration
+
+Both endpoints of a Link must register matching message types via `Channel.register_message_type(message_class)` before they can send or receive that type. The constructor must implement:
+
+```python
+class MyMessage(MessageBase):
+    MSGTYPE = 0x1234           # uint16 in [0x0000, 0xfeff]
+    def pack(self) -> bytes: ...
+    def unpack(self, raw: bytes): ...
+```
+
+A receiver that gets a `msgtype` it didn't register raises `ChannelException(ME_NOT_REGISTERED)` and drops the message. A sender that tries to send a class without `MSGTYPE` defined raises `ChannelException(ME_NO_MSG_TYPE)`.
+
+#### 6.8.4 Reliable delivery
+
+Channel uses the standard §6.5 mandatory PROOF receipt mechanism for each message — every Channel DATA packet generates a PROOF, and the sender's `Channel` retries on timeout up to a per-packet limit. Reliability is the main reason to use Channel over plain Link DATA: the application doesn't need to implement its own retransmit logic.
+
+The receiver-side `Channel` uses a **sliding window** with the same window-growth dynamics as §10 Resources (`Channel.WINDOW = 2` initial, with rate-thresholded growth/shrink). Sequence numbers in the channel header let the receiver detect gaps and request retransmits; out-of-order arrivals are buffered until the gap fills.
+
+#### 6.8.5 When to use Channel vs the alternatives
+
+| Use case | Best mechanism |
+|---|---|
+| One-shot small request → one-shot small response | §11 REQUEST/RESPONSE |
+| One-shot large transfer (file, page) | §10 Resource |
+| Continuous bi-directional small messages (chat, telemetry stream, command/event flow) | §6.8 Channel |
+| Continuous bi-directional large transfers | §10 Resources sequenced in time, OR Channel with `SMT_STREAM_DATA` chunks |
+
+A clean-room client that only implements opportunistic LXMF can ignore Channel entirely. NomadNet-aware clients need it for the channel API; custom-RPC applications may prefer it over §11 for its bi-directional nature.
+
+#### 6.8.6 Source map
+
+| File | What |
+|---|---|
+| `RNS/Channel.py:174-211` | `Envelope` — wire-form pack/unpack |
+| `RNS/Channel.py:214-...` | `Channel` — windowed reliable delivery on a Link |
+| `RNS/Channel.py:45-46` | `SMT_STREAM_DATA = 0xff00` reserved system type |
+| `RNS/Channel.py:317-325` | `register_message_type` — per-Link MSGTYPE dispatch table |
+| `RNS/Packet.py:86` | `CHANNEL = 0x0E` context constant |
+
+### 6.9 Source
+
+`RNS/Link.py`, `RNS/Packet.py::prove`, `RNS/Identity.py::prove`, `RNS/PacketReceipt.py::validate_proof`, `RNS/Channel.py`. The webclient's `reference/js-reference/link.js` is a faithful port.
 
 ---
 
