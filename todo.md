@@ -175,15 +175,20 @@ re-research.
       constant in RNS 1.2.0; the actual proof packets carry
       `context = NONE (0x00)`. todo for `tools/verify_proof_packet.py`
       moves to "needs a runtime verifier" section.
-- [ ] **SPEC.md §6 sub-section: 3-byte MTU/mode signalling field.**
-      Present on LINKREQUEST and LRPROOF iff
-      `Reticulum.link_mtu_discovery() == True` and the next-hop
-      interface advertises an HW MTU. Encode/decode helpers at
-      `RNS/Link.py::signalling_bytes` line 148; consumers at
-      `mtu_from_lr_packet` / `mode_from_lr_packet` /
-      `mtu_from_lp_packet` / `mode_from_lp_packet`. Spec currently
-      shows this slot as "[signalling(3)]" with no byte definition —
-      a client that emits a wrong format gets wrong MTU on the link.
+- [x] **SPEC.md §6 sub-section: 3-byte MTU/mode signalling field.**
+      Done. SPEC.md §6.6 covers the full 24-bit packed format
+      (3-bit mode in the top of byte 0, 21-bit MTU in the low 21
+      bits), the encode/decode primitives, the seven defined modes
+      (only `MODE_AES256_CBC = 0x01` is enabled in RNS 1.2.0; six
+      others are reserved for AES-128, AES-256-GCM, OTP, and the
+      post-quantum migration), the responder-side MTU clamp
+      mechanism (an in-place rewrite of the LINKREQUEST data buffer
+      so the LRPROOF signed_data carries the clamped value but the
+      link_id stays invariant), the length-only presence detection,
+      and the inclusion-in-signed_data trap that breaks link
+      handshakes when one side emits signalling and the other
+      doesn't. §6.1 and §6.2 inline references updated to point at
+      §6.6 for the bit layout. Existing §6.6 "Source" renamed to §6.7.
 - [ ] **SPEC.md §7.2 expansion + new flow `flows/path-discovery.md`:
       path-response announce vs periodic announce.** When a node
       fulfills a `path?` request it emits an announce with

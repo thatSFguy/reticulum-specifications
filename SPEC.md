@@ -421,7 +421,7 @@ A regular packet with `packet_type = LINKREQUEST (2)`, `dest_type = SINGLE`, add
 initiator_X25519_pub(32) || initiator_Ed25519_pub(32) || [signalling(3)]
 ```
 
-Both initiator-side keys are **fresh ephemeral keys** (not the initiator's long-term identity). The 3-byte signalling field is optional and encodes path-MTU and link-mode hints.
+Both initiator-side keys are **fresh ephemeral keys** (not the initiator's long-term identity). The optional 3-byte signalling field encodes a packed 21-bit MTU and 3-bit link mode — see §6.6 for the bit layout and the negotiation rules. Receivers detect its presence by body length: `len(data) == 64` means no signalling, `len(data) == 67` means signalling present.
 
 ### 6.2 LRPROOF (responder → initiator)
 
@@ -440,6 +440,8 @@ signed_data = link_id || responder_X25519_pub || responder_long_term_Ed25519_pub
 ```
 
 The full wire packet is therefore: `flags(1) || hops(1) || link_id(16) || context=0xff(1) || signature(64) || responder_X25519_pub(32) || [signalling(3)]`.
+
+The signalling slot, when present, carries the responder's `confirmed_mtu` and the link mode in a 24-bit packed integer — see §6.6. Receivers detect its presence by length: body 96 vs 99 bytes. **Critical for interop:** the signalling bytes (when present) MUST be included in `signed_data` exactly where shown above; an implementation that signs without them on a peer that emits them — or vice versa — fails signature validation and the link never establishes. This is the most common cause of link-handshake failures with mixed-version peers.
 
 ### 6.3 link_id derivation
 
@@ -564,7 +566,119 @@ A receiver that gets a PROOF whose length matches neither form treats it as malf
 
 After processing each `NONE` DATA packet on an active link, the receiver MUST emit the explicit-form PROOF described above. Without it, the sender's retransmit queue fires and the same packet arrives repeatedly, eventually exceeding the link's KEEPALIVE budget and tearing down the link. This is `Packet.prove_packet` upstream — non-optional for any client that wants to receive content over a Link without spamming the sender.
 
-### 6.6 Source
+### 6.6 MTU and mode signalling (3-byte trailer on LINKREQUEST and LRPROOF)
+
+The optional 3-byte `signalling` slot referenced in §6.1 and §6.2 carries two negotiated parameters in a single 24-bit big-endian packed integer: the link MTU (21 bits) and the link mode (3 bits, top of the high byte). When present, the signalling bytes are also included in the LRPROOF's signed_data, so the responder's signature commits to the negotiated values and a peer flipping a bit in transit invalidates the proof.
+
+#### 6.6.1 Wire layout
+
+3 bytes total, big-endian. Byte 0 is split: top 3 bits are `mode`, low 5 bits are the most-significant 5 bits of the 21-bit `mtu`. Bytes 1 and 2 are the remaining 16 bits of `mtu`:
+
+```
+byte 0 :  M M M m m m m m       — top 3 bits = mode (0..7), low 5 bits = mtu[20..16]
+byte 1 :  m m m m m m m m       — mtu[15..8]
+byte 2 :  m m m m m m m m       — mtu[7..0]
+```
+
+Encoded by `RNS/Link.py:147-151`:
+
+```python
+@staticmethod
+def signalling_bytes(mtu, mode):
+    if not mode in Link.ENABLED_MODES:
+        raise TypeError(f"Requested link mode {Link.MODE_DESCRIPTIONS[mode]} not enabled")
+    signalling_value = (mtu & Link.MTU_BYTEMASK) + (((mode << 5) & Link.MODE_BYTEMASK) << 16)
+    return struct.pack(">I", signalling_value)[1:]    # big-endian uint32, drop top byte
+```
+
+with `MTU_BYTEMASK = 0x1FFFFF` (21 bits) and `MODE_BYTEMASK = 0xE0` (top 3 bits of a byte).
+
+Decoded mode and mtu (from `mode_from_lr_packet` line 171-176, `mtu_from_lr_packet` line 153-157):
+
+```python
+mode = (signalling[0] & 0xE0) >> 5
+mtu  = ((signalling[0] << 16) + (signalling[1] << 8) + signalling[2]) & 0x1FFFFF
+```
+
+The mtu decode trick: the full 24-bit value of all three bytes is masked with the 21-bit `MTU_BYTEMASK`, which strips the top 3 bits (i.e. the mode bits) without any explicit byte 0 masking step. Implementations that use `(signalling[0] & 0x1F) << 16 | …` instead get the same answer.
+
+#### 6.6.2 Mode field
+
+3-bit value (0..7) at the top of byte 0. Defined values, with `RNS/Link.py:125-142`:
+
+| Mode | Name | Status in RNS 1.2.0 | Derived key length |
+|---|---|---|---|
+| `0x00` | `MODE_AES128_CBC` | Defined, NOT enabled (sender-side will raise `TypeError`) | 32 bytes |
+| `0x01` | `MODE_AES256_CBC` | Default; the only enabled mode (`ENABLED_MODES = [0x01]`) | 64 bytes |
+| `0x02` | `MODE_AES256_GCM` | Reserved, not enabled | — |
+| `0x03` | `MODE_OTP_RESERVED` | Reserved, not enabled | — |
+| `0x04`–`0x07` | `MODE_PQ_RESERVED_*` | Reserved for the post-quantum migration; not enabled | — |
+
+The `derived_key_length` at `RNS/Link.py:358-360` is what the HKDF in §6.4 produces, split as `signing_key(32) || encrypt_key(32)` for the AES-256 path or `signing_key(16) || encrypt_key(16)` for the AES-128 path.
+
+A receiver MUST tolerate seeing any 3-bit value in the mode field on inbound traffic — `mode_from_lr_packet` returns the raw integer without validating it against `ENABLED_MODES`. The mode is enforced at handshake time (`Link.handshake` at line 353-368): unknown / disabled modes raise `TypeError` and the link transitions to `CLOSED` rather than `ACTIVE`. Senders MUST NOT emit any mode value not in `ENABLED_MODES` — `signalling_bytes()` raises if you try.
+
+A clean-room implementation today can safely hardcode mode = `0x01` on emit. On receive, it should accept `0x01` and reject the rest as "mode not supported by this implementation" rather than silently treating them as the default — a future RNS version that flips the default to `0x04` (one of the PQ slots) would render a hardcoded-default decoder ambiguous about whether the wire bytes mean "AES_256_CBC" or "the new default".
+
+#### 6.6.3 MTU field
+
+21-bit unsigned integer in the low 21 bits of the 24-bit signalling value. Max representable: `0x1FFFFF = 2,097,151` bytes. Real Reticulum `HW_MTU` values are radically smaller (LoRa: 508; TCP: typical HW MTU ~64 KiB; AutoInterface: matches its bearer). The 21-bit width is forward-looking: it leaves room for future high-bandwidth interfaces without a wire-format change.
+
+When the initiator emits a LINKREQUEST with signalling, the encoded `mtu` is the next-hop interface's `HW_MTU` (`RNS/Link.py:309-314`):
+
+```python
+nh_hw_mtu = RNS.Transport.next_hop_interface_hw_mtu(destination.hash)
+if RNS.Reticulum.link_mtu_discovery() and nh_hw_mtu:
+    signalling_bytes = Link.signalling_bytes(nh_hw_mtu, self.mode)
+else:
+    signalling_bytes = Link.signalling_bytes(RNS.Reticulum.MTU, self.mode)
+```
+
+When the responder emits an LRPROOF with signalling, the encoded `mtu` is the **min** of its own next-hop view and what arrived in the LINKREQUEST, computed during validation (`RNS/Transport.py:2042-2051`):
+
+```python
+path_mtu = Link.mtu_from_lr_packet(packet) or Reticulum.MTU
+nh_mtu   = receiving_interface.HW_MTU if AUTOCONFIGURE_MTU/FIXED_MTU else Reticulum.MTU
+if nh_mtu < path_mtu:
+    path_mtu = nh_mtu
+    clamped_signalling = Link.signalling_bytes(path_mtu, mode)
+    packet.data = packet.data[:-LINK_MTU_SIZE] + clamped_signalling
+```
+
+The clamp is rewritten **into the LINKREQUEST packet's data buffer in place** before that packet enters the responder's `Destination.receive` path, so the responder's eventual LRPROOF carries the clamped value, not the originally-requested one. The clamp also affects link_id derivation: `link_id_from_lr_packet` strips trailing signalling bytes before hashing (per §6.3), so this in-place rewrite doesn't change the link_id even though it does change the wire bytes.
+
+The initiator reads `confirmed_mtu` back via `mtu_from_lp_packet` during LRPROOF validation (`RNS/Link.py:404-408`), accepts it as `link.mtu`, and the link's `mdu` (max data unit per packet for §3.1 link-derived Token traffic) is recomputed via `update_mdu()`.
+
+#### 6.6.4 Presence detection — length only
+
+Both directions detect the optional signalling slot **purely by packet body length**:
+
+| Packet | Body length without signalling | Body length with signalling |
+|---|---|---|
+| LINKREQUEST | `ECPUBSIZE = 64` | `ECPUBSIZE + LINK_MTU_SIZE = 67` |
+| LRPROOF     | `SIGLENGTH//8 + ECPUBSIZE//2 = 96` | `... + LINK_MTU_SIZE = 99` |
+
+Where `ECPUBSIZE = 64` is the combined initiator ephemeral X25519 + Ed25519 public key (`Link.py:70`), and `SIGLENGTH//8 = 64` is the responder's Ed25519 signature.
+
+Receivers MUST handle both forms. `validate_request` at `RNS/Link.py:186-190` checks `len(data) == ECPUBSIZE` OR `len(data) == ECPUBSIZE+LINK_MTU_SIZE` and rejects anything else. The same length-dispatch is in `validate_proof` for the LRPROOF side at `RNS/Link.py:404-410`. There is no flag bit signalling presence — wire length is the only signal.
+
+#### 6.6.5 Inclusion in LRPROOF signed_data
+
+Per §6.2, the LRPROOF's signed_data when signalling is present is:
+
+```
+signed_data = link_id || responder_X25519_pub || responder_long_term_Ed25519_pub || signalling
+```
+
+A clean-room implementation that omits the signalling bytes when present (or includes them when absent) computes a different signed_data than the responder did, fails signature validation, and the link never establishes. This is the most common interop break in this area; cross-check against `RNS/Link.py:373` (signer) and `:417` (validator).
+
+#### 6.6.6 Disabling MTU discovery
+
+The `[reticulum]` config option `link_mtu_discovery = No` makes `Reticulum.link_mtu_discovery()` return False, so the initiator skips signalling on outbound LINKREQUESTs (`RNS/Link.py:311-314`). In that case the link uses `Reticulum.MTU` (default 500 bytes) globally, no per-link MTU clamping happens, and all four lengths fall back to the no-signalling sizes in §6.6.4.
+
+A receiver doesn't need its own copy of the disable switch — it just stops seeing trailing signalling bytes from peers that have it disabled. Its own MTU reporting on the LRPROOF return path runs unaffected for peers that send it.
+
+### 6.7 Source
 
 `RNS/Link.py`, `RNS/Packet.py::prove`, `RNS/Identity.py::prove`, `RNS/PacketReceipt.py::validate_proof`. The webclient's `reference/js-reference/link.js` is a faithful port.
 
