@@ -607,9 +607,159 @@ For interop coverage today, "implement PoW for outbound; tolerate-but-don't-vali
 | `LXMF/LXMRouter.py:1741-1774` | inbound dispatch — ticket cache + stamp validation + drop logic |
 | `LXMF/LXMF.py:19` | `FIELD_TICKET = 0x0C` constant |
 
-### 5.8 Source
+### 5.8 Propagation node protocol (offline message store-and-forward)
 
-`LXMF/LXMessage.py` for pack/unpack; `LXMF/LXMF.py` for the app_data extraction helpers; `LXMF/LXStamper.py` for stamps; `LXMF/LXMRouter.py` for the receive-side stamp/ticket dispatch.
+A **propagation node** is an LXMF node configured to accept and store messages on behalf of recipients who are temporarily offline, then deliver them when the recipient comes back online and asks. Without propagation nodes, every message requires both peers online simultaneously — a fatal assumption for mobile / mesh-edge deployments. Propagation nodes form a peer mesh that syncs messages between themselves so a recipient can retrieve mail from any one of them.
+
+The `PROPAGATED` LXMF method (`LXMessage.py:423-441`, mentioned in `flows/send-link-lxmf.md` step 3) submits a message to a propagation node rather than directly to the recipient. The propagation node stores it and offers it to peers via §5.8.2 sync, and to the recipient via §5.8.3 retrieval.
+
+#### 5.8.1 The `lxmf.propagation` destination
+
+Every propagation node registers a SINGLE destination of name `lxmf.propagation` (`LXMRouter.py:173`):
+
+```python
+self.propagation_destination = RNS.Destination(
+    self.identity, IN, SINGLE, APP_NAME, "propagation",
+)
+```
+
+Per §1.2, the well-known `name_hash` is `e03a09b77ac21b22258e` (`SHA256("lxmf.propagation")[:10]`). The propagation node's identity is its own — different propagation nodes have different identity hashes and therefore different destination hashes. Receivers of `lxmf.propagation` announces filter by name_hash to surface "propagation node available" UI separately from "messageable peer available" UI per §4.4.
+
+The destination registers four request handlers via `register_request_handler` (`LXMRouter.py:651-655`):
+
+| Path | Constant | Allow | Purpose |
+|---|---|---|---|
+| `/offer` | `LXMPeer.OFFER_REQUEST_PATH` | `ALLOW_ALL` | Peer-to-peer message-set offer (§5.8.2) |
+| `/get` | `LXMPeer.MESSAGE_GET_PATH` | `ALLOW_ALL` | Client message retrieval (§5.8.3) |
+| `/stats` | `LXMRouter.STATS_GET_PATH` | implementation-defined | Operator stats query |
+| `/sync` | `LXMRouter.SYNC_REQUEST_PATH` | `ALLOW_LIST` | Operator-triggered sync push |
+
+All four are reached over an active Reticulum Link via the §11 REQUEST/RESPONSE protocol. The link must be `identify()`-d before `/offer` and `/get` requests are honored — that's how the propagation node knows which client / peer is making the request.
+
+#### 5.8.2 Peer-to-peer sync via `/offer`
+
+Two propagation nodes that have peered with each other periodically sync. The initiator sends an `/offer` REQUEST whose `data` is:
+
+```python
+data = [peering_key(32), [transient_id_1, transient_id_2, ...]]
+```
+
+Where:
+
+- `peering_key` is a 32-byte proof-of-work key per §5.8.4.
+- `transient_id_N` is the 16-byte hash of an LXM (`= SHA256(lxmf_data)[:16]` — the truncated hash of the full encrypted LXMF body) that the offering node has and thinks the receiving node might want.
+
+The receiving node validates the peering_key, then for each `transient_id`:
+
+- If it already has the message in `propagation_entries`: skip.
+- Otherwise: add to `wanted_ids`.
+
+Then returns one of three response shapes (`LXMRouter.py:2185-2187`):
+
+| Response | Meaning |
+|---|---|
+| `False` (boolean) | Peer already has every offered message; no transfer needed. |
+| `True` (boolean) | Peer wants every offered message. |
+| `[wanted_id_1, ...]` (list) | Peer wants the listed subset only. |
+
+If the response indicates the peer wants any messages, the offering node packs them into a Resource (§10) and sends:
+
+```python
+resource_data = msgpack.packb([time.time(), [lxmf_data_1, lxmf_data_2, ...]])
+RNS.Resource(resource_data, link, callback=...)
+```
+
+The Resource contains the **full encrypted LXMF bodies** — the bytes that were signed and encrypted by the original sender; the propagation nodes never decrypt them. The receiving node writes each one to its propagation store under its `transient_id` key.
+
+Error responses (`LXMPeer.py:14-50`):
+
+| Constant | Hex | Meaning |
+|---|---|---|
+| `ERROR_NO_IDENTITY` | `0xf0` | Link wasn't `identify()`-d before the offer arrived. Initiator should retry with `link.identify()`. |
+| `ERROR_NO_ACCESS` | `0xf1` | Peer rejected (e.g. `from_static_only=True` on the receiver). |
+| `ERROR_THROTTLED` | `0xf2` | Peer is rate-limiting; postpone for `PN_STAMP_THROTTLE` (default 30 minutes). |
+| `ERROR_INVALID_KEY` | `0xf3` | Peering key failed proof-of-work validation. |
+| `ERROR_INVALID_DATA` | `0xf4` | Offer payload didn't match the expected `[key, [ids]]` shape. |
+| `ERROR_NOT_FOUND` | `0xf5` | (Used by `/sync` and stats-query paths) |
+
+#### 5.8.3 Client retrieval via `/get`
+
+A regular LXMF client (Sideband, NomadNet client, custom) retrieves stored messages with an `/get` REQUEST whose `data` is:
+
+```python
+data = [wanted_ids, have_ids, optional_transfer_limit_kb]
+```
+
+Where:
+
+- **`wanted_ids = None`** AND **`have_ids = None`** triggers a **listing query**: the propagation node returns `[transient_id_1, transient_id_2, ...]` of every message it holds for the requesting identity, sorted by size ascending.
+- **`wanted_ids`** is a list of transient_ids the client wants delivered. Propagation node responds with a Resource (or single packet if small enough) carrying `msgpack.packb([time.time(), [lxmf_data_1, ...]])`.
+- **`have_ids`** is a list of transient_ids the client confirms it has stored locally. Propagation node deletes those from its store. (Equivalent to "ack and purge".)
+- **`optional_transfer_limit_kb`** lets the client cap the transfer size — propagation node skips messages that would exceed the cap.
+
+Common usage: client first sends `/get` with `[None, None]` to get the list, picks which ones it wants based on size, then sends `/get` with `[wanted_subset, prior_subset_to_purge]` to fetch the new ones and acknowledge previously-fetched ones.
+
+The propagation node only returns messages whose `propagation_entries[tid][0] == requester's destination_hash` (`LXMRouter.py:1440, 1455`) — each message is keyed to its intended recipient and the propagation node is structurally unable to deliver it to the wrong address. The LXMF body is still encrypted to the recipient's public key as a defence-in-depth.
+
+#### 5.8.4 Peering keys (PoW for peer-to-peer auth)
+
+Two propagation nodes that want to peer must each compute a peering key for the relationship (`LXStamper.py::validate_peering_key` and `stamp_workblock` with `WORKBLOCK_EXPAND_ROUNDS_PEERING = 25`):
+
+```python
+peering_id = self.identity.hash + remote_identity.hash    # 32 bytes (16 + 16)
+workblock  = stamp_workblock(peering_id, expand_rounds=25)
+peering_key = (find any 32B value such that
+               SHA256(workblock || peering_key)
+               has at least target_cost leading zero bits)
+```
+
+`target_cost` is the receiving node's `peering_cost` (announced in element [5][2] of the propagation announce app_data, see §5.8.5). With only 25 rounds of HKDF expansion (vs 3000 for regular message stamps in §5.7), the workblock is ~6 KiB and peering keys can be computed in milliseconds. Peering keys are amortized: computed once between two propagation nodes and reused for every subsequent `/offer` for the lifetime of the peering.
+
+#### 5.8.5 Propagation node announce app_data
+
+Distinct from §4.3 (which is for `lxmf.delivery`). For `lxmf.propagation` announces, `LXMRouter.get_propagation_node_app_data` (line 307-319) emits a 7-element msgpack array:
+
+```python
+announce_data = [
+    False,                                  # [0] legacy-LXMF-PN-support flag (always False now)
+    int(time.time()),                       # [1] node timebase (unix seconds, big-int)
+    node_state,                             # [2] bool — accepting messages right now?
+    propagation_per_transfer_limit,         # [3] int — per-transfer cap in KB
+    propagation_per_sync_limit,             # [4] int — per-sync incoming cap in KB
+    [stamp_cost, stamp_cost_flexibility,
+     peering_cost],                         # [5] list of three ints
+    metadata,                               # [6] dict — operator-supplied node metadata
+]
+return msgpack.packb(announce_data)
+```
+
+Element [5] sub-fields:
+
+| Index | Name | Meaning |
+|---|---|---|
+| `[5][0]` | `stamp_cost` | PoW cost (leading zero bits) for client `/get` retrieval stamps |
+| `[5][1]` | `stamp_cost_flexibility` | Tolerance — client stamps within this many bits below `stamp_cost` are still accepted |
+| `[5][2]` | `peering_cost` | PoW cost for peering keys per §5.8.4 |
+
+Receivers parse this via `pn_announce_data_is_valid` (`LXMF/LXMF.py:191-206`), which insists on exactly 7 elements with type-correct positions. **A client that misparses element [5] as a single integer (rather than a 3-element list) silently fails to compute the right peering / retrieval stamp and is rejected** — this is the most common interop break in custom propagation-node implementations.
+
+#### 5.8.6 Source map
+
+| File | What |
+|---|---|
+| `LXMF/LXMRouter.py:173` | propagation_destination construction |
+| `LXMF/LXMRouter.py:307-319` | propagation announce app_data shape |
+| `LXMF/LXMRouter.py:651-655` | `/offer` and `/get` handler registration |
+| `LXMF/LXMRouter.py:1427-1500` | `message_get_request` handler (client `/get`) |
+| `LXMF/LXMRouter.py:2142-2192` | `offer_request` handler (peer `/offer`) |
+| `LXMF/LXMPeer.py:14-50` | path constants and error-response constants |
+| `LXMF/LXMPeer.py:370-486` | initiator-side `/offer` flow |
+| `LXMF/LXStamper.py::validate_peering_key` | peering-key PoW validation |
+| `LXMF/LXMF.py:191-206` | `pn_announce_data_is_valid` parser |
+
+### 5.9 Source
+
+`LXMF/LXMessage.py` for pack/unpack; `LXMF/LXMF.py` for the app_data extraction helpers; `LXMF/LXStamper.py` for stamps; `LXMF/LXMRouter.py` for receive-side stamp/ticket dispatch and propagation handlers; `LXMF/LXMPeer.py` for the propagation peer-to-peer state machine.
 
 ---
 

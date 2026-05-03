@@ -226,7 +226,7 @@ re-research.
 
 ### Tier 2 — required for a client to be useful in the wild
 
-- [ ] **SPEC.md: Propagation node protocol.** Offline message retrieval
+- [x] **SPEC.md §5.8: Propagation node protocol.** Offline message retrieval
       via store-and-forward propagation nodes. Without this, every
       message requires both peers online simultaneously. Authoritative
       source: `LXMF/LXMRouter.py::process_propagated`, the
