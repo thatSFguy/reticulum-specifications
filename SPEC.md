@@ -106,6 +106,7 @@ Single byte after the destination hash (offset 18 for HEADER_1, offset 34 for HE
 | `0x00` | CTX_NONE | Default; opportunistic LXMF DATA, regular packets |
 | `0x09` | CTX_REQUEST | Link REQUEST (NomadNet page fetch, propagation /get) |
 | `0x0a` | CTX_RESPONSE | Link RESPONSE matching a REQUEST |
+| `0x0b` | PATH_RESPONSE | An `ANNOUNCE` packet emitted in response to a `path?` request — distinguishes it from a periodic re-announce. Receivers handle the two paths differently (see §7.2 and §4.5) |
 | `0xfd` | CTX_KEEPALIVE | Link keepalive |
 | `0xff` | LRPROOF | Link request proof |
 
@@ -163,7 +164,17 @@ The Reticulum packet header (HEADER_1, packet_type=ANNOUNCE, dest_type=SINGLE, t
 public_key(64) || name_hash(10) || random_hash(10) || [ratchet_pub(32) if context_flag] || signature(64) || app_data(...)
 ```
 
-The 64-byte `public_key` is the X25519 || Ed25519 concat described in section 1.1. `random_hash` is 10 random bytes that vary per emission to keep the packet hash unique even across rapid re-announces. The optional 32-byte `ratchet_pub` (an X25519 public key) is present iff the packet header's `context_flag` bit is 1. Indexing through this layout accordingly is mandatory; see `RNS/Identity.py::validate_announce` for the canonical parser.
+The 64-byte `public_key` is the X25519 || Ed25519 concat described in section 1.1.
+
+`random_hash` is **NOT** 10 random bytes — only the first 5 bytes are random; the trailing 5 bytes carry the emission timestamp as a big-endian unsigned 40-bit Unix-seconds integer (`RNS/Destination.py:282`):
+
+```python
+random_hash = RNS.Identity.get_random_hash()[0:5] + int(time.time()).to_bytes(5, "big")
+```
+
+Transit relays read the timestamp portion via `Transport.timebase_from_random_blob(random_blob) = int.from_bytes(random_blob[5:10], "big")` (`RNS/Transport.py:3100-3101`) to make ordering decisions when an inbound announce carries a higher hop count than the cached path: only newer-emitted announces can refresh the path table (see §4.5). 5 bytes of seconds covers ~34,000 years, so wraparound is not a near-term concern. Implementations MUST emit this exact format, including a clock value that's monotonically non-decreasing across announces from the same destination — clockless sender devices (per §9.6) may end up locked out of long-range path table updates.
+
+The optional 32-byte `ratchet_pub` (an X25519 public key) is present iff the packet header's `context_flag` bit is 1. Indexing through this layout accordingly is mandatory; see `RNS/Identity.py::validate_announce` for the canonical parser.
 
 ### 4.2 Signed data
 
@@ -210,6 +221,103 @@ When ingesting an announce, clients should distinguish by `name_hash`:
 - Any other `name_hash` — non-LXMF custom destination (telemetry beacons, application-specific)
 
 Treating every announce as a contact (the naive default) populates the UI with hundreds of irrelevant rows.
+
+### 4.5 Announce validation rules (receive side)
+
+These are the MUST rules a receiver applies to every inbound announce before considering the announced destination "known". The canonical implementation is `RNS/Identity.py::validate_announce` (line 496-598 in RNS 1.2.0); the dispatch site that calls it is `RNS/Transport.py::inbound` line 1623-1650.
+
+#### 1. Body parse — branch on `context_flag`
+
+The `context_flag` bit (bit 5 of the packet's 1-byte flag field, §2.1) selects between two body layouts. Slice offsets, with `keysize = 64`, `name_hash_len = 10`, `random_hash_len = 10`, `ratchet_size = 32`, `sig_len = 64`:
+
+```
+context_flag == 1 (ratchet present):
+   public_key   = data[ 0                                     :  64]
+   name_hash    = data[ 64                                    :  74]
+   random_hash  = data[ 74                                    :  84]
+   ratchet_pub  = data[ 84                                    : 116]
+   signature    = data[116                                    : 180]
+   app_data     = data[180                                    :    ]   # may be empty
+
+context_flag == 0 (no ratchet):
+   public_key   = data[ 0                                     :  64]
+   name_hash    = data[ 64                                    :  74]
+   random_hash  = data[ 74                                    :  84]
+   signature    = data[ 84                                    : 148]
+   app_data     = data[148                                    :    ]   # may be empty
+```
+
+A client that uses a fixed offset for `signature` regardless of the flag (a real bug from the SF webclient's first cut) silently rejects every ratchet-bearing announce as having a bad signature.
+
+#### 2. Signature verification
+
+Reconstruct the signed_data exactly per §4.2:
+
+```
+signed_data = destination_hash || public_key || name_hash || random_hash || ratchet || app_data
+```
+
+Where `ratchet` is `b""` (empty, **not** absent) when `context_flag == 0`, and `app_data` is `b""` when not present in the packet. `destination_hash` comes from the **outer packet header**, NOT from the announce body — re-using the body bytes as the dest_hash would let a sender forge announces for arbitrary destinations.
+
+Verify the 64-byte signature with the announced public_key's Ed25519 half (last 32 bytes). Reject on failure.
+
+#### 3. `destination_hash` recomputation
+
+Recompute the dest_hash from the announced inputs:
+
+```
+identity_hash    = SHA256(public_key)[:16]
+expected_hash    = SHA256(name_hash || identity_hash)[:16]
+```
+
+Reject the announce iff `expected_hash != packet.destination_hash` (the value from the outer header). This catches both random hash collisions and active spoofing attempts that pair a valid signature with an unrelated dest_hash. (`RNS/Identity.py:548-551`).
+
+#### 4. Public-key collision rejection
+
+If the receiver already has a different public_key cached for this `destination_hash` (from a prior announce), the new announce MUST be rejected with a critical-severity log even if the signature is otherwise valid. Per the upstream comment: "In reality, this should never occur, but in the odd case that someone manages a hash collision, we reject the announce" (`RNS/Identity.py:554-560`).
+
+This rule means: **first-announcer-wins for any given destination_hash** within a receiver's lifetime. A peer who loses their identity material and regenerates with the same display name + app_name will produce a different identity_hash → different destination_hash → no collision. A peer who tries to *replace* their announced public key under the same destination_hash, however, gets rejected — the real defense against this class of attack.
+
+#### 5. Blackhole list check
+
+Before everything else, check `RNS.Transport.blackholed_identities`. An identity_hash on the blackhole list is dropped silently regardless of signature validity (`RNS/Identity.py:538-541`). This is operator-controlled state, not a wire feature.
+
+#### 6. Caching the announce contents
+
+On a fully validated announce, the receiver MUST update its caches in this order:
+
+1. **`known_destinations[destination_hash]`** ← `[recv_time, packet_hash, public_key, app_data, last_used]` — populates the table that `RNS.Identity.recall(dest_hash)` reads when constructing outbound destinations (`RNS/Identity.py::remember`, line 100-112). Without this, every subsequent outbound message to this peer fails because no public key is available for Token encryption.
+2. **`known_ratchets[destination_hash]`** ← `ratchet_pub` (only if `context_flag == 1` and `ratchet_pub != b""`) — `Identity._remember_ratchet`, line 395-428. The ratchet is also persisted to disk under `{storagepath}/ratchets/{hexhash}` for use across restarts.
+3. **`path_table`** entry update or insertion (see §4.6 — TBD when the relay rebroadcast spec lands), gated by:
+   - `random_blob` (= `random_hash`) not in the cached `random_blobs` history for this destination — cheap replay defence (`RNS/Transport.py:1707, 1732, 1745`).
+   - Hop count comparison against any existing entry: equal-or-fewer hops always win; more hops win only if the cached path has expired or the new announce's emission timestamp (from `random_hash[5:10]`) is more recent than every cached blob's timestamp (`RNS/Transport.py:1700-1745`).
+
+#### 7. `PATH_RESPONSE` distinction
+
+An announce whose outer packet `context == PATH_RESPONSE (0x0B)` is the responder's reply to a recent `path?` request, not a periodic re-announce. Validation is identical (rules 1-6 above), but listener dispatch differs:
+
+- The default behavior of `Transport.announce_handlers` registered via `RNS.Transport.register_announce_handler` is to **skip** path-response announces unless the handler sets `receive_path_responses = True` on itself (`RNS/Transport.py:1989-1991`).
+- The path table population path is the same either way — both regular and path-response announces refresh the path entry — so a leaf client that ignores PATH_RESPONSE entirely at the application layer still benefits from the path-table side effect.
+
+#### 8. Implementation-private behavior (SHOULD)
+
+These are not wire-spec MUST rules but most working clients implement them; without them the implementation will misbehave in busy meshes:
+
+- **Per-interface ingress rate limiting.** When the inbound announce rate on an interface exceeds `IC_BURST_FREQ_NEW = 6 Hz` (interfaces less than 2 hours old) or `IC_BURST_FREQ = 35 Hz` (older), and the announced destination is **not** in `path_table` and **not** in `path_requests`, the announce is held in the interface's `held_announces` dict for later release rather than processed immediately. Released later in lowest-hop-count-first order. (`RNS/Interfaces/Interface.py:60-200`.) Without this, a flood of unknown-destination announces can drown out everything else.
+- **`random_blob` history cap.** The cached `random_blobs` list per destination is bounded by `Transport.MAX_RANDOM_BLOBS` to keep the path table from growing without bound under a long-lived destination's announce stream (`RNS/Transport.py:1820`).
+- **Self-announce filter.** §9.5 — drop announces where `destination_hash` matches one of the receiver's own destinations to avoid populating its own contact list with itself.
+
+#### 9. Source map for §4.5
+
+| File | What it pins down |
+|---|---|
+| `RNS/Identity.py:496-598` | `validate_announce` — body parse, signed_data, sig verify, dest_hash recompute, collision check |
+| `RNS/Identity.py:100-112` | `Identity.remember` — `known_destinations` update |
+| `RNS/Identity.py:395-428` | `_remember_ratchet` — ratchet persistence |
+| `RNS/Transport.py:1623-2024` | inbound dispatch for `packet_type == ANNOUNCE`: quick sig check, ingress limiting, path table population, handler dispatch |
+| `RNS/Transport.py:3100-3117` | `timebase_from_random_blob`, `announce_emitted` |
+| `RNS/Interfaces/Interface.py:60-200` | ingress-limit constants, `should_ingress_limit`, `hold_announce`, `process_held_announces` |
+| `RNS/Packet.py:83` | `PATH_RESPONSE = 0x0B` context constant |
 
 ---
 

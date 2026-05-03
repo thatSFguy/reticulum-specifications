@@ -11,10 +11,13 @@ The two views are complementary: SPEC.md tells you what each piece looks like; t
 | [`send-opportunistic-lxmf.md`](send-opportunistic-lxmf.md) | ✅ |
 | [`receive-opportunistic-lxmf.md`](receive-opportunistic-lxmf.md) | ✅ |
 | [`send-link-lxmf.md`](send-link-lxmf.md) (DIRECT method, over a Reticulum Link) | ✅ |
+| [`receive-announce.md`](receive-announce.md) | ✅ |
 | `receive-link-lxmf.md` (inverse of send-link-lxmf, including responder side of the handshake) | ⏳ |
 | `send-propagated-lxmf.md` (PROPAGATED method, via a propagation node) | ⏳ |
-| `announce.md` (build, sign, transmit, ratchet rotation) | ⏳ |
-| `path-discovery.md` (request, response, path-table population) | ⏳ |
+| `send-announce.md` (build, sign, transmit, ratchet rotation, periodic re-announce) | ⏳ |
+| `forward-announce.md` (transport-node rebroadcast logic, announce_cap, queue) | ⏳ |
+| `path-discovery.md` (path? request, path-response wire detail, path-table population) | ⏳ |
+| `send-resource.md` (Resource fragmentation over a Link) | ⏳ |
 
 ## Conventions
 

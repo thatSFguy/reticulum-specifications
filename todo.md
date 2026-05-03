@@ -112,23 +112,16 @@ re-research.
 
 ### Tier 1 — required for a barebones leaf LXMF client to interop
 
-- [ ] **`flows/receive-announce.md` + SPEC.md §4.5 announce validation
-      rules.** Without this, a client can't learn that any peers exist;
-      `known_destinations` and `known_ratchets` stay empty and every
-      outbound message fails at `recall(dest_hash)`. Hooks:
-      `RNS/Identity.py::validate_announce` at line 496 (full body
-      parse with branching on `context_flag` for the optional ratchet
-      slot, signed_data construction
-      `dest_hash || pub || name_hash || random_hash || ratchet || app_data`,
-      blackhole check, dest_hash recomputation, public-key collision
-      rejection, ratchet ingestion via `_remember_ratchet`);
-      `RNS/Transport.py:1623-2024` (the announce dispatch path —
-      signature-only quick check that calls `interface.received_announce()`,
-      ingress-rate limiting via `should_ingress_limit`, path-table
-      population, `random_blob` replay/loop dedup, and the
-      `announce_handlers` callback fan-out with `aspect_filter` matching
-      and `PATH_RESPONSE = 0x0B` context distinction — see
-      `RNS/Packet.py:83`).
+- [x] **`flows/receive-announce.md` + SPEC.md §4.5 announce validation
+      rules.** Done. SPEC.md §4.5 covers the MUST validation rules
+      (body parse with `context_flag` branch, signed_data
+      reconstruction, signature verification, dest_hash recomputation,
+      public-key collision rejection, blackhole list, cache update
+      order, PATH_RESPONSE handling). `flows/receive-announce.md` walks
+      the chronology end-to-end. Side fixes: SPEC.md §4.1 corrected
+      (`random_hash` is 5 random bytes + 5 bytes big-endian uint40
+      unix_seconds, not 10 random bytes); SPEC.md §2.5 contexts table
+      now lists `0x0B PATH_RESPONSE`.
 - [ ] **SPEC.md §12 / `flows/send-resource.md`: Reticulum Resource
       fragmentation.** Any LXMF body larger than `LINK_PACKET_MAX_CONTENT`
       ≈ 360 B is sent as an `RNS.Resource`, not a single Link DATA
