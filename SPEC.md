@@ -1144,6 +1144,133 @@ Because the seq nibble is 4 bits of randomness chosen per TX, two unrelated spli
 | `RNode_Firmware/RNode_Firmware.ino:359-446` | RX-side reassembly state machine |
 | `reticulum-lora-repeater/src/Radio.cpp:35-45, 188-316, 351-405` | Clean-room reimplementation; adds 500 ms reassembly timeout |
 
+### 8.4 RNode KISS configuration handshake
+
+§8.1 covers the KISS framing between a host and an RNode. This section covers the **commands** a host issues over that framing to bring up an RNode and configure its radio. Before any Reticulum DATA packet can flow, every command listed here must succeed in approximately the order listed.
+
+The canonical reference is `RNS/Interfaces/RNodeInterface.py` (the Python host driver) plus `RNode_Firmware/Framing.h` (the firmware-side command codes).
+
+#### 8.4.1 Command-byte inventory
+
+Each KISS frame is `FEND || cmd_byte || escaped_payload || FEND` (§8.1). The cmd_byte values used during configuration:
+
+| Hex | Name | Direction | Purpose |
+|---|---|---|---|
+| `0x00` | `CMD_DATA` | both | Reticulum packet payload (the steady-state command after configuration is done) |
+| `0x01` | `CMD_FREQUENCY` | host → RNode | Set radio frequency in Hz; payload is 4-byte big-endian uint32 |
+| `0x02` | `CMD_BANDWIDTH` | host → RNode | Set radio bandwidth in Hz; payload is 4-byte big-endian uint32 |
+| `0x03` | `CMD_TXPOWER` | host → RNode | Set TX power in dBm; payload is 1 byte |
+| `0x04` | `CMD_SF` | host → RNode | Set spreading factor; payload is 1 byte (typically 7..12) |
+| `0x05` | `CMD_CR` | host → RNode | Set coding rate denominator; payload is 1 byte (typically 5..8 for `4/5`..`4/8`) |
+| `0x06` | `CMD_RADIO_STATE` | host → RNode | `0x00 = OFF`, `0x01 = ON` (turn the modem on after config) |
+| `0x07` | `CMD_RADIO_LOCK` | host → RNode | Lock the radio against further config changes |
+| `0x08` | `CMD_DETECT` | both | Hardware detect ping/pong (see §8.4.3 below) |
+| `0x09` | `CMD_IMPLICIT` | host → RNode | Toggle implicit-header LoRa mode (advanced) |
+| `0x0A` | `CMD_LEAVE` | host → RNode | Tell the RNode the host is disconnecting; payload `0xFF` |
+| `0x0B` | `CMD_ST_ALOCK` | host → RNode | Short-term airtime limit; payload is 2 bytes big-endian uint16 of (limit × 100) |
+| `0x0C` | `CMD_LT_ALOCK` | host → RNode | Long-term airtime limit; same encoding as ST_ALOCK |
+| `0x0F` | `CMD_READY` | RNode → host | Boot complete signal |
+| `0x21` | `CMD_STAT_RX` | RNode → host | RX-counter status |
+| `0x22` | `CMD_STAT_TX` | RNode → host | TX-counter status |
+| `0x23` | `CMD_STAT_RSSI` | RNode → host | RSSI sidecar for the next CMD_DATA frame; `dBm = byte − 157` |
+| `0x24` | `CMD_STAT_SNR` | RNode → host | SNR sidecar; signed Q6.2 → `dB = byte / 4` |
+| `0x26` | `CMD_STAT_PHYPRM` | RNode → host | Reports current frequency/bandwidth/SF/CR back; used for verification |
+| `0x40` | `CMD_RANDOM` | both | Get random bytes from the RNode's hardware RNG |
+| `0x47` | `CMD_BOARD` | RNode → host | Reports board model code |
+| `0x48` | `CMD_PLATFORM` | RNode → host | Reports MCU platform code |
+| `0x49` | `CMD_MCU` | RNode → host | Reports MCU variant code |
+| `0x50` | `CMD_FW_VERSION` | RNode → host | Reports firmware version (2 bytes: major, minor) |
+| `0x55` | `CMD_RESET` | host → RNode | Hard-reset the RNode; payload `0xF8` (`CMD_RESET_BYTE`) |
+
+Full inventory in `RNode_Firmware/Framing.h:24-95`. The configuration handshake uses the bolded subset.
+
+#### 8.4.2 Bring-up sequence
+
+Adapted from `RNodeInterface.initRadio` (`RNS/Interfaces/RNodeInterface.py:470-481`):
+
+```
+1. Open serial port (or BLE GATT, or whatever bearer)
+2. Optionally: hard_reset()           — CMD_RESET 0xF8 (2.25s wait afterwards)
+3. detect()                            — CMD_DETECT + CMD_FW_VERSION + CMD_PLATFORM + CMD_MCU
+4. (RNode replies asynchronously with CMD_DETECT 0x46, CMD_FW_VERSION, CMD_PLATFORM,
+    CMD_MCU, CMD_BOARD over multiple frames — host correlates by command byte)
+5. setFrequency()                      — CMD_FREQUENCY + 4B big-endian Hz
+6. setBandwidth()                      — CMD_BANDWIDTH + 4B big-endian Hz
+7. setTXPower()                        — CMD_TXPOWER + 1B dBm
+8. setSpreadingFactor()                — CMD_SF + 1B
+9. setCodingRate()                     — CMD_CR + 1B
+10. setSTALock() / setLTALock()        — optional airtime limits
+11. setRadioState(RADIO_STATE_ON)      — CMD_RADIO_STATE + 0x01
+12. (RNode now in operational state; CMD_DATA frames flow in both directions)
+```
+
+The order matters: most firmwares accept config commands only while the radio is OFF (steps 5-10 must precede step 11). Setting parameters after `RADIO_STATE_ON` either silently fails or requires a `RADIO_STATE_OFF` round-trip first depending on firmware version. A clean-room driver should always set the radio OFF (or be in initial-boot state where it's OFF by default) before reconfiguring.
+
+#### 8.4.3 The `CMD_DETECT` exchange
+
+```
+host → RNode :  FEND CMD_DETECT(0x08) DETECT_REQ(0x73) FEND
+RNode → host :  FEND CMD_DETECT(0x08) DETECT_RESP(0x46) FEND
+```
+
+`DETECT_REQ = 0x73` and `DETECT_RESP = 0x46` are at `RNode_Firmware/Framing.h:99-100`. The two-byte exchange tells a host "yes, this thing on the other end of the serial port is an RNode and it's awake". The host follows up immediately with `CMD_FW_VERSION`, `CMD_PLATFORM`, `CMD_MCU` queries — those queries each have a single `0x00` placeholder byte payload (per `RNodeInterface.detect()` line 484) and the RNode replies asynchronously with the same command code carrying the actual answer.
+
+A host driver should accumulate replies for ~1-2 seconds after sending `detect()` before assuming detection failed. The replies arrive in unpredictable order because the firmware fires them off as it produces each value.
+
+`CMD_FW_VERSION`'s payload format is 2 bytes: `[major, minor]`. RNS rejects RNode firmware older than its `REQUIRED_FW_VER_MAJ` / `REQUIRED_FW_VER_MIN` constants and aborts the bring-up. A clean-room driver should at minimum log the version for diagnostics.
+
+#### 8.4.4 4-byte big-endian numerics
+
+`CMD_FREQUENCY` and `CMD_BANDWIDTH` payloads are unsigned 32-bit integers in big-endian byte order:
+
+```python
+c1 = self.frequency >> 24
+c2 = self.frequency >> 16 & 0xFF
+c3 = self.frequency >> 8  & 0xFF
+c4 = self.frequency       & 0xFF
+data = KISS.escape(bytes([c1, c2, c3, c4]))
+```
+
+The byte values are KISS-escaped before transmission per §8.1 (e.g. a frequency of `0xC0...` would have its leading `0xC0` byte escaped to `0xDB 0xDC`).
+
+`CMD_TXPOWER`, `CMD_SF`, `CMD_CR`, `CMD_RADIO_STATE` payloads are single bytes, also subject to KISS escaping.
+
+#### 8.4.5 Receive sidecar metadata
+
+Every CMD_DATA frame from the RNode is preceded by two short metadata frames in the same byte stream (§8.1 already mentions this; the encoding):
+
+```
+FEND CMD_STAT_RSSI(0x23) <rssi_byte>  FEND
+FEND CMD_STAT_SNR(0x24)  <snr_byte>   FEND
+FEND CMD_DATA(0x00)      <data...>    FEND
+```
+
+Decode:
+
+- `RSSI in dBm = rssi_byte - 157` (e.g. `rssi_byte = 50` means `-107 dBm`).
+- `SNR in dB = (signed)snr_byte / 4` — `snr_byte` is interpreted as signed two's-complement Q6.2 fixed-point. So `0x10 (16) = 4 dB`, `0xF0 (-16) = -4 dB`, etc.
+
+A host driver must cache the most recent RSSI/SNR pair and apply it to the next CMD_DATA frame. If it processes CMD_DATA before the sidecars arrive (e.g. the byte stream re-ordered them across an unreliable link), RSSI/SNR will be from the *previous* packet. In practice the firmware emits them in a tight sequence within microseconds, so reordering is only a concern over BLE notification boundaries (§8.1 closing paragraph).
+
+### 8.5 RNode CSMA / airtime accounting
+
+Real LoRa networks need carrier-sense and airtime budgets to avoid stepping on each other. The RNode firmware implements both server-side; the host is mostly told what's happening via `CMD_STAT_CHTM` (channel-time-metric, `0x25` in `Framing.h:45`) and chooses whether to inform the application.
+
+#### 8.5.1 Airtime caps (`CMD_ST_ALOCK` / `CMD_LT_ALOCK`)
+
+The host can set per-channel airtime limits via:
+
+- **`CMD_ST_ALOCK`** (`0x0B`): short-term airtime lock. Payload is 2 bytes big-endian uint16 of `(limit_percent × 100)` — so `0x0B B8 = 3000 = 30.00%`. Default in `RNS/Reticulum.py` is `Reticulum.ANNOUNCE_CAP = 2.0` (= 2% airtime cap on transmissions, encoded as `0x00C8`).
+- **`CMD_LT_ALOCK`** (`0x0C`): long-term version, same encoding. Long-term window length is firmware-private (typically 1 hour).
+
+Once the cap is exceeded the firmware simply refuses to transmit and reports `CMD_ERROR ERROR_QUEUE_FULL (0x04)` if the host queues additional packets. A clean-room driver should treat these errors as backpressure and queue at the application layer rather than retry-spinning at the KISS layer.
+
+#### 8.5.2 Pre-TX carrier sense
+
+Before transmitting, RNode firmware listens on the configured frequency for a short window and aborts the TX if it detects an in-progress LoRa preamble — Listen-Before-Talk. The exact CSMA windowing is firmware-private; a clean-room implementation that talks LoRa via RadioLib (rather than via an RNode) needs to implement its own LBT to avoid stepping on RNodes and other peers. The reference implementation in `markqvist/RNode_Firmware/RNode_Firmware.ino:683-712` (the `add_airtime` accumulator and channel-utilisation tracking) is the canonical algorithm.
+
+For host-side use cases — i.e. a Reticulum client driving an RNode — the firmware handles all CSMA invisibly and the host should not attempt its own. Host-side rate limiting at the announce-cap layer (§4.5 SHOULD-rule for ingress, and `Reticulum.ANNOUNCE_CAP` for outbound) is sufficient.
+
 ---
 
 ## 9. Implementation gotchas

@@ -264,19 +264,21 @@ re-research.
       encrypt/decrypt paths in `RNS/Destination.py:601+` (`prv` is a
       symmetric-key wrapper, not an X25519 priv). Almost no clients
       implement this but the protocol allows it.
-- [ ] **SPEC.md §8.4 (new): CSMA / airtime tracking.** LoRa-only —
-      carrier-sense + random backoff that prevents transmitter
-      collisions on shared channel. The clean-room repeater explicitly
-      flags "no CSMA" as a phase-2 simplification. A serious LoRa
-      client needs `RNS.Reticulum.ANNOUNCE_CAP`-aware backoff and the
-      `airtime_bins` accounting from `RNode_Firmware.ino:683-712`.
-- [ ] **SPEC.md §8.5 (new): RNode KISS configuration handshake.**
-      Beyond §8.3 (split-packet protocol), a client opening an RNode
-      drives `CMD_DETECT` / `CMD_FREQUENCY` / `CMD_BANDWIDTH` /
-      `CMD_SF` / `CMD_CR` / `CMD_TXPOWER` / `CMD_RADIO_STATE` over KISS
-      to bring up the radio. All defined in `RNode_Firmware/Framing.h:24-95`.
-      Spec just says "send Reticulum packets via CMD_DATA" — that's
-      not enough.
+- [x] **SPEC.md §8.4 (new): RNode KISS configuration handshake.**
+      Done. Full bring-up sequence: command-byte inventory, the
+      `CMD_DETECT`/`DETECT_REQ`/`DETECT_RESP` exchange, 4-byte
+      big-endian encoding for `FREQUENCY`/`BANDWIDTH`, single-byte
+      payloads for `TXPOWER`/`SF`/`CR`/`RADIO_STATE`, the 12-step
+      bring-up recipe, and the receive sidecar metadata format
+      (`RSSI = byte - 157`, `SNR = signed Q6.2 / 4`).
+- [x] **SPEC.md §8.5 (new): CSMA / airtime tracking.** Done as a
+      follow-on to §8.4. Airtime caps via `CMD_ST_ALOCK` /
+      `CMD_LT_ALOCK` (2-byte big-endian uint16 of `limit_percent ×
+      100`), `Reticulum.ANNOUNCE_CAP = 2.0` default; pre-TX carrier
+      sense is firmware-private and not exposed to the host — host
+      clients don't implement their own LBT, but native-LoRa clients
+      (e.g. the repeater repo) need the algorithm from
+      `RNode_Firmware.ino:683-712`.
 - [x] **SPEC.md §6.5 second sub-bullet: implicit vs explicit proof
       mode.** Done as part of the §6.5 expansion (Tier 1 #3). The
       length-dispatch validator at `PacketReceipt.validate_proof`
