@@ -1657,6 +1657,89 @@ Before transmitting, RNode firmware listens on the configured frequency for a sh
 
 For host-side use cases — i.e. a Reticulum client driving an RNode — the firmware handles all CSMA invisibly and the host should not attempt its own. Host-side rate limiting at the announce-cap layer (§4.5 SHOULD-rule for ingress, and `Reticulum.ANNOUNCE_CAP` for outbound) is sufficient.
 
+### 8.6 AutoInterface multicast discovery (LAN auto-detect)
+
+`AutoInterface` is the IPv6-multicast-based protocol Reticulum nodes use to discover each other on a LAN with zero configuration. Drop a node on any IPv6-capable network, configure `[[Default Interface]] type = AutoInterface`, and it finds peers automatically — no static IPs, no rendezvous server.
+
+The reference implementation is `RNS/Interfaces/AutoInterface.py` (~700 lines). This section specifies the wire-visible bits a clean-room implementation needs.
+
+#### 8.6.1 IPv6 multicast group derivation
+
+`AutoInterface.py:202-212`. Each AutoInterface mesh is identified by a `group_id` (default `b"reticulum"`); the actual multicast address is derived from a SHA-256 of the group_id:
+
+```python
+group_hash = SHA256(group_id)                     # 32 bytes
+
+# Build the lower 7 hextets from group_hash bytes [2..14]:
+gt  = "0"
+gt += ":" + f"{(g[3]+(g[2]<<8)):02x}"            # bytes [2:4]
+gt += ":" + f"{(g[5]+(g[4]<<8)):02x}"            # bytes [4:6]
+gt += ":" + f"{(g[7]+(g[6]<<8)):02x}"            # bytes [6:8]
+gt += ":" + f"{(g[9]+(g[8]<<8)):02x}"            # bytes [8:10]
+gt += ":" + f"{(g[11]+(g[10]<<8)):02x}"          # bytes [10:12]
+gt += ":" + f"{(g[13]+(g[12]<<8)):02x}"          # bytes [12:14]
+
+mcast_discovery_address = "ff" + multicast_address_type + discovery_scope + ":" + gt
+```
+
+Where:
+
+| Field | Default | Value bits |
+|---|---|---|
+| `multicast_address_type` | `"1"` (temporary) — alt `"0"` (permanent) | 4 bits, `RFC 4291` flags |
+| `discovery_scope` | `"2"` (link-local) | 4 bits, IPv6 scope: `"2"=link, "4"=admin, "5"=site, "8"=org, "e"=global` |
+
+So with the default `group_id = b"reticulum"`, default `multicast_address_type = "1"`, default `discovery_scope = "2"`, and `SHA256(b"reticulum")[2:14]` filling the lower hextets, every default-config Reticulum node on the same link-local subnet finds the same multicast address.
+
+#### 8.6.2 UDP ports
+
+`AutoInterface.py:47-48`:
+
+| Port | Default | Use |
+|---|---|---|
+| `discovery_port` | `29716` (UDP) | Periodic discovery announces from each peer; receivers learn other peers' link-local IPv6 addresses by their incoming source addr. |
+| `unicast_discovery_port` | `discovery_port + 1` = `29717` | Per-interface unicast probes, used to disambiguate which physical interface a peer is on. |
+| `data_port` | `42671` (UDP) | Once peers know each other's addresses, actual Reticulum packets flow as plain UDP datagrams between them on this port. |
+
+A clean-room implementation MUST listen on the discovery port for inbound multicast packets and the data port for inbound unicast packets, and emit periodic announces to the multicast address+port.
+
+#### 8.6.3 Discovery cadence
+
+`AutoInterface.py:61-64`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `ANNOUNCE_INTERVAL` | `1.6s` | Each AutoInterface emits a discovery announce on this cadence. |
+| `PEERING_TIMEOUT` | `22.0s` | A peer not heard from within this window is dropped. |
+| `PEER_JOB_INTERVAL` | `4.0s` | Cadence of the per-interface peer-management job (eviction, rediscovery). |
+| `MCAST_ECHO_TIMEOUT` | `6.5s` | If our own multicast emissions are not echoed back within this window on a given physical interface, the multicast routing on that interface is presumed broken. |
+
+The 1.6s + 22s pairing means a new node is discovered within ~1.6s of join (as soon as one announce cycle completes from any existing peer); a departing node is forgotten within ~22s of last contact. Both bounds are implementation-private, but a clean-room with radically different values may have visible interop quirks (peer flap if you announce too rarely; bandwidth waste if too often).
+
+#### 8.6.4 Discovery announce body format
+
+The discovery announce is a plain UDP datagram on the multicast address. The body is implementation-private — upstream uses a small msgpack blob containing the peer's `group_hash` (so peers from a different group on the same link don't accidentally peer), interface MTU, and an optional IFAC seal (Interface Authentication Code; if present, peers without the matching IFAC key reject the announce). Specific bytes of the discovery announce body aren't part of the wire spec for **Reticulum**; they're part of the wire spec for **AutoInterface peering**, and a clean-room AutoInterface implementation needs to mirror upstream's format. Read `AutoInterface.py::announce_handler` and `AutoInterface.peer_jobs` for the full layout.
+
+#### 8.6.5 Once peers are discovered
+
+After the discovery handshake establishes that two nodes are in the same Reticulum group on the same physical link, all subsequent Reticulum packet traffic flows as **plain UDP datagrams** on the data port (`42671` by default), unicast between the discovered link-local IPv6 addresses. There's no per-packet framing beyond the UDP envelope — each datagram body is one complete Reticulum packet (§2). Out-of-order delivery is handled by Reticulum's normal dedup and (where present) Link sequencing; UDP packet loss is masked by Reticulum's PROOF receipts and Resource sliding-window retransmits.
+
+Effective HW_MTU is `1196` bytes (`AutoInterface.HW_MTU`, line 44) — chosen to fit comfortably within standard Ethernet MTU minus IPv6/UDP overhead.
+
+#### 8.6.6 IFAC integration
+
+If the AutoInterface is configured with an `ifac_identity` (out-of-band-shared key), every Reticulum packet on the data port is IFAC-sealed and unmasked using the standard Transport-level IFAC mechanism (`RNS/Transport.py:1338-1387`). Peers with mismatched IFAC keys can see each other's discovery announces but can't decode each other's data — a pragmatic privacy boundary on a shared LAN.
+
+#### 8.6.7 Source map
+
+| File | What |
+|---|---|
+| `RNS/Interfaces/AutoInterface.py:43-72` | Default ports, group_id, scope/address-type constants, intervals |
+| `RNS/Interfaces/AutoInterface.py:202-212` | Multicast address derivation from `SHA256(group_id)` |
+| `RNS/Interfaces/AutoInterface.py:108+` | Per-interface socket setup (multicast join, unicast bind) |
+| `RNS/Interfaces/AutoInterface.py::announce_handler` | Discovery announce emission |
+| `RNS/Interfaces/AutoInterface.py::peer_jobs` | Peer aging, multicast-echo loop, IFAC sealing |
+
 ---
 
 ## 9. Implementation gotchas

@@ -396,7 +396,15 @@ order: top three save the most debugging hours.
       one-line entry in §2.5; deserves its own §6.x sub-section
       with body format and lifecycle.
 
-- [ ] **§8.x (new): AutoInterface multicast discovery.** UDP
+- [x] **§8.6 (new): AutoInterface multicast discovery.** Done.
+      Seven sub-sections: IPv6 multicast group derivation from
+      `SHA256(group_id)` with scope/address-type bits, default
+      UDP ports (29716 discovery / 29717 unicast probe / 42671 data),
+      discovery cadence constants, discovery announce body format
+      (msgpack with group_hash + MTU + optional IFAC seal),
+      post-discovery data flow as plain unicast UDP on the data
+      port carrying full Reticulum packets, IFAC integration,
+      source map. HW_MTU = 1196 (Ethernet-MTU-friendly). UDP
       multicast on a known group/port for LAN auto-detection of
       peers. Specific multicast group, port, magic bytes, beacon
       cadence. `RNS/Interfaces/AutoInterface.py` is the reference.
