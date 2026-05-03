@@ -2349,7 +2349,98 @@ A client running on a constrained device (less RAM, slower CPU) can scale all of
 
 ---
 
-## 14. Test vectors
+## 14. Failure modes — symptom → root cause
+
+§9 lists gotchas keyed by *cause* ("here's a thing that's true"). This section is the inverse index, keyed by *symptom* — what you're observing, and where to look. Each entry names the symptom, points at the section that explains why, and (where useful) names a `tools/verify_*.py` script that locks in the fix.
+
+### Identity / announce
+
+| Symptom | Likely cause | Fix / verifier |
+|---|---|---|
+| Generated identity files don't load on upstream `rnsd` | §1.3 — on-disk byte order is `X25519_priv \|\| Ed25519_priv` (NOT the opposite as some old docs claim) | `tools/verify_destination_hash.py` round-trips `to_file`/`from_file` |
+| Sideband shows you as "Anonymous" or random hex instead of your display name | §9.3 — display name was msgpack-encoded as `str` instead of `bytes`. Upstream's `dn.decode("utf-8")` raises silently | `tools/verify_msgpack_quirk.py` |
+| Announces validate locally but upstream peers reject as "Destination mismatch" | §1.2 — `name_hash` recipe wrong; the `identity=None` branch of `expand_name` does NOT include the identity hex in the hash input | `tools/verify_destination_hash.py` |
+| Upstream announces with ratchets get rejected by my validator | §4.5 step 1 — body parser didn't branch on `context_flag` bit; ratchet-bearing announces shift `signature` 32 bytes deeper | §4.5 step 1 |
+| First contact with a peer works, but path table never refreshes from a Python source after a microReticulum announce arrives | §4.1 / §9.10 — microReticulum emits 10 fully-random bytes for `random_hash` instead of 5-random + 5-uint40-timestamp. Python receivers parse `random_hash[5:10]` as far-future and lock the path against fresher Python announces | §9.10 |
+| Periodic re-announce works locally but peers can't reach me after a few minutes | §7.5 / §9.7 — re-announce loop isn't running. Transit relays evict path entries within minutes regardless of TTL | §9.7 |
+| Announces propagate fine but my client populates its contact list with itself | §9.5 / §4.5 step 8 — self-announce echo. Filter `dest_hash == our_dest_hash` before ingesting any inbound announce | §4.5 step 8 |
+
+### Token crypto / opportunistic LXMF
+
+| Symptom | Likely cause | Fix / verifier |
+|---|---|---|
+| Decrypted plaintext is correct but has 16 garbage bytes appended | §9.2 — manual PKCS#7 padding on top of platform's automatic padding (Web Crypto / JCA `AES/CBC/PKCS5Padding`) | §9.2 |
+| HMAC validates but AES decrypt produces gibberish | §3.2 — HKDF salt is wrong. Salt MUST be the recipient's 16-byte `identity_hash`, not the destination hash, not the ratchet pub | `tools/verify_token_crypto.py` |
+| Decrypt works for the first message after announce but fails for subsequent ones | §3.3 / §7.4 — recipient rotated their ratchet, you're still using the cached `ratchet_pub`. Re-fetch the latest announce or use the long-term encryption key as fallback | §3.3 |
+| Tampered packets are accepted as valid | §3.3 — verifying HMAC AFTER AES decrypt (or not at all). Encrypt-then-MAC: verify HMAC FIRST | `tools/verify_token_crypto.py` |
+| LXMF decrypts cleanly but signature validation fails | §5.6 — try both raw `packed_payload` AND a stripped-and-re-encoded form (with the optional 5th `stamp` element removed) | §5.6 |
+| `source_hash` lookup returns nothing even though I just received an announce from that peer | §9.1 / §5.4 — `source_hash` is the SENDER's destination hash (`SHA256(name_hash \|\| identity_hash)[:16]`), NOT the raw 16-byte identity hash | §9.1 |
+
+### Link establishment / proof receipts
+
+| Symptom | Likely cause | Fix / verifier |
+|---|---|---|
+| LINKREQUEST goes out but no LRPROOF arrives | §6.1 — body length wrong. 64 (no signalling) or 67 (with §6.6 signalling); anything else is rejected | `tools/verify_link_handshake.py` |
+| LRPROOF arrives but signature validation fails | §6.2 — body order wrong. Actual upstream is `signature \|\| responder_X25519_pub \|\| signalling`; the `link_id` is in the packet header, not the body | `tools/verify_link_handshake.py` |
+| Link handshake fails specifically when MTU signalling is present on one side but not the other | §6.6.5 — signalling bytes (when present) are part of the LRPROOF `signed_data`. A mismatch means signed_data differs and signature fails | §6.6.5 |
+| Link establishes but tears down within 5 minutes of inactivity | §6.7 — KEEPALIVE not implemented. Initiator sends `0xFF` ping every `keepalive` seconds; responder replies with `0xFE` pong | §6.7.1 |
+| Sender sees DATA bursts repeatedly retransmitted, link dies | §6.5 — receiver isn't emitting the mandatory PROOF receipt for each CTX_NONE Link DATA packet | `tools/verify_proof_packet.py` |
+| Some peers work, others reject every PROOF I send | §6.5.2 — wrong proof body length. Upstream default emits 64-byte implicit proofs (`signature` only) but your peer expects 96-byte explicit (`packet_hash \|\| signature`). Validator dispatches on length | `tools/verify_proof_packet.py` |
+
+### Resource transfers (large bodies)
+
+| Symptom | Likely cause | Fix / verifier |
+|---|---|---|
+| Resource advertisement arrives, but my receiver never asks for parts | §10.5 — RESOURCE_REQ shape: `exhausted_flag(1) [\|\| last_map_hash(4)] \|\| resource_hash(32) \|\| requested_map_hashes(N×4)` | §10.5 |
+| Resource transfers but assemble fails with hash mismatch | §10.12 — encryption is applied to the WHOLE concatenated body BEFORE part splitting. Accumulate all parts, then run `link.decrypt()` once | §10.12 |
+| Resource hash collisions during construction | §10.2 step 9 — collision-guard must regenerate `random_hash` and recompute the hashmap when any 4-byte map_hash collides within `COLLISION_GUARD_SIZE` window | §10.2 step 9 |
+| `ADV` for >1MiB body never resolves | §10.11 — multi-segment cutover at `MAX_EFFICIENT_SIZE = 1 MiB - 1`. Each segment is a separate Resource; sender only sends segment N+1's ADV after PRF for segment N | §10.11 |
+
+### Path discovery
+
+| Symptom | Likely cause | Fix / verifier |
+|---|---|---|
+| Path? requests sent but no announce response | §7.2.1 — tagless requests are dropped. Body must be `target_dest_hash(16) [\|\| transport_id(16)] \|\| tag(≥1)` | `tools/verify_path_request.py` |
+| Path? requests accepted by responder but I get no announce back | §7.2.6 — leaf clients only respond when `target_hash == our_destination_hash`. Don't respond for destinations you don't OWN | §7.2.6 |
+| Spurious double-announces in response to one path request | §7.2.2 — `discovery_pr_tags` dedup table missing on responder. Without it, every retransmitted path? produces another announce | §7.2.2 |
+| Sending opportunistic LXMF triggers a path? on every send, never converges | §7.1 — path? is gated by `not has_path() AND method == OPPORTUNISTIC`. If your `has_path()` always returns False, you're storming the network | §7.1 |
+
+### Transport / framing
+
+| Symptom | Likely cause | Fix / verifier |
+|---|---|---|
+| LoRa packets > 254 bytes drop entirely on RNode | §8.3 — RNode air-frame split protocol not implemented. Random seq nibble + FLAG_SPLIT bit; both halves share the same header byte | `tools/verify_rnode_split.py` |
+| RNode receives correctly but TX is silent | §8.4.2 — KISS configuration handshake incomplete. CMD_RADIO_STATE = 0x01 must be the LAST step | §8.4.2 |
+| Received RSSI/SNR values are garbage | §8.4.5 — wrong sidecar decode. `RSSI = byte - 157`, `SNR = signed Q6.2 / 4`. Sidecar frames precede each `CMD_DATA` frame | §8.4.5 |
+| Multi-hop packets arrive but local-destination packets don't | §2.3 — originator HEADER_1→HEADER_2 conversion not applied for hops > 1. Originators must do this conversion themselves when path table reports `hops > 1` | `tools/verify_packet_header.py` |
+| Sending to multi-hop peers fails silently after path table populated | §7.6 — `TCPServerInterface.OUT` is True by default in practice (constructor's `False` is overridden at runtime). Don't waste time chasing a stuck OUT flag | §7.6 |
+
+### LXMF specifics
+
+| Symptom | Likely cause | Fix / verifier |
+|---|---|---|
+| Messages from clockless devices appear at January 1, 1970 | §9.6 — substitute. Treat any timestamp before `1577836800` (2020-01-01) as "no clock"; substitute local receive time | §9.6 |
+| Modern Sideband marks my messages as spam / drops them | §5.7 — recipient requires a stamp (announced via `stamp_cost` in app_data) and your client doesn't compute one. PoW is 3000-round HKDF over `message_id`, target_cost leading zero bits | §5.7 |
+| Display name disappears after a re-announce | §9.4 — wrong name-priority order. Use `extracted ?? existing ?? known_label ?? ""`, NOT `extracted ?? known_label ?? existing ?? ""` | §9.4 |
+| Propagation node accepts messages but my client never retrieves them | §5.8.3 — `/get` request needs the link to be `identify()`-d first; otherwise it returns `ERROR_NO_IDENTITY` | `flows/receive-propagated-lxmf.md` |
+| Custom propagation node implementation rejects all client `/offer` requests | §5.8.5 — element [5] of the propagation announce app_data is a 3-element list `[stamp_cost, stamp_cost_flexibility, peering_cost]`, NOT a single integer | §5.8.5 |
+
+### Concurrency
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Links go stale even though my application is actively using them | §13.1 — your watchdog runs on the same thread as your application. Move it to a daemon thread | §13.1 |
+| Slow announce handler stalls subsequent inbound packets | §13.3 — packet callback runs synchronously on the receive thread. Queue and return; don't do I/O or PoW on the receive thread | §13.3 |
+| `link_closed_callback` fires twice for one link | §13.3 — callback fired from both watchdog timeout AND inbound LINKCLOSE paths. Make idempotent | §13.3 |
+| Two announces from the same destination produce duplicate UI rows | §13.3 — handler callbacks race on fresh threads. Lock or single-thread the writes to your contacts list | §13.3 |
+
+### When all else fails
+
+§9.9 — add a single one-line `rx <size>B H<1\|2> <PT> dest=<hex> ctx=0x<hex> hops=<n>` log at the top of your `Transport.inbound` equivalent. The number of debugging hours this saves is hard to overstate. Symmetric `tx` logging on outbound is similarly cheap.
+
+---
+
+## 15. Test vectors
 
 See [`test-vectors/`](test-vectors/). Currently populated:
 
@@ -2361,7 +2452,7 @@ An implementation that round-trips every test vector — both directions — sho
 
 ---
 
-## 15. Source map
+## 16. Source map
 
 Upstream Python sources, in rough order of frequency-of-reference:
 

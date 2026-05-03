@@ -343,7 +343,13 @@ order: top three save the most debugging hours.
       fire on which thread, what locks must be held to mutate which
       state.
 
-- [ ] **§16 (new): Failure-mode → root-cause cheatsheet.** §9 lists
+- [x] **§14 (new): Failure-mode → root-cause cheatsheet.** Done.
+      Eight tables (Identity/announce, Token crypto / opportunistic
+      LXMF, Link establishment / proofs, Resource transfers, Path
+      discovery, Transport / framing, LXMF specifics, Concurrency)
+      keyed by symptom, pointing at root-cause section + relevant
+      verifier. Closes with the §9.9 "rx-log every inbound packet"
+      diagnostic. §9 lists
       gotchas by cause; this would be the inverse-index, organised
       by symptom. Worked examples like:
         - "messages send but no PROOF returns" → §6.5
