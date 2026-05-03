@@ -288,37 +288,36 @@ re-research.
       and the `should_use_implicit_proof()` config switch are
       documented in §6.5.1-§6.5.2 with full citations.
 
-### Tier 3 — required to act as a transport node / relay
+### Tier 3 — required to act as a transport node / relay (DONE)
 
-- [ ] **SPEC.md §7.7 (new): DATA forwarding rules.** Forwarding non-
-      local DATA per `path_table[dest][NEXT_HOP]`, with hop increment,
-      MTU-fit check, blackhole avoidance, and IFAC re-signing.
-      Currently mentioned only obliquely in §2.3 / §7.6. The full
-      forwarding logic is the bulk of `RNS/Transport.py::inbound`'s
-      ~800-line dispatch table at lines 1499-1620. The repeater repo
-      patches microReticulum to enable this — see commit
-      `Add DATA and PROOF forwarding patches for transport repeating`.
-- [ ] **SPEC.md §4.6 (new): ANNOUNCE rebroadcasting.** Including the
-      announce-cap (`RNS.Reticulum.ANNOUNCE_CAP`, default 2% airtime),
-      the announce queue, the `path_responses` cache, and the
-      `random_blob` history that lets a relay drop replays. Most of
-      `RNS/Transport.py:1196-1300, 1810-1969`.
-- [ ] **SPEC.md §7.8 (new): path table management.** TTL-based expiry
-      (`Transport.AP_PATH_TIME`, `ROAMING_PATH_TIME`, `DESTINATION_TIMEOUT`),
-      eviction on stale-link, persistence-across-reboot file format.
-      Hooks: `RNS/Transport.py:747-769` (stale_paths accumulator) and
-      the `paths` file under `storagepath`.
-- [ ] **SPEC.md §7.9 (new): tunnels and shared-instance protocol.**
-      `tunnels`, `discovery_path_requests`, `RNS/Reticulum.py::is_connected_to_shared_instance`
-      — how a process talks to a co-resident `rnsd`. Spec's §7.6
-      covers one symptom (TCP OUT default) but not the actual
-      shared-instance wire format.
-- [ ] **SPEC.md §6.x (new): reverse table + link transport.** When a
-      Link's path crosses a relay, the relay must forward both
-      directions of every Link DATA + PROOF using
-      `Transport.reverse_table` (`RNS/Transport.py:2087-2204`).
-      Distinct from path-table forwarding — different lookup, different
-      lifecycle.
+All five Tier 3 items consolidated into SPEC.md §12 "Transport-relay
+behaviour" (single section, seven sub-sections) since they share state
+(path_table, announce_table, link_table, reverse_table, tunnels,
+discovery_path_requests):
+
+- [x] **DATA forwarding rules** — §12.2 covers the three-case branch
+      on remaining_hops (>1 forward as HEADER_2 with new transport_id;
+      ==1 strip transport_id and forward as HEADER_1 broadcast; ==0
+      local destination, just bump hops). LINKREQUEST gets an extra
+      link_table entry and the §6.6 MTU clamp; non-LINKREQUEST DATA
+      gets a reverse_table entry.
+- [x] **ANNOUNCE rebroadcasting** — §12.3 covers the announce_table
+      retransmit queue, per-interface ANNOUNCE_CAP throttling and
+      announce_queue, random_blob replay defence with MAX_RANDOM_BLOBS
+      sliding-window cap, and the PATH_RESPONSE short-circuit.
+- [x] **Path table management** — §12.4 covers the entry shape, three
+      TTL constants by interface mode (AP/ROAMING/default 30 days),
+      stale-paths eviction in Transport.jobs, and persistence to
+      storagepath/paths.
+- [x] **Tunnels and shared-instance protocol** — §12.6 covers
+      discovery_path_requests recursive search, the tunnels[] state
+      that survives interface flap, and the shared-instance wire
+      protocol (just regular Reticulum packets over a TCP loopback;
+      what's "shared" is the Transport state, not the wire format).
+- [x] **Reverse-table link transport** — §12.5 covers LRPROOF
+      forwarding via link_table, Link DATA forwarding in both
+      directions once the link_table entry is validated, and PROOF
+      receipt forwarding via reverse_table (one-shot pop on use).
 
 ## Spec polishing (lower priority)
 

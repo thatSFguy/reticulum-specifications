@@ -1998,7 +1998,253 @@ None of these are wire-spec — they're caller conventions on top of §13. A Ret
 
 ---
 
-## 12. Test vectors
+## 12. Transport-relay behaviour
+
+Everything in §1-§11 applies to both leaf clients and transport-mode nodes. This section covers what additionally runs on a node configured with `enable_transport = Yes` in the `[reticulum]` config — i.e. a node whose role is to forward traffic for others. Reticulum's relay is host-routed (no broadcast flooding except for path-discovery), keyed by the `path_table` populated from announces.
+
+A leaf client can ignore §12 entirely. Implementations that target the rnsd-replacement or repeater use case need every sub-section.
+
+### 12.1 The `transport_enabled` toggle
+
+`Reticulum.transport_enabled()` returns the value of the `enable_transport` config option (default `False`). Setting it to `True`:
+
+- Allows the node to populate `path_table`, `announce_table`, `link_table`, `reverse_table`, and `tunnels` for non-local destinations (a leaf only populates path entries it personally needs).
+- Enables the §12.2 DATA forwarding branches in `Transport.inbound`.
+- Enables the §12.3 ANNOUNCE rebroadcast branch.
+- Enables `Transport.identity` — the transport node's own identity, used for `transport_id` insertion in HEADER_2 packets (§2.3) and as the `requesting_transport_instance` field in path requests (§7.1).
+
+A clean-room implementation testing forwarding without operating as a real transport node SHOULD respect the same flag: ignoring the toggle and unconditionally forwarding turns every implementation into a network-flooding hazard.
+
+### 12.2 DATA forwarding rules
+
+For an inbound DATA packet (`packet_type == DATA`, `destination_type` not LINK) where:
+
+- `packet.transport_id == Transport.identity.hash` (the originator picked us as the next hop), AND
+- `packet.destination_hash` is in `Transport.path_table`,
+
+the relay rewrites the wire bytes according to `path_table[dest][HOPS]` and re-transmits on `path_table[dest][RVCD_IF]`. From `RNS/Transport.py:1497-1573`, three cases by `remaining_hops`:
+
+#### 12.2.1 `remaining_hops > 1` — forward as HEADER_2
+
+Increment hops (already done by `Transport.inbound` line 1395), replace the transport_id with the next-hop transport_id from the path table, keep the rest of the packet:
+
+```
+new_raw = packet.raw[0:1]                        # flags byte unchanged
+new_raw += struct.pack("!B", packet.hops)        # incremented hops byte
+new_raw += next_hop                              # 16B transport_id (new next hop)
+new_raw += packet.raw[18:]                       # original dest_hash + ctx + body
+```
+
+The flags byte high nibble is unchanged — the packet stays HEADER_2 with the TRANSPORT bit set. Final wire form is `flags(1) || hops+1(1) || new_transport_id(16) || dest_hash(16) || ctx(1) || body`.
+
+#### 12.2.2 `remaining_hops == 1` — strip transport headers, forward as HEADER_1 broadcast
+
+The destination is one hop away on the next-hop interface; no further transport_id is needed. Convert to HEADER_1 with BROADCAST transport type:
+
+```
+new_flags = (HEADER_1 << 6) | (BROADCAST << 4) | (packet.flags & 0x0F)
+new_raw = struct.pack("!B", new_flags)
+new_raw += struct.pack("!B", packet.hops)
+new_raw += packet.raw[18:]                       # original dest_hash + ctx + body (transport_id stripped)
+```
+
+This is the inverse of the §2.3 originator HEADER_1→HEADER_2 conversion: the relay strips the transport_id when the packet has reached its last hop.
+
+#### 12.2.3 `remaining_hops == 0` — local destination, just bump hops
+
+The destination is registered on the relay itself (it's both our path-table next-hop AND a local destination). Just increment hops and pass through unchanged for local processing — the standard `Destination.receive` path takes over from there.
+
+#### 12.2.4 LINKREQUEST forwarding extras
+
+When the forwarded packet is a `LINKREQUEST`, the relay also writes a `link_table` entry keyed by the link_id (computed via §6.3's `link_id_from_lr_packet`). Entry contents (`Transport.py:1553-1561`):
+
+```
+[ now,                            # 0  IDX_LT_TIMESTAMP
+  next_hop,                       # 1  IDX_LT_NH_ID — next-hop transport_id
+  outbound_interface,             # 2  IDX_LT_NH_IF
+  remaining_hops,                 # 3  IDX_LT_REM_HOPS
+  packet.receiving_interface,     # 4  IDX_LT_RCVD_IF
+  packet.hops,                    # 5  IDX_LT_TAKEN_HOPS
+  packet.destination_hash,        # 6  IDX_LT_DSTHASH
+  False,                          # 7  IDX_LT_VALIDATED
+  proof_timeout ]                 # 8  IDX_LT_PROOF_TMO
+```
+
+This entry is what lets the relay forward the eventual LRPROOF back to the initiator on the reverse path (§12.5) and forward subsequent Link DATA in both directions.
+
+The relay also performs the §6.6 MTU clamp at this point: if the LINKREQUEST carries signalling and the next-hop interface's HW_MTU is smaller than the requested value, the signalling bytes in `new_raw` are rewritten in place with the clamped MTU before transmission.
+
+#### 12.2.5 Non-LINKREQUEST DATA — reverse_table entry
+
+For any other forwarded DATA (the much-more-common opportunistic LXMF case), the relay writes a `reverse_table` entry keyed by `packet.getTruncatedHash()` (`Transport.py:1567-1571`):
+
+```
+[ packet.receiving_interface,    # 0  IDX_RT_RCVD_IF — interface to send PROOF back through
+  outbound_interface,            # 1  IDX_RT_OUTB_IF — interface forward was sent on
+  time.time() ]                  # 2  IDX_RT_TIMESTAMP
+```
+
+The reverse_table is what lets the eventual PROOF receipt (§6.5) trace its way back to the originator without consulting the path_table again — see §12.5.
+
+### 12.3 ANNOUNCE rebroadcasting
+
+When an inbound ANNOUNCE validates (per §4.5) AND the destination is non-local AND `transport_enabled OR is_from_local_client`, the relay queues a rebroadcast. From `Transport.py:1810-1890`:
+
+```python
+if (Reticulum.transport_enabled() or is_from_local_client) and packet.context != PATH_RESPONSE:
+    if not rate_blocked:
+        Transport.announce_table[packet.destination_hash] = [
+            now, retransmit_timeout, retries,
+            received_from, announce_hops, packet,
+            local_rebroadcasts, block_rebroadcasts, attached_interface,
+        ]
+```
+
+The `announce_table` entry queues a delayed retransmit; the actual emission happens in the periodic `Transport.jobs` cycle which scans the table for entries whose `retransmit_timeout` has elapsed and fires them on each suitable interface.
+
+#### 12.3.1 Announce cap (`ANNOUNCE_CAP`)
+
+`Reticulum.ANNOUNCE_CAP = 2.0` (default 2% of airtime, configurable via `[reticulum] announce_cap`). Each interface tracks its outbound announce airtime and when the rolling-window utilization exceeds the cap, further announces are queued in `interface.announce_queue` rather than transmitted immediately. `process_announce_queue` (`RNS/Interfaces/Interface.py:232-272`) drains the queue at a rate the cap permits, picking the lowest-hop-count entry first.
+
+The cap is per-interface, not global — a relay with multiple interfaces budgets each one independently, which lets a fast TCP backbone interface announce freely while the same node throttles announces on a slow LoRa interface. Without per-interface caps, a single high-rate interface would starve every other.
+
+#### 12.3.2 `random_blob` replay defence
+
+§4.5 step 6.3 already documents this from the receiver's perspective; for the rebroadcast logic, the relay only queues an announce if the new `random_blob` (the 10-byte `random_hash` field, treated as an opaque blob for routing purposes) is **not** already in the cached `random_blobs` list for this destination. The list is capped at `Transport.MAX_RANDOM_BLOBS` (default 32) entries, sliding-window. This prevents an announce from looping through a multi-relay topology because each relay only forwards each unique blob once.
+
+#### 12.3.3 Path-response announces don't rebroadcast
+
+`packet.context == PATH_RESPONSE` short-circuits the rebroadcast branch (line 1822). Path-response announces travel back along the reverse path from the responder to the requester (see §7.2 and `flows/path-discovery.md`), and the relay's job is to forward them on a single specific interface (`attached_interface`), not re-broadcast to the whole mesh. Mishandling this would multiply path-response traffic by the relay fanout.
+
+### 12.4 Path table management
+
+`Transport.path_table[destination_hash]` entry shape (`Transport.py:3439-3446`):
+
+```
+[ timestamp,                # 0  IDX_PT_TIMESTAMP — when last refreshed
+  next_hop,                 # 1  IDX_PT_NEXT_HOP — 16B transport_id of next hop
+  hops,                     # 2  IDX_PT_HOPS — distance to destination
+  expires,                  # 3  IDX_PT_EXPIRES — unix-seconds eviction time
+  random_blobs,             # 4  IDX_PT_RANDBLOBS — sliding window of recent blobs
+  receiving_interface,      # 5  IDX_PT_RVCD_IF — interface to forward on
+  packet ]                  # 6  IDX_PT_PACKET — cached announce packet for path-? response
+```
+
+#### 12.4.1 TTLs
+
+Three different expiry constants based on the `attached_interface.mode`:
+
+| Mode | TTL constant | Default seconds | Used for |
+|---|---|---|---|
+| `MODE_ACCESS_POINT` | `Transport.AP_PATH_TIME` | 1 hour | Hub-and-spoke topologies (TCP servers, BLE gateways) |
+| `MODE_ROAMING` | `Transport.ROAMING_PATH_TIME` | 4 hours | Mobile devices that disappear and reappear |
+| (default) | `Transport.PATHFINDER_E` | 30 days | Stable backbone interfaces |
+
+The wide spread of defaults reflects expected churn rates: AP-mode interfaces have many short-lived clients; roaming devices come and go; backbone TCP relays are essentially permanent.
+
+#### 12.4.2 Eviction
+
+`Transport.jobs` runs a `stale_paths` accumulator that walks `path_table` and pops entries whose `expires` timestamp has passed (`Transport.py:747-769`). Eviction is silent — no notification to the application; the next outbound message to the destination just re-discovers it via `request_path` per §7.1.
+
+A relay also evicts path entries whose underlying interface has been removed (`receiving_interface not in Transport.interfaces`). This handles the case where a TCP client disconnects.
+
+#### 12.4.3 Persistence
+
+If `[reticulum] persist_paths = Yes`, the path_table is serialized to `{storagepath}/paths` (a pickled dict in upstream RNS) so it survives restarts. The repeater repo's `pre_build.py` adds a "skip redundant path writes" patch to avoid hammering the on-board flash on nRF52 — for clean-room implementations, the persistence cadence is implementation-private.
+
+### 12.5 Reverse-table link transport
+
+Once a Link's LINKREQUEST has been forwarded by a relay (§12.2.4 wrote the `link_table` entry), every subsequent Link packet — DATA, KEEPALIVE, PROOF, LINKCLOSE — must be forwarded by the same relay in the appropriate direction. `Transport.inbound` uses `link_table` and `reverse_table` for this:
+
+#### 12.5.1 LRPROOF forwarding
+
+When an LRPROOF arrives whose `dest_hash` (= link_id) is in the relay's `link_table` AND the proof arrives on the next-hop interface (`packet.receiving_interface == link_entry[IDX_LT_NH_IF]`), the relay validates the signature against the destination's known long-term public key (recalled via `Identity.recall(link_entry[DSTHASH])`) and forwards on the receive interface (`Transport.py:2110-2138`):
+
+```python
+new_raw = packet.raw[0:1] + struct.pack("!B", packet.hops) + packet.raw[2:]
+Transport.transmit(link_entry[IDX_LT_RCVD_IF], new_raw)
+link_table[packet.destination_hash][IDX_LT_VALIDATED] = True
+```
+
+After validation, the link_table entry is marked `validated`, and from now on the relay forwards Link DATA in both directions transparently.
+
+#### 12.5.2 Link DATA forwarding
+
+For a `DATA` packet with `destination_type == LINK` whose `dest_hash` is in `link_table`, the relay forwards on the appropriate direction's interface. The link_table entry remembers both sides via `IDX_LT_NH_IF` (toward initiator end) and `IDX_LT_RCVD_IF` (toward responder end); the relay picks based on which interface the inbound packet arrived on.
+
+#### 12.5.3 PROOF receipt forwarding via `reverse_table`
+
+`Transport.py:2196-2205`. When a PROOF arrives whose `dest_hash` is in `reverse_table` (i.e. an opportunistic-DATA proof being routed back to its originator), the relay pops the entry, checks the proof arrived on the correct outbound interface (`receiving_interface == reverse_entry[IDX_RT_OUTB_IF]`), and forwards on the originally-receiving interface:
+
+```python
+new_raw = packet.raw[0:1] + struct.pack("!B", packet.hops) + packet.raw[2:]
+Transport.transmit(reverse_entry[IDX_RT_RCVD_IF], new_raw)
+```
+
+Reverse_table entries are popped on use (one-shot routing) and aged out by `Transport.jobs` after `Transport.REVERSE_TIMEOUT` (default `30s`). This bounds the relay's memory regardless of whether the proof ever arrives.
+
+### 12.6 Tunnels and shared-instance protocol
+
+Two related state mechanisms a transport node maintains:
+
+#### 12.6.1 `discovery_path_requests`
+
+When a transport-enabled relay receives a path? for a destination it doesn't know AND doesn't have a local client to forward to, it records a `discovery_path_requests[dest_hash]` entry (`Transport.py:2949-2963`):
+
+```python
+pr_entry = {
+    "destination_hash": destination_hash,
+    "timeout": time.time() + PATH_REQUEST_TIMEOUT,    # 15s
+    "requesting_interface": attached_interface,
+}
+Transport.discovery_path_requests[destination_hash] = pr_entry
+```
+
+Then forwards the path? to every other interface preserving the original tag. This is recursive transport-mode discovery — the relay is acting as a search proxy. When the response announce eventually arrives back, the relay forwards it on `requesting_interface` (the one the original path? came from), and the entry is aged out.
+
+#### 12.6.2 `tunnels`
+
+A tunnel is an interface-level path mechanism for handling temporarily-disconnected interfaces (e.g. a mobile peer that comes and goes). The `tunnels[interface_tunnel_id]` state lets the relay reconstruct paths through the interface when it reconnects, without requiring all paths to be re-discovered from scratch. The shape (`Transport.py:783-832`):
+
+```
+[ now,                                       # 0  IDX_TT_TIMESTAMP
+  expires,                                   # 1  IDX_TT_EXPIRES — TUNNEL_TIMEOUT
+  paths_dict,                                # 2  IDX_TT_PATHS — dest_hash → path-entry
+  ... ]
+```
+
+Each path inside the tunnel's `paths_dict` mirrors a `path_table` entry. When the tunnel's interface returns, the relay re-installs every path from the tunnel into the active `path_table`, jump-starting connectivity. Without this, every reconnection would require a full announce flood across the mesh.
+
+`TUNNEL_TIMEOUT` defaults to substantially longer than path TTLs because tunnels persist across interface flap.
+
+#### 12.6.3 Shared-instance protocol
+
+When multiple processes on one host share a single Reticulum stack (via `share_instance = Yes` in the rnsd config), one process owns `Transport` and the others connect to it as **local clients** via a small TCP loopback interface. The shared instance treats local-client traffic specially:
+
+- `from_local_client` and `for_local_client` are computed on every inbound packet (`Transport.py:1450-1454`).
+- Path-table entries with `IDX_PT_HOPS == 0` mean "destination is a local client" — the §2.3 originator-side HEADER_1 conversion applies for hops==1 too, so the shared instance gets a transport_id-tagged packet (`Transport.py:1094-1105`).
+- Local-client originated path? requests are forwarded to every external interface, fanning out the search across the shared mesh (§7.2 dispatch branch 3).
+
+The wire protocol for shared-instance loopback is just the same Reticulum packets over a TCP loopback interface — no special framing or commands. What's "shared" is the path_table and announce dispatch, not the wire format.
+
+### 12.7 Source map for §12
+
+| File | What |
+|---|---|
+| `RNS/Transport.py:1497-1573` | DATA forwarding (HEADER_1↔HEADER_2 conversion for relay) |
+| `RNS/Transport.py:1553-1561` | `link_table` entry shape |
+| `RNS/Transport.py:1567-1571` | `reverse_table` entry shape |
+| `RNS/Transport.py:1810-1969` | ANNOUNCE rebroadcast queue and per-interface dispatch |
+| `RNS/Transport.py:2110-2138` | LRPROOF forwarding via `link_table` |
+| `RNS/Transport.py:2196-2205` | PROOF receipt forwarding via `reverse_table` |
+| `RNS/Transport.py:3439-3446` | `path_table` entry shape (IDX_PT_*) |
+| `RNS/Transport.py:747-832` | stale-path / stale-tunnel eviction |
+| `RNS/Transport.py:2949-2963` | `discovery_path_requests` recursive search |
+| `RNS/Interfaces/Interface.py:232-272` | per-interface `announce_queue` and `ANNOUNCE_CAP` enforcement |
+
+---
+
+## 13. Test vectors
 
 See [`test-vectors/`](test-vectors/). Currently populated:
 
@@ -2010,7 +2256,7 @@ An implementation that round-trips every test vector — both directions — sho
 
 ---
 
-## 13. Source map
+## 14. Source map
 
 Upstream Python sources, in rough order of frequency-of-reference:
 
