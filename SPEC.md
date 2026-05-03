@@ -2791,7 +2791,50 @@ For comparison: a desktop `rnsd` typically settles around 50-200 MB of memory in
 
 ---
 
-## 17. Test vectors
+## 17. Implementation taxonomy: who needs which sections
+
+Reticulum applications fall into three categories. **Most of this spec only matters if you're in category 3.** Categories 1 and 2 inherit upstream Python RNS's protocol implementation and pick up most of the wire-level correctness for free.
+
+This section exists to save category-1/2 readers from over-engineering, and to flag for category-3 readers exactly which spec sections are theirs to implement vs. theirs to verify against.
+
+### 17.1 The three categories
+
+| Category | Description | Examples |
+|---|---|---|
+| **1: Upstream-RNS-based** | Python application that does `import RNS` and uses upstream's `Reticulum` / `Transport` / `Identity` / `Destination` / `Packet` / `Link` directly. Inherits all wire-level behavior from upstream. | Sideband (Mark Qvist's flagship), NomadNet, [`liamcottle/reticulum-meshchat`](https://github.com/liamcottle/reticulum-meshchat), `rncp`, `rnsh`, `rnstatus`, anything in `pip show rns` example code |
+| **2: Wrappers / language bindings** | Non-Python application whose Reticulum protocol layer is a wrapper around upstream Python RNS — typically via FFI, subprocess, or a network bridge to a co-resident `rnsd`. Inherits wire correctness from the wrapped layer. | Future native iOS / Android / desktop apps that embed CPython, `rnsh` clients in shell scripts, anything that uses `rnsd`'s socket interface |
+| **3: Clean-room implementations** | Application that re-implements the Reticulum protocol layer in another language without calling into upstream. Bears full responsibility for wire-level correctness. | `attermann/microReticulum` (C++), `thatSFguy/reticulum-lora-repeater` (C++ via microReticulum), reticulum-mobile-app (Kotlin), reticulum-lora-webclient (JavaScript), any from-scratch implementation in Rust / Go / Swift / etc. |
+
+### 17.2 Section relevance by category
+
+Three classes of section in this spec:
+
+| Class | What it tells you | Cat 1 | Cat 2 | Cat 3 |
+|---|---|---|---|---|
+| **Wire format** (§1-§8, §10, §11) | What bytes appear on the wire and in what order | Reference only — you emit and parse correctly because upstream does | Reference only — your wrapper does the work | **You implement these.** Bug here → can't talk to anyone |
+| **Implementation gotchas** (§9) | Things upstream does that surprise you when reading the manual | **Yes** — because the gotchas often manifest as application-layer behaviour you need to explain to users | **Yes** — same reason | **Yes** — and you need to reproduce the gotchas faithfully or peers reject your traffic |
+| **Behavioural guidance** (§7, §12, §13, §14, §15, §16) | Threading, timing, transport-relay, memory caps, failure debug | Mostly informational — upstream handles it | Mostly informational | **Critical** — you implement everything here from scratch |
+| **Test vectors / verifiers** (§18, `tools/`) | Round-trip-able byte sequences | Reference for understanding | Reference for understanding | **Required** — these are your regression suite |
+
+### 17.3 Worked example: §2.3 originator HEADER_1→HEADER_2 conversion
+
+A reader hitting §2.3 might wonder "do I need this?" Three different answers:
+
+- **Cat 1 (e.g. MeshChat, Sideband):** No — `RNS.Transport.outbound` at lines 1074-1083 does the conversion automatically when you call `Packet.send()` to a destination with `path_table[dest][HOPS] > 1`. Your app just calls `LXMessage.send()` or `Packet.send()` and §2.3 happens invisibly. You can read §2.3 to understand WHY some captures show HEADER_2 with a transport_id, but you have no code to write.
+- **Cat 2 (wrappers):** Same as Cat 1 — the wrapped Python RNS does the conversion. Your wrapper is just relaying API calls.
+- **Cat 3 (clean-room):** **Yes, you implement §2.3 yourself.** Failure to do so means your packets aren't forwarded by transit relays — they're processed and dropped silently per `Transport.py:1497` (only HEADER_2 packets with `transport_id == relay.identity.hash` enter the forwarding branch). The symptom is "messages I send through a relay never arrive, but direct-link messages do." Sideband works in shared-instance and direct-TCP modes both because **upstream** does the conversion; a clean-room app working only via shared-instance is masking the missing §2.3.
+
+### 17.4 Pragmatic implication
+
+If you're a category-1 or category-2 developer reading this spec for **operational understanding** — debugging an interop issue, writing a deployment guide, explaining behaviour to users — read §1-§9 and §13-§16; skip the implementation depth.
+
+If you're a category-3 developer building from scratch, you need everything. Verify each section as you go using `tools/verify_*.py`, and treat §14 (failure modes) as your fault-finding entry point when integration testing reveals a discrepancy.
+
+If you're not sure which category you're in: `grep -r "import RNS" your_codebase` is a quick check. Any hit means cat 1 (or cat 2 if it's behind an FFI wall). No hits means cat 3.
+
+---
+
+## 18. Test vectors
 
 See [`test-vectors/`](test-vectors/). Currently populated:
 
@@ -2803,7 +2846,7 @@ An implementation that round-trips every test vector — both directions — sho
 
 ---
 
-## 18. Source map
+## 19. Source map
 
 Upstream Python sources, in rough order of frequency-of-reference:
 
