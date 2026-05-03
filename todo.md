@@ -10,6 +10,19 @@ Outstanding work for the spec repo.
       official Reticulum manual. Frame it as a complement to (not a
       replacement for) the existing operator-focused docs.
 
+- [ ] **File a `random_hash` interop issue on `attermann/microReticulum`.**
+      `src/Destination.cpp:270-272` emits 10 fully-random bytes
+      where upstream Python emits 5 random + 5 BE-uint40 unix_seconds
+      (§4.1, §9.10). Effect: Python RNS path-table replacement
+      `RNS/Transport.py:1721-1745` rejects fresh announces from
+      Python sources as "stale" once a microReticulum announce has
+      populated the random_blob set, because the random tail is
+      interpreted as a far-future timestamp. Workaround documented
+      in §9.10; the durable fix is implementing the TODO comment in
+      the upstream source — even seconds-since-boot is preferable
+      to random bytes since path-table comparisons care about
+      ordering, not absolute time.
+
 ## Test infrastructure
 
 - [x] **Bootstrap `test-vectors/identities.json`** — Alice + Bob

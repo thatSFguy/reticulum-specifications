@@ -189,6 +189,16 @@ random_hash = RNS.Identity.get_random_hash()[0:5] + int(time.time()).to_bytes(5,
 
 Transit relays read the timestamp portion via `Transport.timebase_from_random_blob(random_blob) = int.from_bytes(random_blob[5:10], "big")` (`RNS/Transport.py:3100-3101`) to make ordering decisions when an inbound announce carries a higher hop count than the cached path: only newer-emitted announces can refresh the path table (see §4.5). 5 bytes of seconds covers ~34,000 years, so wraparound is not a near-term concern. Implementations MUST emit this exact format, including a clock value that's monotonically non-decreasing across announces from the same destination — clockless sender devices (per §9.6) may end up locked out of long-range path table updates.
 
+> ⚠️ **UNVERIFIED — Known deviation:** `attermann/microReticulum/src/Destination.cpp:270-272` (and therefore every project that uses microReticulum unmodified, including [`thatSFguy/reticulum-lora-repeater`](https://github.com/thatSFguy/reticulum-lora-repeater) and the Faketec sibling project) currently emits 10 fully-random bytes for `random_hash` — the timestamp half is a TODO that never landed:
+>
+> ```cpp
+> //p random_hash = Identity::get_random_hash()[0:5] << int(time.time()).to_bytes(5, "big")
+> // CBA TODO add in time to random hash
+> Bytes random_hash = Cryptography::random(Type::Identity::RANDOM_HASH_LENGTH/8);
+> ```
+>
+> Python RNS receivers interpret `random_hash[5:10]` as a big-endian uint40 unix_seconds. A uniformly-random uint40 has median value ~5.5×10¹¹ ≈ year 19403 AD, so a microReticulum announce will (with overwhelming probability) appear "far-future" to a Python receiver. Effect: once one such announce populates `path_table[dest][IDX_PT_RANDBLOBS]`, the equal-or-greater-hop branch at `RNS/Transport.py:1721-1745` will reject any real-timestamped announce as "stale" until the path TTL expires. First-contact path-table population is unaffected; the bug only surfaces on path replacement under §4.5 step 6.3. The microReticulum receive side does NOT consult the timestamp half so microReticulum-to-microReticulum traffic is unaffected. The repeater repo's `pre_build.py` patches several microReticulum protocol bugs but not this one (as of [`thatSFguy/reticulum-lora-repeater@95823ad`-vintage upstream](https://github.com/thatSFguy/reticulum-lora-repeater)). Verifying by capture-and-decode against an actual mixed-vendor mesh is the work that would let this callout be removed.
+
 The optional 32-byte `ratchet_pub` (an X25519 public key) is present iff the packet header's `context_flag` bit is 1. Indexing through this layout accordingly is mandatory; see `RNS/Identity.py::validate_announce` for the canonical parser.
 
 ### 4.2 Signed data
@@ -821,6 +831,20 @@ rx <size>B H<1|2> <PT> dest=<hex> ctx=0x<hex> hops=<n>
 ```
 
 logged before any filtering converts hours of "messages aren't arriving" debugging to seconds. Without it, packets dropped by `if (dest != ours) return` vanish silently and look identical to "the bytes never arrived". Symmetric `tx` logging on outbound is similarly cheap insurance.
+
+### 9.10 microReticulum `random_hash` lacks the timestamp half
+
+Real interop bug to plan around: `attermann/microReticulum`'s `Destination::announce` emits 10 fully-random bytes for the announce `random_hash` field rather than the upstream Python form of `5 random bytes || big-endian uint40 unix_seconds` (see §4.1). The Python form is preserved as a comment in the C++ source with a `TODO add in time to random hash` next to it; the timestamp half was never implemented.
+
+Effect on a mixed-vendor mesh: a Python RNS receiver parses `random_hash[5:10]` of a microReticulum announce as a far-future timestamp (median ~year 19403 AD because the random uint40 is uniformly distributed across `0..2^40-1`). The path-table replacement rule at `RNS/Transport.py:1721-1745` rejects subsequent real-timestamped announces from Python sources as "stale" until the path TTL expires.
+
+Symptom: a microReticulum repeater works fine when it's the only path; in a mesh that also has Python relays, paths "stick" to the microReticulum side even when shorter / fresher Python paths come up, until natural TTL expiry. First-contact path-table population is unaffected — the bug only surfaces on path replacement.
+
+Workarounds when building a clean-room implementation that talks to a microReticulum mesh:
+- Emit the upstream form yourself (you have a clock — even seconds-since-boot is preferable to random bytes; the path-table comparison only cares about ordering, not absolute time).
+- If you receive a uint40 timestamp that's more than, say, 24 hours in the future, treat it as suspect — but be cautious because legitimate Python senders with skewed clocks could trip this.
+
+The repeater repo's `pre_build.py` patches several other microReticulum protocol bugs (ratchet announce parsing, identity hash length 16→32, DATA/PROOF forwarding) but does not patch this one. Filing an upstream issue against `attermann/microReticulum` to land the original Python timestamp form is the durable fix.
 
 ---
 
