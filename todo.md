@@ -325,7 +325,12 @@ The following aren't strictly wire-format issues — they're things that
 bite anyone building a clean-room client. Listed in rough priority
 order: top three save the most debugging hours.
 
-- [ ] **§15 (new): Threading / concurrency model.** Reticulum is
+- [x] **§13 (new): Threading / concurrency model.** Done in §13.
+      Five sub-sections covering long-running threads (jobloop,
+      count_traffic, per-link watchdog, per-resource watchdog,
+      per-interface RX, per-handler dispatch), full lock inventory
+      table, callback-thread guarantees with race notes, and
+      implementation-private timing constants. (Reticulum is
       heavily threaded: `Transport.jobs` periodic loop, per-Link
       watchdog daemon threads, per-Resource transfer threads,
       announce-handler callbacks fire on fresh daemon threads,

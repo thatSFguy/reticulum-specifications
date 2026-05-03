@@ -2246,7 +2246,110 @@ The wire protocol for shared-instance loopback is just the same Reticulum packet
 
 ---
 
-## 13. Test vectors
+## 13. Threading and concurrency model
+
+The wire spec is silent on threading, but a clean-room client built single-threaded mostly works for opportunistic LXMF and starts breaking on Resource transfers and Link keepalives. This is consistently the #1 cause of "my client compiles and almost works but is flaky." Everything below is **implementation-private** — there's no wire requirement to use threads, only to satisfy the timing guarantees that upstream's threading provides. But the upstream Python implementation is highly concurrent; an alternative implementation that wants to interop has to provide the same guarantees, however it achieves them.
+
+### 13.1 Long-running threads
+
+Upstream RNS spawns the following persistent daemon threads at `Transport.start()`:
+
+| Thread | Source | Cadence | Purpose |
+|---|---|---|---|
+| **`Transport.jobloop`** | `RNS/Transport.py:280, 483-486` | every `job_interval = 0.250s` | Runs `Transport.jobs()` — the catch-all maintenance pass: link state checks, announce-queue drain, stale-path eviction, hashlist cleanup, reverse-table cleanup, tunnels housekeeping. |
+| **`Transport.count_traffic_loop`** | `RNS/Transport.py:281, 449-480` | every 1s | Snapshots per-interface RX/TX byte counters into rolling-window deques for bandwidth/airtime accounting. |
+| **`Link.__watchdog_job`** | `RNS/Link.py:746-821` | per-link, RTT-driven | One per active Link. Drives keepalive emission (initiator side), STALE→CLOSED transitions, and link-establishment timeouts. Sleeps `min(WATCHDOG_MAX_SLEEP=5s, RTT-derived)` between iterations. |
+| **`Resource.__watchdog_job`** | `RNS/Resource.py:564-642` | per-resource | One per in-progress Resource. Detects retransmit timeouts, advertisement retries, and PRF-wait timeouts. |
+| **`AnnounceHandler` callbacks** | `RNS/Transport.py:1995-2016` | per inbound announce | Each accepted announce fires its registered handler **on a fresh daemon thread** — the dispatcher does not serialize. Two announces from the same destination back-to-back run two handler threads concurrently. |
+| **Per-interface RX threads** | `RNS/Interfaces/*Interface.py` | always | Each interface (TCP, KISS, RNode, AutoInterface) has its own blocking-read RX thread that calls `Transport.inbound(raw, self)` on each complete frame. |
+| **`process_announce_queue`** | `RNS/Interfaces/Interface.py:266-267` | one-shot timer per drain | Per-interface `announce_queue` drain uses `threading.Timer` to schedule the next emission at the airtime-cap-derived wait time. Not a long-running thread but a chain of one-shots. |
+| **`Resource.__advertise_job`** | `RNS/Resource.py:520-541` | per-resource | One-shot daemon thread that performs the resource hashmap construction (which can take seconds on a large body) so the calling thread doesn't block. |
+
+A clean-room implementation with cooperative scheduling (e.g. asyncio, embedded RTOS task model) needs to provide equivalent behavior for each row. The key invariants — not the exact thread inventory — are what matter for interop:
+
+- The watchdog must run independently of the calling code, or links go stale silently when the application is busy.
+- Announce-handler callbacks must NOT block subsequent inbound packet dispatch. If your handler runs synchronously on the receive thread, a slow handler stalls every other inbound traffic.
+- The job loop must run regardless of inbound traffic; otherwise `path_table` doesn't evict stale entries, `discovery_path_requests` doesn't time out, and the announce_table doesn't drain its queued retransmits.
+
+### 13.2 Lock inventory
+
+Upstream uses about 30 named locks. The shared-state ones a clean-room implementation must guard equivalently (or substitute single-threaded equivalent):
+
+| Lock | Guards |
+|---|---|
+| `Transport.path_table_lock` | `Transport.path_table` reads and writes |
+| `Transport.announce_table_lock` | `Transport.announce_table` reads and writes |
+| `Transport.link_table_lock` | `Transport.link_table` (transit-relay link forwarding state) |
+| `Transport.reverse_table_lock` | `Transport.reverse_table` (PROOF reverse-routing state) |
+| `Transport.active_links_lock` | `Transport.active_links` list |
+| `Transport.pending_links_lock` | `Transport.pending_links` list |
+| `Transport.tunnels_lock` | `Transport.tunnels` |
+| `Transport.destinations_map_lock` | `Transport.destinations_map` (local destinations registered for receive) |
+| `Transport.announce_handler_lock` | `Transport.announce_handlers` list |
+| `Transport.path_requests_lock` | `Transport.path_requests` rate-limiting cache |
+| `Transport.discovery_pr_tags_lock` | `Transport.discovery_pr_tags` dedup |
+| `Transport.jobs_lock` | held for the entire `jobs()` body — long-held, blocking |
+| `Identity.known_destinations_lock` | `Identity.known_destinations` dict reads/writes |
+| `Identity.ratchet_persist_lock` | ratchet persistence file I/O |
+| `Link.watchdog_lock` | per-link gate; the watchdog `wait`s on this when the link is in the middle of a state change |
+| `Link.receive_lock` | per-link inbound packet processing |
+| `Resource.assembly_lock` | per-resource gate around assemble() |
+| `Destination.ratchet_file_lock` | per-destination ratchet file I/O |
+
+`Transport.jobs_lock` is the most aggressive — it's held for the **entire** `jobs()` execution (which can include I/O for path persistence, announce queue draining, etc.). This is what bounds how often `jobs()` can run; you can't pile up parallel jobs() invocations even if `job_interval` elapses while one is running.
+
+### 13.3 Callback-thread guarantees (and lack thereof)
+
+What upstream **guarantees** to application-level callbacks:
+
+- **`Destination.set_packet_callback`** — fires once per inbound DATA, on the receive thread. **Synchronous.** A slow callback stalls subsequent inbound packet dispatch on the same interface.
+- **`Link.set_link_established_callback`** — fires once when a link transitions PENDING → ACTIVE. On the receive thread.
+- **`Link.set_link_closed_callback`** — fires once when a link transitions to CLOSED, regardless of cause (timeout, peer close, local teardown). On the watchdog thread or the receive thread depending on which path triggered the close.
+- **`PacketReceipt.set_delivery_callback`** — fires once when a PROOF arrives matching this receipt. On the receive thread.
+- **`AnnounceHandler.received_announce`** — fires once per accepted announce, **on a fresh daemon thread**. This is the only callback that's NOT on the receive thread (`Transport.py:1995-2016`).
+- **`Resource.callback`** — fires once on resource conclude, on the assembly thread.
+
+Implications for a clean-room implementation:
+
+1. **Don't block on the receive thread.** A `set_packet_callback` that does I/O or PoW work blocks every other inbound packet on the same interface until it returns. The standard pattern is: copy the data out, hand it to a worker queue, return immediately.
+2. **Announce handlers race.** Two callbacks for the same destination can run concurrently; if your handler mutates shared state (a contacts list, a UI), use a lock or single-thread the writes.
+3. **Link-closed can fire from two paths.** Watchdog timeout or peer LINKCLOSE both call `link_closed_callback`. Make the callback idempotent.
+
+### 13.4 Implementation-private constants
+
+These are not on the wire but affect timing-sensitive interop. A client that uses radically different values may diverge from upstream's behavior in subtle ways:
+
+| Constant | Default | Notes |
+|---|---|---|
+| `Transport.job_interval` | `0.250s` | Quarter-second cadence of `jobs()`. |
+| `Transport.links_check_interval` | `1.0s` | Throttles inside `jobs()`; links are scanned at most every 1s. |
+| `Transport.tables_cull_interval` | `5.0s` | Throttles path/reverse/link table eviction inside `jobs()`. |
+| `Transport.hashlist_maxsize` | `1000000` | Packet-hash dedup ring; once full, half is purged on next `jobs()`. |
+| `Link.WATCHDOG_MAX_SLEEP` | `5s` | Cap on link watchdog sleep regardless of RTT. |
+| `Resource.WATCHDOG_MAX_SLEEP` | `1s` | Resource watchdog cadence cap. |
+| `Resource.PROCESSING_GRACE` | `1.0s` | Grace before a resource is considered timed out. |
+| `Resource.SENDER_GRACE_TIME` | `10.0s` | End-of-transfer grace if some parts haven't been requested. |
+
+A client running on a constrained device (less RAM, slower CPU) can scale all of these up — at the cost of slower path-table responsiveness and slightly later timeout decisions. Don't scale them down unless you've actually measured your platform; below ~100 ms `job_interval` upstream Python burns measurable CPU just on the bookkeeping passes.
+
+### 13.5 Source map
+
+| File | What |
+|---|---|
+| `RNS/Transport.py:280-281` | top-level thread spawn at startup |
+| `RNS/Transport.py:128-148` | the lock inventory (Transport-side) |
+| `RNS/Transport.py:172, 175, 186` | `job_interval`, `links_check_interval`, `tables_last_culled` |
+| `RNS/Transport.py:483-486` | `jobloop` — the periodic driver |
+| `RNS/Transport.py:489+` | `jobs()` body (held under `jobs_lock`) |
+| `RNS/Transport.py:1995-2016` | announce-handler dispatch (fresh thread per callback) |
+| `RNS/Link.py:746-821` | per-link `__watchdog_job` |
+| `RNS/Resource.py:564-642` | per-resource `__watchdog_job` |
+| `RNS/Resource.py:520-541` | one-shot `__advertise_job` |
+| `RNS/Interfaces/*Interface.py` | per-interface RX thread |
+
+---
+
+## 14. Test vectors
 
 See [`test-vectors/`](test-vectors/). Currently populated:
 
@@ -2258,7 +2361,7 @@ An implementation that round-trips every test vector — both directions — sho
 
 ---
 
-## 14. Source map
+## 15. Source map
 
 Upstream Python sources, in rough order of frequency-of-reference:
 
