@@ -292,30 +292,39 @@ Both initiator-side keys are **fresh ephemeral keys** (not the initiator's long-
 
 ### 6.2 LRPROOF (responder → initiator)
 
-A `packet_type = PROOF (3)` with `context = 0xff`, addressed to the initiator's transport_id (or to `link_id` when 1 hop away). Body:
+A `packet_type = PROOF (3)` with `context = 0xff`, addressed to the link itself — i.e. `dest_hash` in the packet header is the 16-byte `link_id` (`RNS/Packet.py:182-184`: when context is `LRPROOF`, `header += destination.link_id` and the body is appended unencrypted).
+
+Body (`proof_data` at `RNS/Link.py:376`):
 
 ```
-link_id(16) || responder_X25519_pub(32) || signature(64) || [signalling(3)]
+signature(64) || responder_X25519_pub(32) || [signalling(3)]
 ```
 
-Only the responder's X25519 is fresh-ephemeral; the responder signs with its **long-term** Ed25519 private key (asymmetric with the initiator). Signature input:
+Only the responder's X25519 is fresh-ephemeral; the responder signs with its **long-term** Ed25519 private key (asymmetric with the initiator). The responder's long-term Ed25519 public key is **not** sent on the wire — both sides already know it from the responder's prior announce, and it is included implicitly in the signature input. Signature input (`RNS/Link.py:373` for the signer, `:417` for the validator):
 
 ```
 signed_data = link_id || responder_X25519_pub || responder_long_term_Ed25519_pub || [signalling]
 ```
 
+The full wire packet is therefore: `flags(1) || hops(1) || link_id(16) || context=0xff(1) || signature(64) || responder_X25519_pub(32) || [signalling(3)]`.
+
 ### 6.3 link_id derivation
 
 ```
 link_id = SHA256(hashable_part_of_LINKREQUEST_packet)[:16]
-
-hashable_part = (flags & 0x0F) || raw[N:]
-   where N = 18 for HEADER_1, 34 for HEADER_2
 ```
 
-The "hashable part" deliberately strips `header_type`, `context_flag`, `transport_type` (top 4 bits of flags — modifiable by transit relays) and the `hops` byte (modified by every relay). This produces the same `link_id` whether computed at the initiator (HEADER_1) or at the responder (HEADER_2 if the LINKREQUEST went through a relay) — both sides agree on the 16-byte ID.
+`hashable_part` is built by `Packet.get_hashable_part` (`RNS/Packet.py:354-361`):
 
-For LINKREQUEST packets specifically, the trailing 3 signalling bytes (if present, indicated by body length > 64) are stripped from the END of `hashable_part` before hashing.
+```
+hashable_part = byte(flags & 0x0F) || raw[N:]
+   where N = 2  for HEADER_1   (strip flags + hops)
+         N = 18 for HEADER_2   (strip flags + hops + transport_id)
+```
+
+The "hashable part" deliberately strips `header_type`, `context_flag`, `transport_type` (top 4 bits of flags — modifiable by transit relays), the `hops` byte (modified by every relay), and (for HEADER_2) the `transport_id` (added by the originator and re-written by each relay). What remains in both cases is the low nibble of flags + dest_hash + context + body, so the resulting `link_id` is the same whether the LINKREQUEST is hashed at the initiator (HEADER_1) or at the responder after one or more transport relays (HEADER_2). Both sides agree on the 16-byte ID.
+
+For LINKREQUEST packets specifically, the trailing signalling bytes (if present, indicated by `len(packet.data) > Link.ECPUBSIZE` in `link_id_from_lr_packet` at `RNS/Link.py:340-347`) are stripped from the END of `hashable_part` before hashing, so the link_id is invariant under MTU-discovery signalling.
 
 ### 6.4 Session key derivation
 

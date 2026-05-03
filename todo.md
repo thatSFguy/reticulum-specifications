@@ -71,6 +71,19 @@ to remove their markers:
       `RATCHET_EXPIRY = 60*60*24*30` (`RNS/Identity.py:69`).
       SPEC.md §7.4 corrected.
 
+## Open `⚠️` items needing a runtime verifier
+
+- [ ] **Lock in the §6.2 / §6.3 corrections with `verify_link_handshake.py`.**
+      The wire-byte order of the LRPROOF body (`signature || responder_X25519_pub || signalling`,
+      not `link_id || responder_X25519_pub || signature || signalling`) and
+      the `link_id` derivation offsets (`N=2` for HEADER_1, `N=18` for HEADER_2,
+      not 18/34) were corrected against direct upstream source citations
+      (`RNS/Link.py:376`, `RNS/Packet.py:354-361`) in `SPEC.md` §6.2/§6.3
+      while writing `flows/send-link-lxmf.md`. They are source-cited but
+      not yet exercised by a runtime verifier. Add `tools/verify_link_handshake.py`
+      that drives an upstream LINKREQUEST → LRPROOF → ACTIVE handshake and
+      asserts byte-level layouts + `link_id` invariance under HEADER_1↔HEADER_2.
+
 ## Spec polishing (lower priority)
 
 - [ ] **Split `SPEC.md` into per-layer files** as the document grows
