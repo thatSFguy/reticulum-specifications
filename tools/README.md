@@ -34,6 +34,7 @@ Populated against RNS 1.2.0 / LXMF 0.9.6:
 | `verify_path_request.py` | §1.2 well-known hashes, §7.1 LXMF path-preamble gating | ✅ |
 | `verify_rnode_split.py` | §8.3 — RNode air-frame split-packet TX/RX state machines | ✅ |
 | `verify_msgpack_quirk.py` | §9.3 — encoding name as bytes vs str affects upstream parsing | ✅ |
+| `verify_stamps.py` | §5.7 — workblock determinism, PoW stamp search/validate, ticket shortcut | ✅ |
 | `regen_identities.py` | regenerates `test-vectors/identities.json` | ✅ |
 
 See [`../agent.md`](../agent.md) §5 and [`../todo.md`](../todo.md) for the remaining priority order.

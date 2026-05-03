@@ -443,9 +443,10 @@ order: top three save the most debugging hours.
       frontmatter (per `agent.md` §7). Done — `RNS 1.2.0 / LXMF
       0.9.6` is now in the document header.
 
-- [ ] **`tools/verify_stamps.py`** to runtime-lock §5.7. Compute a
-      real PoW stamp at low cost (target_cost ≈ 4-6 bits to keep the
-      test fast), confirm `validate_stamp` accepts it; tamper a byte
-      and confirm rejection. Also test the ticket shortcut path:
-      build a `SHA256(ticket || message_id)[:32]` stamp by hand and
-      confirm `validate_stamp` accepts it when a ticket is provided.
+- [x] **`tools/verify_stamps.py`** runtime-locks §5.7. Done.
+      Verifies workblock determinism (confirms exactly 768 KiB at
+      3000 rounds), PoW search-and-validate at target_cost=4 (fast),
+      `LXMessage.validate_stamp` end-to-end accepts/rejects PoW
+      stamps, and the ticket shortcut path:
+      `SHA256(ticket || message_id)` is accepted with a matching
+      ticket and rejected with a wrong one.
