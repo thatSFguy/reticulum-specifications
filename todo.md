@@ -319,15 +319,92 @@ discovery_path_requests):
       directions once the link_table entry is validated, and PROOF
       receipt forwarding via reverse_table (one-shot pop on use).
 
+## Developer-experience gaps (would save real implementers real time)
+
+The following aren't strictly wire-format issues — they're things that
+bite anyone building a clean-room client. Listed in rough priority
+order: top three save the most debugging hours.
+
+- [ ] **§15 (new): Threading / concurrency model.** Reticulum is
+      heavily threaded: `Transport.jobs` periodic loop, per-Link
+      watchdog daemon threads, per-Resource transfer threads,
+      announce-handler callbacks fire on fresh daemon threads,
+      lock inventory (`Transport.path_table_lock`,
+      `Transport.announce_table_lock`, `Identity.known_destinations_lock`,
+      etc). A client built single-threaded mostly works for
+      opportunistic LXMF but breaks on Resource transfers and Link
+      keepalives. #1 cause of "my client compiles and almost works
+      but is flaky." Roundup of which loop runs when, what callbacks
+      fire on which thread, what locks must be held to mutate which
+      state.
+
+- [ ] **§16 (new): Failure-mode → root-cause cheatsheet.** §9 lists
+      gotchas by cause; this would be the inverse-index, organised
+      by symptom. Worked examples like:
+        - "messages send but no PROOF returns" → §6.5
+          implicit/explicit length mismatch
+        - "links establish then disconnect within a minute" →
+          §6.7 KEEPALIVE not implemented or wrong sentinel byte
+        - "first contact works but every subsequent send fails" →
+          §7.5 periodic re-announce missing
+        - "Sideband announces validate but mine don't" →
+          §4.1 random_hash timestamp not encoded (§9.10)
+        - "everything works on TCP but breaks on RNode" →
+          §8.4 KISS handshake or §8.3 split-packet protocol bug
+      High value because debugging Reticulum is a known multi-hour
+      exercise; this would shortcut diagnosis to seconds.
+
+- [ ] **§17 (new): Time / clock requirements roundup.** Currently
+      scattered across §4.1 (random_hash timestamp), §9.6 (clockless
+      LXMF senders), §5.7 (ticket expiry), §6.7 (RTT-driven keepalive),
+      §7.5 (re-announce cadence). A no-RTC device (Faketec, RAK4631
+      stock, Heltec_T114) needs a clear "what fails / what works /
+      how to substitute monotonic-seconds" roundup so embedded
+      implementers don't have to hunt for the constraints.
+
+- [ ] **§6.x (new): Channel mode (`CHANNEL = 0x0E` context).**
+      Multiplexed-application-data channel that runs over an
+      established Link, distinct from DATA/REQUEST/RESPONSE.
+      `RNS/Channel.py` is the reference. NomadNet uses it for the
+      "channel" API beyond simple page fetches. Currently only a
+      one-line entry in §2.5; deserves its own §6.x sub-section
+      with body format and lifecycle.
+
+- [ ] **§8.x (new): AutoInterface multicast discovery.** UDP
+      multicast on a known group/port for LAN auto-detection of
+      peers. Specific multicast group, port, magic bytes, beacon
+      cadence. `RNS/Interfaces/AutoInterface.py` is the reference.
+      Needed for any client that wants to participate in
+      auto-discovered LAN meshes (the "share_instance" deployment
+      pattern with multiple physical hosts).
+
+- [ ] **Appendix: Bounded-state inventory.** A single table of every
+      memory-bounded structure across the protocol with its cap:
+      `MAX_RANDOM_BLOBS = 32`, `Transport.max_pr_tags = 32000`,
+      `Interface.MAX_HELD_ANNOUNCES = 256`, `Destination.RATCHET_COUNT
+      = 512`, `Identity.known_destinations` (unbounded — the gotcha
+      itself), `Transport.MAX_HASHLIST_LENGTH`, `Resource.WINDOW_MAX_FAST
+      = 75`, `LXMRouter.propagation_entries` (operator-bounded), etc.
+      Critical for embedded targets where heap is finite. Mostly
+      implicit in §4.5 / §7.x / §10 / §12 today; a single appendix
+      table would be a quick reference card.
+
 ## Spec polishing (lower priority)
 
 - [ ] **Split `SPEC.md` into per-layer files** as the document grows
-      past ~1500 lines. Suggested layout per `README.md`:
+      past ~2300 lines. Suggested layout per `README.md`:
       `00-overview.md`, `01-packet-header.md`, `02-identity.md`,
       `03-announce.md`, `04-token-crypto.md`, `05-lxmf.md`,
       `06-link.md`, `07-resource.md`, `08-transport.md`,
       `09-paths-and-discovery.md`, `10-implementation-gotchas.md`.
 
-- [ ] **Add a "last-verified-against-rns" line** to SPEC.md
-      frontmatter (per `agent.md` §7) so readers know which RNS
-      version the spec was tested against.
+- [x] **Add a "last-verified-against-rns" line** to SPEC.md
+      frontmatter (per `agent.md` §7). Done — `RNS 1.2.0 / LXMF
+      0.9.6` is now in the document header.
+
+- [ ] **`tools/verify_stamps.py`** to runtime-lock §5.7. Compute a
+      real PoW stamp at low cost (target_cost ≈ 4-6 bits to keep the
+      test fast), confirm `validate_stamp` accepts it; tamper a byte
+      and confirm rejection. Also test the ticket shortcut path:
+      build a `SHA256(ticket || message_id)[:32]` stamp by hand and
+      confirm `validate_stamp` accepts it when a ticket is provided.
