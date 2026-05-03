@@ -259,11 +259,14 @@ re-research.
       body is a path string + field map; response is a body bytes blob.
       Without this, a client can do LXMF chat but can't render NomadNet
       content (nodes serving content, telemetry, micron pages).
-- [ ] **SPEC.md §1.4 (new): GROUP destinations.** `RNS.Destination.GROUP`
-      type uses symmetric AES-256-CBC with a pre-shared key; different
-      encrypt/decrypt paths in `RNS/Destination.py:601+` (`prv` is a
-      symmetric-key wrapper, not an X25519 priv). Almost no clients
-      implement this but the protocol allows it.
+- [x] **SPEC.md §1.4 (new): GROUP destinations.** Done. Five
+      sub-sections: key generation (`Token.generate_key()` 64-byte
+      AES-256 default), wire format (Token form same as Link-derived
+      `iv || ciphertext || hmac`, no eph_pub prefix because no ECDH),
+      destination hash recipe with optional identity disambiguation,
+      on-disk format (raw key bytes, no header/encryption/checksum),
+      and a why-rarely-used note covering forward-secrecy gaps and
+      key-distribution being unsolved at the protocol layer.
 - [x] **SPEC.md §8.4 (new): RNode KISS configuration handshake.**
       Done. Full bring-up sequence: command-byte inventory, the
       `CMD_DETECT`/`DETECT_REQ`/`DETECT_RESP` exchange, 4-byte

@@ -95,6 +95,66 @@ The format is portable across implementations because there's nothing in it but 
 
 > ⚠️ **Spec correction:** Earlier revisions of this section described the on-disk order as Ed25519 first, X25519 second ("opposite of the public_key concatenation"). That was wrong — verified by re-running `Identity.to_file` and reading back the bytes against the test vector at `test-vectors/identities.json`, the actual order is X25519 first, Ed25519 second, identical to the public_key order. Implementations following the prior spec wording would have corrupted identity files when interoperating with upstream Python RNS.
 
+### 1.4 GROUP destinations (symmetric-key alternative to SINGLE)
+
+Most Reticulum traffic — including all LXMF — uses `SINGLE` destinations with the X25519 ECDH + Ed25519 signing scheme described above. There is also a **`GROUP`** destination type (`RNS.Destination.GROUP = 0x01`, in the `dest_type` field of the packet header per §2.1) that uses a **pre-shared symmetric key** instead, intended for closed channels where every participant should be able to decrypt every message without per-recipient ECDH.
+
+#### 1.4.1 Key generation
+
+`Destination.create_keys()` for `GROUP` calls `Token.generate_key()` (`RNS/Cryptography/Token.py:53-56`):
+
+```python
+@staticmethod
+def generate_key(mode=AES_256_CBC):
+    if   mode == AES_128_CBC: return os.urandom(32)    # 16B signing + 16B encryption
+    elif mode == AES_256_CBC: return os.urandom(64)    # 32B signing + 32B encryption
+```
+
+The default is AES-256-CBC, so the symmetric key is **64 random bytes**, split into:
+
+```
+signing_key     = key[ 0..32]      // HMAC-SHA256 input
+encryption_key  = key[32..64]      // AES-256-CBC key
+```
+
+A clean-room implementation that needs to interop with a GROUP destination must use AES-256-CBC by default and derive the same split. AES-128-CBC mode (32-byte key, 16/16 split) is supported by the `Token` class but no upstream caller currently selects it for GROUPs.
+
+#### 1.4.2 Wire format
+
+GROUP destinations encrypt and decrypt via `Token.encrypt` / `Token.decrypt` — **the same Token format used by Link-derived encryption** (§3.1, the no-ephemeral-pub form):
+
+```
+wire_body  =  iv(16) || aes_ciphertext || hmac_sha256(32)
+```
+
+There is **no ephemeral_pub prefix** because there is no ECDH — every participant already shares the same `(signing_key, encryption_key)` pair. The format is identical to a Link DATA payload after the link is established (§6.4). Reticulum's `Token` class is shared across both code paths; see `RNS/Destination.py:601-609` and `:645-653` for GROUP encrypt/decrypt, and `RNS/Cryptography/Token.py:87-114` for the underlying primitive.
+
+#### 1.4.3 Destination hash for GROUP
+
+GROUP destinations use the same `dest_hash` recipe as SINGLE (§1.2) — `SHA256(name_hash || identity_hash)[:16]` — with two wrinkles:
+
+- The constructor accepts an `identity` argument optionally. If provided, `identity_hash = SHA256(identity.public_key)[:16]` per §1.1; the resulting `dest_hash` is keyed to that identity's public key as well as the group name. Different identities → different group destinations even with the same name.
+- If `identity` is not provided (`None`), `dest_hash = SHA256(name_hash)[:16]` (same recipe as PLAIN destinations — see the `path-request` example in §1.2).
+
+The identity (if any) does NOT participate in encryption — it's purely a way to disambiguate group destinations sharing a name across owners. The actual encryption uses the symmetric key from §1.4.1.
+
+#### 1.4.4 On-disk format
+
+`Destination.get_private_key()` for GROUP returns `self.prv_bytes` — the 64 (or 32) raw key bytes. `Destination.load_private_key(key)` accepts the same. There is no canonical file path or filename — the application chooses where to store the symmetric key, and is responsible for distributing it to every group member out of band.
+
+Like the SINGLE identity file (§1.3), the GROUP key file has **no header, no encryption-at-rest, no checksum**. Anyone with read access can fully impersonate the group.
+
+#### 1.4.5 Why most clients don't bother
+
+GROUP destinations are rarely seen in the wild because:
+
+- LXMF doesn't use them (every chat is one-to-one between SINGLE destinations, even in multi-party rooms — those are application-layer constructs).
+- NomadNet pages use SINGLE destinations.
+- The forward-secrecy properties of SINGLE (per-message ephemeral X25519 + ratchet rotation per §7.3) are absent for GROUP — once the symmetric key is leaked, every past and future message decryptable by that key is compromised.
+- Group key distribution is an unsolved problem at the protocol level — Reticulum doesn't help with this.
+
+A clean-room client that targets LXMF interop only can ignore GROUP destinations entirely. Implementations of `Destination.encrypt`/`decrypt` should still recognize the `GROUP (0x01)` type byte in the packet header to gracefully reject (rather than crash on) inbound packets to a GROUP whose key the receiver doesn't hold.
+
 ---
 
 ## 2. Packet header
