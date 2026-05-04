@@ -95,7 +95,7 @@ Initial confidence assessment (subjective, not authoritative — re-do this audi
 | §5.6 Dual msgpack-variant signature verification | High — fixed an interop bug in the webclient when added |
 | §6 Reticulum Link protocol | High | Both initiator and responder are working in the reference repos |
 | §7.1, §7.2 Path requests | **Recently surfaced bug-fix.** §7.2 (responding to inbound path requests) is verified end-to-end on BLE in the mobile-app. §7.1's claim that path requests *always* precede LXMF DATA needs verification — may only happen on stale paths. |
-| §7.3 Ratchet rotation requirement | **Verified end-to-end.** Pre-fix the controlled receiver logged path-not-found; post-fix it logged distinct ratchet hashes per rotation. |
+| §7.3 Ratchet rotation | **Spec corrected.** Earlier audit treated this as "verified end-to-end" — but the test result that prompted the verification was attributed to the wrong mechanism (ratchet rotation), when the actual win was the incidental `random_hash` rotation that came along for the ride. `tools/verify_ratchet_dedup.py` (RNS 1.2.0) confirms upstream replay defence is keyed on `random_blob`, not `(dest_hash, ratchet_pub)`. §7.3 reframed as forward-secrecy guidance; §4.5 step 6.3 documents the actual dedup mechanism. |
 | §7.4 Ratchet ring (inbound decrypt tolerance) | **UNVERIFIED in current implementations.** The reference repos discard old ratchet privkeys on rotation. Upstream's "8 ratchets" default needs source citation. |
 | §7.6 `TCPServerInterface.OUT` override | Source-cited; matches behavior observed in the mobile-app's local-transport experiments. |
 | §8 KISS / HDLC framing | High — both work in production on the reference clients |

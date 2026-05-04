@@ -1266,6 +1266,8 @@ A `path?` request itself is a regular DATA packet (verified by `tools/verify_pat
 
 The path-request handler at `RNS/Transport.py:2800-2843` parses inbound packets addressed to `path_request_destination` (the dest_hash in §7.1). The handler is registered as the destination's `packet_callback` at `Transport.py:237-240`, so any DATA packet to that dest_hash flows through it.
 
+The path-request destination is a **PLAIN destination** with no identity attached, which is why its `dest_hash` derives only from the name: `dest_hash = SHA256(SHA256("rnstransport.path.request")[:10])[:16]` per the PLAIN/GROUP recipe in §1.4.3 (the `identity == None` branch of `Destination.hash` at `RNS/Destination.py:121-130`). The result is a constant — `6b9f66014d9853faab220fba47d02761` — that every node on the mesh resolves identically without needing to discover a per-peer identity first.
+
 ```python
 def path_request_handler(data, packet):
     if len(data) >= 16:
@@ -1361,23 +1363,57 @@ The minimum path-request response logic for a non-transport leaf, in protocol te
 1. Receive a DATA packet with `dest_hash == 6b9f66014d9853faab220fba47d02761`.
 2. Parse `target_dest_hash = data[:16]` and `tag_bytes = data[16:32]` (or `data[32:48]` if `len(data) > 32`).
 3. Drop if `len(tag_bytes) == 0` (tagless requests).
-4. Drop if `(target_dest_hash, tag_bytes)` already in the dedup table.
-5. If `target_dest_hash == our_destination_hash` for any of our registered destinations: emit a path-response announce (§7.2.4) on the receiving interface, with the request's tag passed through to allow caching.
+4. Drop if `(target_dest_hash, tag_bytes)` already in the dedup table. **A leaf-appropriate cap is 128–256 entries with FIFO eviction**; the upstream `max_pr_tags = 32000` (§7.2.2) is sized for a transit node maintaining dedup across all destinations on the mesh, not a leaf that only sees requests for itself.
+5. If `target_dest_hash == our_destination_hash` for any of our registered destinations: emit a path-response announce (§7.2.4) on the receiving interface, with the request's tag passed through.
 6. Otherwise: do nothing — leaves can't fulfill path requests for destinations they don't OWN.
 
 Steps 4 and 5 are both required. Skipping the dedup table makes the leaf storm the network with redundant announces; skipping the local-destination check means peers can never message you after the path expires.
 
+**Leaves may skip the §7.2.5 `PR_TAG_WINDOW` body cache** — step 4's dedup table already collapses identical-tag retransmits, and a leaf isn't fanning the same body to multiple downstream relays the way a transit node does, so the 30-second cache offers no additional dedup-convergence benefit. The cache exists upstream because `Destination.announce` runs the same code path for both leaves and transit nodes; on a leaf, the cache is incidental.
+
 For a chronological walk-through of the full request → response → path-table cycle, see [`flows/path-discovery.md`](flows/path-discovery.md).
 
-### 7.3 Ratchet rotation per announce
+### 7.3 Ratchet rotation (forward-secrecy hygiene, not dedup)
 
-The 32-byte `ratchet_pub` field in announces is intended to rotate. Most transit nodes deduplicate announces on `(destination_hash, ratchet_pub)` tuples — if both are unchanged from a recent prior announce, the relay treats it as a duplicate and drops it instead of forwarding.
+The 32-byte `ratchet_pub` field in announces is meant to rotate periodically. The **purpose** is forward secrecy: rotating the ECDH key on a regular cadence limits the plaintext window an adversary can decrypt if a single ratchet privkey leaks. It is **not** what makes your announces visible to the mesh.
 
-If your client generates one ratchet at identity creation and never rotates, every announce after the first one in a session is dropped at the first transit node. Your destination becomes invisible to the mesh.
+The actual replay-and-loop defence in upstream is keyed on **`random_hash`**, not on `ratchet_pub` — see §4.5 step 6.3 (path-table replacement check `not random_blob in random_blobs` at `RNS/Transport.py:1707, 1732, 1745`). Verified by `tools/verify_ratchet_dedup.py`: two announces sharing a `ratchet_pub` but differing in `random_hash[:5]` are both accepted by upstream's replay machinery.
 
-**Required behavior:** generate a fresh X25519 keypair at the start of each `sendAnnounce()`, persist it (so subsequent sessions can decrypt messages still in flight to the previous ratchet — see also section 7.4), and use it for the announce body's `ratchet_pub` field.
+> ⚠️ **Spec correction:** Earlier revisions of this section claimed transit nodes dedup announces on `(destination_hash, ratchet_pub)` tuples and that a non-rotating client becomes invisible to the mesh after one announce. That was wrong on the mechanism: upstream's `RATCHET_INTERVAL = 30 min` × `ANNOUNCE_INTERVAL = 5–15 min` means most upstream announces share a ratchet across 2–6 emissions, so if relays really dropped on `ratchet_pub` equality, upstream wouldn't function. The actual win observed in the bootstrap test (per `agent.md` §5) was incidental — the fix that rotated ratchets per announce also rotated `random_hash`, and it was the latter that mattered.
 
-The long-term encryption / signing keys and the `identity_hash` / `destination_hash` MUST stay stable across rotations. Otherwise contacts have to re-add you on every rotation.
+#### 7.3.1 Rotation cadence
+
+Upstream `Destination.rotate_ratchets()` (`RNS/Destination.py:227-235`) runs on every announce but is a no-op unless `RATCHET_INTERVAL = 30*60s` has elapsed since the last rotation:
+
+```python
+def rotate_ratchets(self):
+    if now > self.latest_ratchet_time + self.ratchet_interval:
+        new_ratchet = Identity._generate_ratchet()
+        self.ratchets.insert(0, new_ratchet)
+        ...
+```
+
+So a Sideband emitting an announce every 10 minutes generates a new ratchet at most every 30 minutes (3 announces per ratchet). Path-response announces and periodic announces both call `rotate_ratchets()` and both go through this no-op-if-recent gate.
+
+#### 7.3.2 What MUST be unique per announce
+
+For your destination to remain visible across multiple announces, what MUST change between back-to-back emissions is **`random_hash`**, not `ratchet_pub`. Per §4.1, `random_hash` is constructed as:
+
+```python
+random_hash = get_random_hash()[:5] + int(time.time()).to_bytes(5, "big")
+```
+
+So as long as you regenerate the first 5 random bytes per announce (which any sensible implementation does), upstream's replay defence accepts each announce as fresh regardless of whether the ratchet rotated. A clean-room client that hard-coded `random_hash` to a constant value would be invisible after the first announce; one that uses fresh random bytes per announce is visible regardless of ratchet rotation cadence.
+
+#### 7.3.3 Per-announce ratchet rotation is fine but not required
+
+Implementations MAY rotate the ratchet on every announce — the only cost is more frequent ratchet-ring growth (capped by §7.4 `RATCHET_COUNT = 512`) and slightly more CPU. They MAY also follow upstream's at-most-every-30-minutes pattern. Either is interop-correct.
+
+What MUST be stable across all rotations: the long-term encryption / signing keys and the `identity_hash` / `destination_hash`. Rotating those means contacts have to re-discover you (different `dest_hash`, no path table entry).
+
+#### 7.3.4 Path-response announces SHOULD reuse the current ratchet
+
+When fulfilling a `path?` request via `Destination.announce(path_response=True, tag=tag)` (§7.2.4), implementations SHOULD reuse the current ratchet rather than rotate. Rotation cadence is governed by §7.3.1 (the 30-minute window), not by inbound `path?` arrivals — a leaf burst-rotating on a flood of identical-target path? requests would burn through ratchet-ring slots without any forward-secrecy benefit, since the announces are all going to the same in-flight requester. Upstream's `rotate_ratchets()` no-op-if-recent gate enforces this implicitly; a clean-room implementation should mirror the behaviour explicitly.
 
 ### 7.4 Ratchet ring (inbound decrypt tolerance)
 
