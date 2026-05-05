@@ -4,12 +4,14 @@ Known-good byte sequences that any Reticulum-compatible implementation should be
 
 ## Status
 
-Partially populated against RNS 1.2.0:
+Populated against RNS 1.2.0 / LXMF 0.9.6:
 
 - ✅ `identities.json` — Alice + Bob identity vectors (regenerator: `../tools/regen_identities.py`, verifier: `../tools/verify_destination_hash.py`).
-- ⏳ `announces.json` — not yet populated.
-- ⏳ `lxmf.json` — not yet populated.
-- ⏳ `links.json` — not yet populated.
+- ✅ `announces.json` — two announce vectors (no-ratchet + with-ratchet) signed by Alice (regenerator: `../tools/regen_announces.py`, verifier: `../tools/verify_announce_roundtrip.py`).
+- ✅ `lxmf.json` — two opportunistic-LXMF vectors Alice → Bob (regenerator: `../tools/regen_lxmf.py`, verifier: `../tools/verify_lxmf_opportunistic.py`).
+- ✅ `links.json` — full Link handshake vector (LINKREQUEST + LRPROOF + derived session key) Alice → Bob (regenerator: `../tools/regen_links.py`, verifier: `../tools/verify_link_handshake.py`).
+
+All four files are byte-deterministic across runs: regenerators pin every random source (ephemeral keys, IVs, `random_hash` prefix + timestamp, LXMF timestamp) so the output is reproducible against a fixed upstream RNS / LXMF version.
 
 See [`../agent.md`](../agent.md) §5 and [`../todo.md`](../todo.md) for the remaining bootstrap task list.
 

@@ -1,0 +1,46 @@
+{
+  "_about": "Link handshake test vectors. Each vector records a full Reticulum Link handshake: LINKREQUEST (initiator -> responder) and LRPROOF (responder -> initiator). The ephemeral X25519/Ed25519 keys are pinned via the `inputs.*_priv_hex` blobs; both Ed25519 signatures are RFC 8032 deterministic so the resulting wire bytes are reproducible. A clean-room implementation can verify by: (a) packing a LINKREQUEST from the recorded initiator ephemerals and confirming bytes match `linkrequest_raw_hex`; (b) computing `link_id` per SPEC.md S6.3 (N=2 for HEADER_1) and matching `link_id_hex`; (c) packing an LRPROOF as the responder, with bob's identity Ed25519 sig over `link_id || responder_X25519_pub || responder_long_term_Ed25519_pub || signalling`, and matching `lrproof_raw_hex`; (d) running ECDH+HKDF on either side and matching `derived_key_hex`. Regenerate with `generator_script`.",
+  "vectors": [
+    {
+      "label": "alice_to_bob_aes256cbc",
+      "inputs": {
+        "initiator_identity_label": "alice",
+        "responder_identity_label": "bob",
+        "destination_full_name": "vectors.link",
+        "initiator_x25519_priv_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+        "initiator_ed25519_priv_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+        "responder_x25519_priv_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+        "mode": "MODE_AES256_CBC (0x01)"
+      },
+      "expected": {
+        "linkrequest_raw_hex": "02008c670c64308e0325ea0fd7c72787449d007b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f02001f4",
+        "linkrequest_body_hex": "7b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f02001f4",
+        "linkrequest_fields": {
+          "initiator_x25519_pub_hex": "7b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13",
+          "initiator_ed25519_pub_hex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+          "signalling_hex": "2001f4"
+        },
+        "link_id_hex": "7ee5fe3e4952c9ac4519b537f6278474",
+        "lrproof_raw_hex": "0f007ee5fe3e4952c9ac4519b537f6278474ff1de2168a36a816163aec0bb0749ff6792f78eb4f7b39156f8ee5c8693e83ebd67439ac28d9e4603334428713154edd04395b0b8acec2f703c05c3d38af133e0c7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b142001f4",
+        "lrproof_body_hex": "1de2168a36a816163aec0bb0749ff6792f78eb4f7b39156f8ee5c8693e83ebd67439ac28d9e4603334428713154edd04395b0b8acec2f703c05c3d38af133e0c7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b142001f4",
+        "lrproof_fields": {
+          "signature_hex": "1de2168a36a816163aec0bb0749ff6792f78eb4f7b39156f8ee5c8693e83ebd67439ac28d9e4603334428713154edd04395b0b8acec2f703c05c3d38af133e0c",
+          "responder_x25519_pub_hex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
+          "signalling_hex": "2001f4"
+        },
+        "shared_secret_hex": "5bf22caf31c0316785b0b9bc60e56d48582ce59435ce5b3c028052be42631e0f",
+        "derived_key_hex": "d4c8238d23a1810c3dbe4caec15253d5a86d7fe6afa8dfa76f915579723fd88cbcd2ab3a0cd96f5b6ffd8abec8307f05cd791dc9c4fca900f706b0313a51ab65",
+        "mtu": 500,
+        "mode": 1
+      },
+      "rns_version_at_generation": "1.2.0",
+      "generator_script": "tools/regen_links.py",
+      "verifies_spec_sections": [
+        "6.1",
+        "6.2",
+        "6.3",
+        "6.6"
+      ]
+    }
+  ]
+}

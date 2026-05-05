@@ -1,0 +1,88 @@
+{
+  "_about": "Announce test vectors. Each entry's `expected.wire_bytes_hex` is the full packed announce bytes (header + body). Drop them into a fresh RNS.Packet via the inbound path and call RNS.Identity.validate_announce; it MUST accept. The `expected.fields` block decomposes the wire bytes into named slices per SPEC.md S4.1 for human inspection. Regenerate with the script in `generator_script`.",
+  "vectors": [
+    {
+      "label": "alice_lxmf_no_ratchet",
+      "context_flag": 0,
+      "with_ratchet": false,
+      "inputs": {
+        "identity_label": "alice",
+        "destination_full_name": "vectors.alice_announce_no_ratchet",
+        "random_hash_prefix_hex": "a1a2a3a4a5",
+        "random_hash_timestamp": 1700000000,
+        "ratchet_priv_hex": null,
+        "app_data_msgpack_hex": "92c409416c6963655465737400",
+        "app_data_decoded": [
+          "AliceTest",
+          0
+        ]
+      },
+      "expected": {
+        "destination_hash_hex": "d9587f0be518490591c181755404d851",
+        "wire_bytes_hex": "0100d9587f0be518490591c181755404d8510076fce269b2356a51b6a832a1a25099155acb20733b453f9538aaa8069e854d5a780708b44424373474ee1607c3f2b4a1cd5643de508e106e6b8cf4a10f00ec7c8b5739ff0fe7afaf7157a1a2a3a4a5006553f1009b0f121c51fda21cbce043b5b9d89b09817f29d320d2027c0f6c67144ace9d577722791e9ca1c5d24678ced4166862d77650756a98369c48a8455865c279e20092c409416c6963655465737400",
+        "fields": {
+          "header_flags_hex": "01",
+          "header_hops_hex": "00",
+          "header_dest_hash_hex": "d9587f0be518490591c181755404d851",
+          "header_context_hex": "00",
+          "body_public_key_hex": "76fce269b2356a51b6a832a1a25099155acb20733b453f9538aaa8069e854d5a780708b44424373474ee1607c3f2b4a1cd5643de508e106e6b8cf4a10f00ec7c",
+          "body_name_hash_hex": "8b5739ff0fe7afaf7157",
+          "body_random_hash_hex": "a1a2a3a4a5006553f100",
+          "body_signature_hex": "9b0f121c51fda21cbce043b5b9d89b09817f29d320d2027c0f6c67144ace9d577722791e9ca1c5d24678ced4166862d77650756a98369c48a8455865c279e200",
+          "body_app_data_hex": "92c409416c6963655465737400"
+        }
+      },
+      "rns_version_at_generation": "1.2.0",
+      "generator_script": "tools/regen_announces.py",
+      "verifies_spec_sections": [
+        "2.1",
+        "4.1",
+        "4.2",
+        "4.3",
+        "4.5"
+      ]
+    },
+    {
+      "label": "alice_lxmf_with_ratchet",
+      "context_flag": 1,
+      "with_ratchet": true,
+      "inputs": {
+        "identity_label": "alice",
+        "destination_full_name": "vectors.alice_announce_with_ratchet",
+        "random_hash_prefix_hex": "a1a2a3a4a5",
+        "random_hash_timestamp": 1700000000,
+        "ratchet_priv_hex": "b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0",
+        "app_data_msgpack_hex": "92c409416c6963655465737400",
+        "app_data_decoded": [
+          "AliceTest",
+          0
+        ]
+      },
+      "expected": {
+        "destination_hash_hex": "141410d233872609cf7b9f075afb4ebb",
+        "wire_bytes_hex": "2100141410d233872609cf7b9f075afb4ebb0076fce269b2356a51b6a832a1a25099155acb20733b453f9538aaa8069e854d5a780708b44424373474ee1607c3f2b4a1cd5643de508e106e6b8cf4a10f00ec7c5130f0a9b2e01f693bd0a1a2a3a4a5006553f100cd700e88f9e99b19c1a8a8dcd58182fd101e5e032a69ce317fde23e8ee265c51e4985b2edb0694b51ddcb9e1aa73f60acd297bf8dd087056f90c2c9ee1e47587feef3b5f6f18de160bad45e49abe5f8c7d74ccb893e207061136f5222434620392c409416c6963655465737400",
+        "fields": {
+          "header_flags_hex": "21",
+          "header_hops_hex": "00",
+          "header_dest_hash_hex": "141410d233872609cf7b9f075afb4ebb",
+          "header_context_hex": "00",
+          "body_public_key_hex": "76fce269b2356a51b6a832a1a25099155acb20733b453f9538aaa8069e854d5a780708b44424373474ee1607c3f2b4a1cd5643de508e106e6b8cf4a10f00ec7c",
+          "body_name_hash_hex": "5130f0a9b2e01f693bd0",
+          "body_random_hash_hex": "a1a2a3a4a5006553f100",
+          "body_signature_hex": "e4985b2edb0694b51ddcb9e1aa73f60acd297bf8dd087056f90c2c9ee1e47587feef3b5f6f18de160bad45e49abe5f8c7d74ccb893e207061136f52224346203",
+          "body_app_data_hex": "92c409416c6963655465737400",
+          "body_ratchet_pub_hex": "cd700e88f9e99b19c1a8a8dcd58182fd101e5e032a69ce317fde23e8ee265c51"
+        }
+      },
+      "rns_version_at_generation": "1.2.0",
+      "generator_script": "tools/regen_announces.py",
+      "verifies_spec_sections": [
+        "2.1",
+        "4.1",
+        "4.2",
+        "4.3",
+        "4.5"
+      ]
+    }
+  ]
+}

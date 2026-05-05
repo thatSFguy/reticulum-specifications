@@ -28,26 +28,25 @@ Outstanding work for the spec repo.
 - [x] **Bootstrap `test-vectors/identities.json`** — Alice + Bob
       identities populated against RNS 1.2.0. Regenerator at
       `tools/regen_identities.py`.
-- [ ] **Bootstrap remaining test-vectors files** (`announces.json`,
-      `lxmf.json`, `links.json`) with the existing vectors from
-      `reticulum-mobile-app/reference/test-vectors.json`. Convert to
-      the proposed JSON format documented in `test-vectors/README.md`,
-      adding the regenerator scripts so future contributors can
-      verify vectors against newer upstream RNS releases.
+- [x] **Bootstrap `test-vectors/announces.json`** — two vectors
+      (no-ratchet + with-ratchet) signed by Alice. Regenerator at
+      `tools/regen_announces.py` (deterministic via patched
+      `Identity.get_random_hash` + module-local `time.time` shim).
+- [x] **Bootstrap `test-vectors/lxmf.json`** — two opportunistic
+      LXMF vectors Alice → Bob, full plaintext + Token-encrypted
+      ciphertext. Regenerator at `tools/regen_lxmf.py` (deterministic
+      via patched `LXMessage.timestamp`, ephemeral X25519, and
+      Token CBC IV).
+- [x] **Bootstrap `test-vectors/links.json`** — Link handshake
+      vector with deterministic ephemerals. Regenerator at
+      `tools/regen_links.py`. Records LINKREQUEST + LRPROOF wire
+      bytes plus the derived session key both sides must agree on.
 
-- [ ] **Write the priority verifier scripts** listed in
-      `tools/README.md`, in this order (highest interop value first):
-      1. [x] `verify_destination_hash.py` — pure-function check, no RNS state needed
-      2. [x] `verify_packet_header.py` — bit layout + HEADER_1/HEADER_2 round-trip + originator HEADER_1→HEADER_2 conversion
-      3. [ ] `verify_announce_roundtrip.py` — closes the SPEC.md §4 gap (partial coverage in `verify_announce_app_data.py`)
-      4. [ ] `verify_token_crypto.py` — closes SPEC.md §3 gap
-      5. [ ] `verify_lxmf_opportunistic.py` — closes SPEC.md §5 gap
-      6. [ ] `verify_link_handshake.py` — closes SPEC.md §6 gap
-      7. [x] `verify_path_request.py` — closes SPEC.md §7.1, §7.2 gaps
-      8. [ ] `verify_msgpack_quirk.py` — closes SPEC.md §9.3 gap
-
-      Each verifier should remove its corresponding `⚠️ UNVERIFIED` /
-      `🔮 SPECULATION` callout in `SPEC.md` (per `agent.md` §1).
+- [x] **Write the priority verifier scripts** listed in
+      `tools/README.md` — all eight done plus three follow-ons
+      (`verify_proof_packet.py`, `verify_rnode_split.py`,
+      `verify_stamps.py`, `verify_ratchet_dedup.py`). Status table
+      lives in `tools/README.md`.
 
 ## Open `⚠️ UNVERIFIED` items in SPEC.md
 
@@ -86,38 +85,9 @@ to remove their markers:
 
 ## Open `⚠️` items needing a runtime verifier
 
-- [ ] **`tools/verify_proof_packet.py` to lock in §6.5.** Run two
-      side-by-side scenarios against upstream RNS: opportunistic DATA
-      with `use_implicit_proof = True` (default) and with `= False`,
-      capture the resulting PROOF packet's body length, and assert
-      it's 64 / 96 respectively with the matching content layout.
-      Also exercise a Link DATA proof and confirm it's always 96B
-      regardless of the config setting. Lock in the §6.5 wire shapes.
-
-- [ ] **`tools/verify_rnode_split.py` to lock in §8.3.** The RNode
-      air-frame split-packet protocol is now documented in SPEC.md §8.3
-      against direct citations in `markqvist/RNode_Firmware/Framing.h`,
-      `Config.h`, `Utilities.h`, and `RNode_Firmware.ino`, plus the
-      clean-room reimplementation in `thatSFguy/reticulum-lora-repeater/src/Radio.cpp`.
-      A runtime verifier would: build a 300-byte synthetic Reticulum
-      packet, run it through a Python implementation of the TX-side
-      header rules, and confirm the byte-level frames match what
-      `RNode_Firmware.ino:716-742` would emit (header byte high nibble
-      random + low-nibble FLAG_SPLIT bit, both frames sharing the same
-      header, split point at 255 bytes total per LoRa frame). RX-side
-      verifier should drive the state-table at SPEC.md §8.3 and confirm
-      the four reassembly cases.
-
-- [ ] **Lock in the §6.2 / §6.3 corrections with `verify_link_handshake.py`.**
-      The wire-byte order of the LRPROOF body (`signature || responder_X25519_pub || signalling`,
-      not `link_id || responder_X25519_pub || signature || signalling`) and
-      the `link_id` derivation offsets (`N=2` for HEADER_1, `N=18` for HEADER_2,
-      not 18/34) were corrected against direct upstream source citations
-      (`RNS/Link.py:376`, `RNS/Packet.py:354-361`) in `SPEC.md` §6.2/§6.3
-      while writing `flows/send-link-lxmf.md`. They are source-cited but
-      not yet exercised by a runtime verifier. Add `tools/verify_link_handshake.py`
-      that drives an upstream LINKREQUEST → LRPROOF → ACTIVE handshake and
-      asserts byte-level layouts + `link_id` invariance under HEADER_1↔HEADER_2.
+- [x] **`tools/verify_proof_packet.py` locks in §6.5.** Done.
+- [x] **`tools/verify_rnode_split.py` locks in §8.3.** Done.
+- [x] **`tools/verify_link_handshake.py` locks in §6.2 / §6.3.** Done.
 
 ## Spec gaps for a functional client (priority-ordered)
 

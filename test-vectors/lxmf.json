@@ -1,0 +1,76 @@
+{
+  "_about": "Opportunistic LXMF test vectors. `expected.lxmf_packed_hex` is the full plaintext body per SPEC.md S5.2: dest(16) || src(16) || sig(64) || msgpack. `expected.opportunistic_plaintext_hex` is the same with the leading dest_hash stripped (S5.1 wire form). `expected.token_ciphertext_hex` is the deterministic Token encryption of the opportunistic plaintext (S3) using the fixed ephemeral X25519 priv + IV. To verify against upstream: decrypt with Bob's identity, re-prepend Bob's dest_hash, then call LXMessage.unpack_from_bytes \u2014 it MUST succeed with signature_validated == True and title/content/fields matching the `inputs` block. Regenerate with `generator_script`.",
+  "vectors": [
+    {
+      "label": "alice_to_bob_simple",
+      "inputs": {
+        "src_identity_label": "alice",
+        "dst_identity_label": "bob",
+        "title_utf8": "hello",
+        "content_utf8": "hi bob",
+        "fields": {},
+        "lxmf_timestamp": 1700000000.0,
+        "ephemeral_x25519_priv_hex": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0",
+        "token_iv_hex": "11223344556677889900aabbccddeeff"
+      },
+      "expected": {
+        "lxmf_packed_hex": "9695d17f22fa6e45d2b0cd3439a7ca7ec33c40a5b030596d95617dc4ca163aaedc758d54b21a2ca01a8fcc3e21c45eb60918d2dc64508037ce640e000a295a81951e5a7d0f8fedb90ec4df0b0a05b437b43d6692c9dd7faa98c4b679935a940e94cb41d954fc40000000c40568656c6c6fc406686920626f6280",
+        "opportunistic_plaintext_hex": "c33c40a5b030596d95617dc4ca163aaedc758d54b21a2ca01a8fcc3e21c45eb60918d2dc64508037ce640e000a295a81951e5a7d0f8fedb90ec4df0b0a05b437b43d6692c9dd7faa98c4b679935a940e94cb41d954fc40000000c40568656c6c6fc406686920626f6280",
+        "token_ciphertext_hex": "21c3332b61be6a7b6ab8461e155651b17501b6e07532ecf9ab6661bd5a2ca57511223344556677889900aabbccddeeffefa9d24b76e1adf393cfd588214e236e219743697af96912b8eae84f3a1f28a3d68abd62f3e42c6944015c3d00e5e7aa8af732123d079ab10353597669c8cd3ba57cfae3a28ea1a99a44e0b492ba5deedd23232d2edab78fa037967757808c8578496aee7b21c70ce2476c54540d96d928e8ddf35c6bfb5d76261c07f1bb48af9d7bec8261cd30f3b03986614ba93173",
+        "fields_layout": {
+          "destination_hash_hex": "9695d17f22fa6e45d2b0cd3439a7ca7e",
+          "source_hash_hex": "c33c40a5b030596d95617dc4ca163aae",
+          "signature_hex": "dc758d54b21a2ca01a8fcc3e21c45eb60918d2dc64508037ce640e000a295a81951e5a7d0f8fedb90ec4df0b0a05b437b43d6692c9dd7faa98c4b679935a940e",
+          "msgpack_payload_hex": "94cb41d954fc40000000c40568656c6c6fc406686920626f6280"
+        }
+      },
+      "rns_version_at_generation": "1.2.0",
+      "lxmf_version_at_generation": "0.9.6",
+      "generator_script": "tools/regen_lxmf.py",
+      "verifies_spec_sections": [
+        "3",
+        "5.1",
+        "5.2",
+        "5.5",
+        "5.6"
+      ]
+    },
+    {
+      "label": "alice_to_bob_with_fields",
+      "inputs": {
+        "src_identity_label": "alice",
+        "dst_identity_label": "bob",
+        "title_utf8": "meeting",
+        "content_utf8": "see attached",
+        "fields": {
+          "1": "k1",
+          "2": 42
+        },
+        "lxmf_timestamp": 1700000000.0,
+        "ephemeral_x25519_priv_hex": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0",
+        "token_iv_hex": "11223344556677889900aabbccddeeff"
+      },
+      "expected": {
+        "lxmf_packed_hex": "9695d17f22fa6e45d2b0cd3439a7ca7ec33c40a5b030596d95617dc4ca163aaef23eb2c325e59493c187b8fa1cc0efb6306f3eeed159a33aeec954576cbd354451caaa176aff84b57cc154b4e4113197b5eb92f1ec6a0e7635fa3d0508c67e0194cb41d954fc40000000c4076d656574696e67c40c7365652061747461636865648201a26b31022a",
+        "opportunistic_plaintext_hex": "c33c40a5b030596d95617dc4ca163aaef23eb2c325e59493c187b8fa1cc0efb6306f3eeed159a33aeec954576cbd354451caaa176aff84b57cc154b4e4113197b5eb92f1ec6a0e7635fa3d0508c67e0194cb41d954fc40000000c4076d656574696e67c40c7365652061747461636865648201a26b31022a",
+        "token_ciphertext_hex": "21c3332b61be6a7b6ab8461e155651b17501b6e07532ecf9ab6661bd5a2ca57511223344556677889900aabbccddeeffefa9d24b76e1adf393cfd588214e236eac9dde2777640fdd62e86256d9ddac812eeda9277056b5652b9d83ca7d0da7203a5f51b69f7d35a58da4b6a13562a12145a98810d1b89fec9a70e947c50eee6482f3fda4165fd6eef25819fc5093d5f2aaaf7b8911689a3eeaf0131816bac4041923df9e64a807d9809c35cc7bed027de94dc42a7af10261f14053dc62d77d54e66f60dfb83763a6f66798c51eeabcd2",
+        "fields_layout": {
+          "destination_hash_hex": "9695d17f22fa6e45d2b0cd3439a7ca7e",
+          "source_hash_hex": "c33c40a5b030596d95617dc4ca163aae",
+          "signature_hex": "f23eb2c325e59493c187b8fa1cc0efb6306f3eeed159a33aeec954576cbd354451caaa176aff84b57cc154b4e4113197b5eb92f1ec6a0e7635fa3d0508c67e01",
+          "msgpack_payload_hex": "94cb41d954fc40000000c4076d656574696e67c40c7365652061747461636865648201a26b31022a"
+        }
+      },
+      "rns_version_at_generation": "1.2.0",
+      "lxmf_version_at_generation": "0.9.6",
+      "generator_script": "tools/regen_lxmf.py",
+      "verifies_spec_sections": [
+        "3",
+        "5.1",
+        "5.2",
+        "5.5",
+        "5.6"
+      ]
+    }
+  ]
+}

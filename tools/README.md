@@ -37,5 +37,8 @@ Populated against RNS 1.2.0 / LXMF 0.9.6:
 | `verify_stamps.py` | §5.7 — workblock determinism, PoW stamp search/validate, ticket shortcut | ✅ |
 | `verify_ratchet_dedup.py` | §7.3 / §4.5 step 6.3 — confirms replay defence is keyed on `random_blob`, NOT on `(dest_hash, ratchet_pub)` | ✅ |
 | `regen_identities.py` | regenerates `test-vectors/identities.json` | ✅ |
+| `regen_announces.py` | regenerates `test-vectors/announces.json` (deterministic announce wire bytes, with and without ratchet) | ✅ |
+| `regen_lxmf.py` | regenerates `test-vectors/lxmf.json` (deterministic opportunistic-LXMF plaintext + Token ciphertext) | ✅ |
+| `regen_links.py` | regenerates `test-vectors/links.json` (deterministic LINKREQUEST + LRPROOF + derived session key) | ✅ |
 
 See [`../agent.md`](../agent.md) §5 and [`../todo.md`](../todo.md) for the remaining priority order.
