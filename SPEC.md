@@ -6,6 +6,156 @@ A byte-level reference for implementing Reticulum-compatible clients. This docum
 
 Source citations refer to the standard `pip install rns lxmf` install layout (`RNS/`, `LXMF/`).
 
+<details>
+<summary><b>Contents</b> — click to expand the per-section table of contents (regenerate with <code>python tools/_gen_toc.py</code>)</summary>
+
+<!-- TOC: regenerate via `python tools/_gen_toc.py` -->
+
+- [1. Identity and destination hashes](#1-identity-and-destination-hashes)
+  - [1.1 Identity composition](#11-identity-composition)
+  - [1.2 Destination hash](#12-destination-hash)
+  - [1.3 Private key on-disk format](#13-private-key-on-disk-format)
+  - [1.4 GROUP destinations (symmetric-key alternative to SINGLE)](#14-group-destinations-symmetric-key-alternative-to-single)
+- [2. Packet header](#2-packet-header)
+  - [2.1 Flag byte layout](#21-flag-byte-layout)
+  - [2.2 Two header forms](#22-two-header-forms)
+  - [2.3 Originator HEADER_1 → HEADER_2 conversion](#23-originator-header_1-header_2-conversion)
+  - [2.4 Hop count](#24-hop-count)
+  - [2.5 Context byte](#25-context-byte)
+  - [2.6 Source](#26-source)
+- [3. Token cryptography (modified Fernet)](#3-token-cryptography-modified-fernet)
+  - [3.1 Wire format](#31-wire-format)
+  - [3.2 Encrypt steps (opportunistic)](#32-encrypt-steps-opportunistic)
+  - [3.3 Decrypt steps](#33-decrypt-steps)
+  - [3.4 Source](#34-source)
+- [4. Announce wire format](#4-announce-wire-format)
+  - [4.1 Packet body](#41-packet-body)
+  - [4.2 Signed data](#42-signed-data)
+  - [4.3 `app_data` format for LXMF delivery destinations](#43-app_data-format-for-lxmf-delivery-destinations)
+  - [4.4 Announce filtering by `name_hash`](#44-announce-filtering-by-name_hash)
+  - [4.5 Announce validation rules (receive side)](#45-announce-validation-rules-receive-side)
+- [5. LXMF wire format](#5-lxmf-wire-format)
+  - [5.1 Opportunistic delivery (single Reticulum DATA packet)](#51-opportunistic-delivery-single-reticulum-data-packet)
+  - [5.2 Direct delivery (over an established Reticulum Link)](#52-direct-delivery-over-an-established-reticulum-link)
+  - [5.3 `msgpack_payload`](#53-msgpack_payload)
+  - [5.4 Source/destination semantics](#54-sourcedestination-semantics)
+  - [5.5 Signed data](#55-signed-data)
+  - [5.6 Signature verification — msgpack variant tolerance](#56-signature-verification-msgpack-variant-tolerance)
+  - [5.7 LXMF stamps and tickets (anti-spam)](#57-lxmf-stamps-and-tickets-anti-spam)
+  - [5.8 Propagation node protocol (offline message store-and-forward)](#58-propagation-node-protocol-offline-message-store-and-forward)
+  - [5.9 Source](#59-source)
+- [6. Reticulum Link protocol](#6-reticulum-link-protocol)
+  - [6.1 LINKREQUEST (initiator → responder)](#61-linkrequest-initiator-responder)
+  - [6.2 LRPROOF (responder → initiator)](#62-lrproof-responder-initiator)
+  - [6.3 link_id derivation](#63-link_id-derivation)
+  - [6.4 Session key derivation](#64-session-key-derivation)
+  - [6.5 Packet receipts (regular `PROOF` packets)](#65-packet-receipts-regular-proof-packets)
+  - [6.6 MTU and mode signalling (3-byte trailer on LINKREQUEST and LRPROOF)](#66-mtu-and-mode-signalling-3-byte-trailer-on-linkrequest-and-lrproof)
+  - [6.7 KEEPALIVE and link teardown](#67-keepalive-and-link-teardown)
+  - [6.8 Channel mode (`CHANNEL = 0x0E`)](#68-channel-mode-channel-0x0e)
+  - [6.9 Source](#69-source)
+- [7. Transport behavior — the parts that bite](#7-transport-behavior-the-parts-that-bite)
+  - [7.1 Path requests: peers send `path?` before opportunistic LXMF when no path is known](#71-path-requests-peers-send-path-before-opportunistic-lxmf-when-no-path-is-known)
+  - [7.2 Responding to path requests](#72-responding-to-path-requests)
+  - [7.3 Ratchet rotation (forward-secrecy hygiene, not dedup)](#73-ratchet-rotation-forward-secrecy-hygiene-not-dedup)
+  - [7.4 Ratchet ring (inbound decrypt tolerance)](#74-ratchet-ring-inbound-decrypt-tolerance)
+  - [7.5 Periodic re-announce](#75-periodic-re-announce)
+  - [7.6 `TCPServerInterface.OUT` is True by default in practice](#76-tcpserverinterfaceout-is-true-by-default-in-practice)
+  - [7.7 Source](#77-source)
+- [8. Transport framing](#8-transport-framing)
+  - [8.1 KISS (BLE / serial / RNode link)](#81-kiss-ble-serial-rnode-link)
+  - [8.2 HDLC (TCP / `rnsd TCPServerInterface`)](#82-hdlc-tcp-rnsd-tcpserverinterface)
+  - [8.3 RNode air-frame header and split-packet protocol](#83-rnode-air-frame-header-and-split-packet-protocol)
+  - [8.4 RNode KISS configuration handshake](#84-rnode-kiss-configuration-handshake)
+  - [8.5 RNode CSMA / airtime accounting](#85-rnode-csma-airtime-accounting)
+  - [8.6 AutoInterface multicast discovery (LAN auto-detect)](#86-autointerface-multicast-discovery-lan-auto-detect)
+- [9. Implementation gotchas](#9-implementation-gotchas)
+  - [9.1 LXMF `source_hash` is the destination hash, not the identity hash](#91-lxmf-source_hash-is-the-destination-hash-not-the-identity-hash)
+  - [9.2 Web Crypto and JCA AES-CBC auto-pad PKCS#7 — do not pad manually](#92-web-crypto-and-jca-aes-cbc-auto-pad-pkcs7-do-not-pad-manually)
+  - [9.3 RNS bundles `umsgpack` — encode display names as `bytes`, not `str`](#93-rns-bundles-umsgpack-encode-display-names-as-bytes-not-str)
+  - [9.4 Display name preservation across re-announces](#94-display-name-preservation-across-re-announces)
+  - [9.5 Self-announce echo](#95-self-announce-echo)
+  - [9.6 Clockless sender timestamps](#96-clockless-sender-timestamps)
+  - [9.7 Periodic re-announce is non-optional](#97-periodic-re-announce-is-non-optional)
+  - [9.8 The destination hash uses the bare app-name string](#98-the-destination-hash-uses-the-bare-app-name-string)
+  - [9.9 Diagnostic: rx-log every inbound packet at the engine entry](#99-diagnostic-rx-log-every-inbound-packet-at-the-engine-entry)
+  - [9.10 microReticulum `random_hash` lacks the timestamp half](#910-microreticulum-random_hash-lacks-the-timestamp-half)
+- [10. Resource fragmentation protocol](#10-resource-fragmentation-protocol)
+  - [10.1 When Resource runs](#101-when-resource-runs)
+  - [10.2 Initiator-side preparation](#102-initiator-side-preparation)
+  - [10.3 Wire packet contexts used during a Resource transfer](#103-wire-packet-contexts-used-during-a-resource-transfer)
+  - [10.4 RESOURCE_ADV — the advertisement](#104-resource_adv-the-advertisement)
+  - [10.5 RESOURCE_REQ — receiver requests parts](#105-resource_req-receiver-requests-parts)
+  - [10.6 RESOURCE part packets](#106-resource-part-packets)
+  - [10.7 RESOURCE_HMU — hashmap update](#107-resource_hmu-hashmap-update)
+  - [10.8 RESOURCE_PRF — final proof](#108-resource_prf-final-proof)
+  - [10.9 RESOURCE_ICL / RESOURCE_RCL — cancellation](#109-resource_icl-resource_rcl-cancellation)
+  - [10.10 Sliding window and rate adaptation](#1010-sliding-window-and-rate-adaptation)
+  - [10.11 Multi-segment resources](#1011-multi-segment-resources)
+  - [10.12 Compression and encryption layering](#1012-compression-and-encryption-layering)
+  - [10.13 Source map for §10](#1013-source-map-for-10)
+- [11. REQUEST/RESPONSE protocol (NomadNet pages, propagation `/get`, custom RPC)](#11-requestresponse-protocol-nomadnet-pages-propagation-get-custom-rpc)
+  - [11.1 Wire form — REQUEST (initiator → server)](#111-wire-form-request-initiator-server)
+  - [11.2 Wire form — RESPONSE (server → initiator)](#112-wire-form-response-server-initiator)
+  - [11.3 Path hash collision avoidance](#113-path-hash-collision-avoidance)
+  - [11.4 Authorization (`allow` modes)](#114-authorization-allow-modes)
+  - [11.5 RequestReceipt — initiator-side state machine](#115-requestreceipt-initiator-side-state-machine)
+  - [11.6 NomadNet specifics (informational, not normative)](#116-nomadnet-specifics-informational-not-normative)
+  - [11.7 Source map](#117-source-map)
+- [12. Transport-relay behaviour](#12-transport-relay-behaviour)
+  - [12.1 The `transport_enabled` toggle](#121-the-transport_enabled-toggle)
+  - [12.2 DATA forwarding rules](#122-data-forwarding-rules)
+  - [12.3 ANNOUNCE rebroadcasting](#123-announce-rebroadcasting)
+  - [12.4 Path table management](#124-path-table-management)
+  - [12.5 Reverse-table link transport](#125-reverse-table-link-transport)
+  - [12.6 Tunnels and shared-instance protocol](#126-tunnels-and-shared-instance-protocol)
+  - [12.7 Source map for §12](#127-source-map-for-12)
+- [13. Threading and concurrency model](#13-threading-and-concurrency-model)
+  - [13.1 Long-running threads](#131-long-running-threads)
+  - [13.2 Lock inventory](#132-lock-inventory)
+  - [13.3 Callback-thread guarantees (and lack thereof)](#133-callback-thread-guarantees-and-lack-thereof)
+  - [13.4 Implementation-private constants](#134-implementation-private-constants)
+  - [13.5 Source map](#135-source-map)
+- [14. Failure modes — symptom → root cause](#14-failure-modes-symptom-root-cause)
+  - [Identity / announce](#identity-announce)
+  - [Token crypto / opportunistic LXMF](#token-crypto-opportunistic-lxmf)
+  - [Link establishment / proof receipts](#link-establishment-proof-receipts)
+  - [Resource transfers (large bodies)](#resource-transfers-large-bodies)
+  - [Path discovery](#path-discovery)
+  - [Transport / framing](#transport-framing)
+  - [LXMF specifics](#lxmf-specifics)
+  - [Concurrency](#concurrency)
+  - [When all else fails](#when-all-else-fails)
+- [15. Time and clock requirements](#15-time-and-clock-requirements)
+  - [15.1 Three clock kinds](#151-three-clock-kinds)
+  - [15.2 Required: monotonic seconds (every implementation)](#152-required-monotonic-seconds-every-implementation)
+  - [15.3 Recommended: monotonic-with-no-skew across announces (timestamp encoding)](#153-recommended-monotonic-with-no-skew-across-announces-timestamp-encoding)
+  - [15.4 Recommended: wall time (LXMF-level)](#154-recommended-wall-time-lxmf-level)
+  - [15.5 Optional: high-resolution monotonic for diagnostics](#155-optional-high-resolution-monotonic-for-diagnostics)
+  - [15.6 What fails on a no-RTC, no-NTP-sync device](#156-what-fails-on-a-no-rtc-no-ntp-sync-device)
+  - [15.7 Source map](#157-source-map)
+- [16. Bounded-state inventory (memory limits at a glance)](#16-bounded-state-inventory-memory-limits-at-a-glance)
+  - [16.1 Per-node state caps](#161-per-node-state-caps)
+  - [16.2 Per-interface state caps](#162-per-interface-state-caps)
+  - [16.3 Per-destination state caps](#163-per-destination-state-caps)
+  - [16.4 Per-Link state caps](#164-per-link-state-caps)
+  - [16.5 Per-Resource state caps](#165-per-resource-state-caps)
+  - [16.6 Identity/cryptography caches](#166-identitycryptography-caches)
+  - [16.7 LXMF-level caps](#167-lxmf-level-caps)
+  - [16.8 Channel state caps](#168-channel-state-caps)
+  - [16.9 What this means for embedded targets](#169-what-this-means-for-embedded-targets)
+- [17. Implementation taxonomy: who needs which sections](#17-implementation-taxonomy-who-needs-which-sections)
+  - [17.1 The three categories](#171-the-three-categories)
+  - [17.2 Section relevance by category](#172-section-relevance-by-category)
+  - [17.3 Worked example: §2.3 originator HEADER_1→HEADER_2 conversion](#173-worked-example-23-originator-header_1header_2-conversion)
+  - [17.4 Pragmatic implication](#174-pragmatic-implication)
+- [18. Test vectors](#18-test-vectors)
+- [19. Source map](#19-source-map)
+
+<!-- /TOC -->
+
+</details>
+
 ---
 
 ## 1. Identity and destination hashes
@@ -2305,6 +2455,9 @@ Default timeout is `link.rtt × link.traffic_timeout_factor + Resource.RESPONSE_
 
 ### 11.6 NomadNet specifics (informational, not normative)
 
+<details>
+<summary>Click to expand — NomadNet-layer conventions on top of §11 (form data env vars, link target syntax, micron page headers, <code>/file/</code> downloads, ALLOW_LIST, partials). Skip if you're not implementing a NomadNet client; the §11 wire form is the protocol layer.</summary>
+
 NomadNet pages are served over this protocol with these conventions. Source-of-truth for all of these is upstream `markqvist/NomadNet`: `nomadnet/Node.py` (server) and `nomadnet/ui/textui/Browser.py` (client).
 
 #### 11.6.1 Paths and the `nomadnetwork.node` aspect
@@ -2439,6 +2592,8 @@ Implementation reference: `Browser.py:493-606` (`__load_partial`, `start_partial
 | Allow modes / `ALLOW_LIST` enforcement | `Node.py:152-154` |
 
 None of these are wire-spec — they're caller conventions layered on top of §11. A Reticulum client that can't render micron markup or doesn't implement the form/cache/partial conventions can still fetch pages and display the raw bytes; the protocol layer doesn't care about content.
+
+</details>
 
 ### 11.7 Source map
 

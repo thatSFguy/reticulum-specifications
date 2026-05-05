@@ -402,12 +402,15 @@ order: top three save the most debugging hours.
 
 ## Spec polishing (lower priority)
 
-- [ ] **Split `SPEC.md` into per-layer files** as the document grows
-      past ~2300 lines. Suggested layout per `README.md`:
-      `00-overview.md`, `01-packet-header.md`, `02-identity.md`,
-      `03-announce.md`, `04-token-crypto.md`, `05-lxmf.md`,
-      `06-link.md`, `07-resource.md`, `08-transport.md`,
-      `09-paths-and-discovery.md`, `10-implementation-gotchas.md`.
+- [x] **Navigation polish for `SPEC.md`** — at ~3300 lines, splitting
+      into per-layer files would have broken ~37 cross-references
+      (flow docs, verifier docstrings, agent.md, README) for
+      relatively little reader benefit. Picked the lighter polish
+      instead: a collapsible Table of Contents at the top of the
+      doc with anchor links to every H2 + H3, plus a `<details>`
+      wrap on §11.6 (NomadNet specifics — informational/non-normative,
+      and the longest H3 sub-tree in the document). Helper script at
+      `tools/_gen_toc.py` regenerates the ToC if headings change.
 
 - [x] **Add a "last-verified-against-rns" line** to SPEC.md
       frontmatter (per `agent.md` §7). Done — `RNS 1.2.0 / LXMF
