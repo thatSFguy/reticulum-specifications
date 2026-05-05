@@ -1937,6 +1937,31 @@ bit 5 : x — has_metadata
 
 The advertisement is sent once on `Resource.advertise()`; if no part requests arrive within the watchdog timeout, it is retransmitted up to `MAX_ADV_RETRIES = 4` times before the resource is cancelled (`Resource.py:573-590`).
 
+> **Security: cap `t` and `d` at receive time.** `t` and `d` are the
+> sender's claims about how big the resource will be. A misbehaving
+> or hostile peer can advertise multi-gigabyte values that a naïve
+> receiver will then try to allocate buffers for. Two attack shapes
+> matter:
+>
+> 1. **Direct allocation bomb.** Receiver pre-allocates an output
+>    buffer sized from `t` or `d` and OOMs before any chunk arrives.
+> 2. **Decompression bomb (when `c = 1`).** A small (~tens of KB)
+>    bz2 input legitimately expands to gigabytes. The chunk-count
+>    cap from `HASHMAP_MAX_LEN` (§10.4) bounds raw on-wire chunks
+>    but does NOT bound the post-decompression buffer.
+>
+> Implementations SHOULD enforce a per-application cap (a few MiB is
+> reasonable for NomadNet pages and propagation `/get` blobs; file
+> downloads MAY allow more if the receiver has the budget) and
+> reject advertisements with `t` or `d` over the cap before
+> responding with the first RESOURCE_REQ. When `c = 1`, the
+> decompressor MUST also abort if the running output total exceeds
+> the cap (defense in depth — a sender that lies about `d` would
+> otherwise bypass the parse-time check). Reference: a receiver
+> implementing `delivery_resource_advertised(resource)` returning
+> `False` (§5.8.3 / §16.9) is the upstream-blessed way to refuse
+> oversized advertisements.
+
 ### 10.5 RESOURCE_REQ — receiver requests parts
 
 Sent by the receiver to ask for a window's worth of specific parts (`Resource.py:934-983`). Body layout:
@@ -1965,6 +1990,38 @@ Two interop traps:
 1. **Map_hashes are not guaranteed unique across the whole resource** — only within `COLLISION_GUARD_SIZE` of any sliding-window position. A receiver that searches the entire hashmap for a matching part-hash can mis-place a part if two distant parts collide. The reference receiver searches only `hashmap[consecutive_completed_height : consecutive_completed_height + window]`.
 2. **Parts are link-encrypted but otherwise opaque** — the receiver has no way to validate a part beyond its 4-byte map_hash until the whole resource assembles and the SHA-256 over the reassembled data matches `h`.
 
+> **Implementation gotcha: chunks are NOT individually encrypted —
+> they are raw slices of an already-encrypted whole.** Per §10.2 step
+> 4, the entire `random_hash || (compressed?) data` blob is link-
+> encrypted ONCE, *then* split into MTU-sized parts at step 6. Each
+> wire chunk is just `outerToken[i*sdu : (i+1)*sdu]` — a fragment
+> with no Token-form header (no IV, no HMAC) of its own. Receivers
+> MUST hand inbound chunk bytes directly to the hashmap match
+> (`SHA-256(chunk || random_hash)[:4]`) without attempting per-chunk
+> Token decrypt. The single decrypt step happens once over the
+> concatenated assembly inside `assemble()` (§10.8), not per packet.
+>
+> A receiver that calls `link.decrypt(chunk)` on each inbound
+> RESOURCE part will fail with HMAC verification errors on every
+> chunk — each slice is missing the Token header bytes the
+> decrypt expects. This is a common implementer mistake and the
+> spec text "parts are link-encrypted" reads ambiguously enough
+> that several clean-room ports have made it. Verbatim from
+> `Resource.py:607-625`:
+>
+> ```python
+> for i in range(0, hashmap_entries):
+>     data = self.data[i*self.sdu : (i+1)*self.sdu]   # slice ciphertext
+>     map_hash = self.get_map_hash(data)              # hash the SLICE
+>     part = RNS.Packet(link, data, context=RNS.Packet.RESOURCE)
+>     part.pack()
+>     self.hashmap += part.map_hash
+>     self.parts.append(part)
+> ```
+>
+> The body of each RESOURCE packet is `data` here — a raw slice of
+> the already-encrypted `self.data`. No re-encryption.
+
 ### 10.7 RESOURCE_HMU — hashmap update
 
 When the sender receives a RESOURCE_REQ with `exhausted == 0xFF` and a `last_map_hash`, it locates the position of `last_map_hash` in its full hashmap, advances to the **next** `HASHMAP_MAX_LEN` window, and emits the hashmap continuation (`Resource.py:1030-1064`):
@@ -1983,11 +2040,25 @@ When the receiver has assembled the full resource (`received_count == total_part
 
 1. Concatenate `parts[0..n]` to a single buffer.
 2. `link.decrypt(...)` to plaintext.
-3. Strip the 4-byte `random_hash` prefix.
+3. Strip the 4-byte `random_hash` prefix — **discard, do NOT compare to advertisement.r** (see callout below).
 4. If `compressed`: bz2-decompress.
 5. Recompute `SHA256(plaintext_with_random || random_hash)` and compare to `h`.
 6. If match: peel off metadata if `x` is set, write `data` to the destination; status = `COMPLETE`.
 7. If mismatch: status = `CORRUPT`; cancel.
+
+> **Implementation gotcha: the leading 4 bytes are NOT
+> `advertisement.r`.** Step 3 reads "strip the 4-byte random_hash
+> prefix" — sender-side `Resource.py:567` writes those bytes via
+> `RNS.Identity.get_random_hash()[:4]`, a fresh random call. They
+> are deliberately distinct from `self.random_hash` (the value
+> the advertisement's `r` field carries — used only for the
+> hashmap formula `SHA256(chunk || r)[:4]` and the integrity
+> formula `SHA256(data || r)`). A receiver that does
+> `assert prefix == advertisement.r` will reject every legitimate
+> Resource as corrupt. Just strip and discard. Integrity is proven
+> exclusively by step 5's `SHA256(plaintext_with_random || random_hash)`
+> against `h` — that's the only check that matters; the prefix
+> bytes are scaffolding.
 
 On `COMPLETE`, the receiver emits the proof:
 
@@ -2092,10 +2163,38 @@ The msgpack array layout:
 ```
 [0]  timestamp            float (seconds since unix epoch, requester's clock)
 [1]  request_path_hash    bytes(16) — SHA-256 of the requested path string, truncated
-[2]  data                 application-defined bytes (often msgpack itself, or None)
+[2]  data                 application-defined value, encoded directly into the
+                          outer msgpack list — NOT a pre-msgpacked byte blob
 ```
 
-`request_id` is the 16-byte truncated hash of `packed_request` — used by the receiver to correlate the inbound RESPONSE with this REQUEST. For single-packet REQUESTs the request_id is computed receiver-side from the packet body bytes; for Resource REQUESTs the request_id is carried explicitly in the advertisement's `q` field (§10.4).
+> **Implementation gotcha: element [2] is encoded once, not twice.**
+> `data` is whatever the application wants to send: `None` (msgpack nil)
+> for plain GETs, a `dict` for NomadNet form posts (§11.6), a `list` for
+> LXMF propagation `/get` rounds (§11.6), or `bytes` for opaque
+> application blobs. **The whole `[time, path_hash, data]` list is
+> msgpacked exactly once.** Element [2] is NOT a pre-encoded byte blob
+> wrapped as msgpack `bin` — that's a common implementer mistake (see
+> below) and it silently corrupts every form submission and every
+> propagation poll because server-side handlers do
+> `isinstance(data, dict)` / `isinstance(data, list)` and the `bin`
+> form is `bytes`, falling through to the no-op branch.
+>
+> Concrete example for a NomadNet form post `field_message=hello`:
+>
+> ```python
+> data = {"field_message": "hello"}      # native Python dict
+> envelope = [time.time(), path_hash, data]
+> packed = umsgpack.packb(envelope)      # ONE pack call
+> # → on the wire, element [2] decodes back to a {} map, NOT to bytes
+> ```
+>
+> Pre-pack callers (`umsgpack.packb(data)` then passing the bytes as
+> element [2]) produce a wire envelope where decode yields `bytes` for
+> [2] — looks structurally similar but is semantically a different
+> type, and every NomadNet `Node.py:109` / LXMF `LXMRouter.__get_handler`
+> drops the request silently with no error response.
+
+For single-packet REQUESTs, `request_id = SHA-256(packet.get_hashable_part())[:16]` — i.e. the 16-byte truncation of the **packet hash**, computed over the on-the-wire bytes (low nibble of flags || `raw[2:]` for HEADER_1 / `raw[18:]` for HEADER_2). NOT a hash of the inner plaintext or of the msgpack-encoded `packed_request` blob. The server side at `Link.handle_request:1286` literally calls `packet.getTruncatedHash()`. Both sides MUST hash the same bytes to match. For Resource REQUESTs the request_id is carried explicitly in the advertisement's `q` field (§10.4) and the initiator MUST set it to the truncated `SHA-256(packed_request)[:16]` of the inner plaintext per `Resource.py::__init__` line 478 (Resource path uses the plaintext-hash form because there is no single packet to hash). The receiver uses this id to correlate the inbound RESPONSE with this REQUEST.
 
 ### 11.2 Wire form — RESPONSE (server → initiator)
 
@@ -2118,6 +2217,42 @@ else:
 | Resource transfer, `request_id` field set, `is_response = True` (advertisement flag `p`) | response too large |
 
 The `request_id` in element [0] of the response msgpack lets the initiator match the response to the original outbound REQUEST in `Link.pending_requests` even when several requests are in flight on the same Link (`Link.handle_response` line 906-925).
+
+> **Security: initiators MUST verify element [0].** The request_id
+> check isn't decorative — without it, a misbehaving or compromised
+> transit relay can replay a stale RESPONSE from a prior request and
+> the initiator accepts it as the answer to whatever's currently
+> pending. An implementation that drives only one in-flight request
+> per link at a time is "lucky" today (the wrong-id RESPONSE just
+> happens to carry sane bytes for the application to display), but
+> as soon as it adds link reuse, partials, or any kind of pipelining
+> the bug becomes a silent confused-deputy.
+>
+> **Compute `expected_id` correctly.** Server-side
+> `Link.handle_request:1286` is:
+>
+> ```python
+> request_id = packet.getTruncatedHash()
+> ```
+>
+> i.e. **`SHA-256(packet.get_hashable_part())[:16]`** where
+> `get_hashable_part()` (`Packet.py:332-338`) is:
+>
+> ```
+> hashable = (raw[0] & 0x0F) || raw[2:]              # HEADER_1
+> hashable = (raw[0] & 0x0F) || raw[18:]             # HEADER_2 (skips transport_id slot)
+> ```
+>
+> NOT a hash of the inner plaintext. Compute the same on the
+> initiator from your outbound REQUEST packet's wire bytes; on every
+> inbound RESPONSE, drop the packet (and log) if `decoded[0]`
+> doesn't match. Many clean-room implementations have read this
+> section's prior wording (\"16-byte truncated hash of
+> `packed_request`\") as \"hash the inner plaintext bytes\" and
+> produced a formula that never matches what the server sent —
+> every RESPONSE gets dropped, every page-fetch and `/get` round
+> times out silently. The hashing is over the on-the-wire packet
+> bytes, not the encrypted-then-decrypted payload.
 
 #### File responses
 
@@ -2170,13 +2305,140 @@ Default timeout is `link.rtt × link.traffic_timeout_factor + Resource.RESPONSE_
 
 ### 11.6 NomadNet specifics (informational, not normative)
 
-NomadNet pages are served over this protocol with these conventions:
+NomadNet pages are served over this protocol with these conventions. Source-of-truth for all of these is upstream `markqvist/NomadNet`: `nomadnet/Node.py` (server) and `nomadnet/ui/textui/Browser.py` (client).
 
-- Path format: `/page/foo.mu` — the `.mu` extension marks "micron"-formatted pages (NomadNet's lightweight markup).
-- Request data: optional msgpack dict of form-field values (e.g. `{"username": "alice"}`).
-- Response: either inline page bytes (for static pages) or a file handle + metadata (for large pages or downloads).
+#### 11.6.1 Paths and the `nomadnetwork.node` aspect
 
-None of these are wire-spec — they're caller conventions on top of §13. A Reticulum client that can't render micron markup can still fetch pages and display the raw bytes; the protocol layer doesn't care about content.
+- Server: hosts a destination at `nomadnetwork`/`node` aspects (`name_hash = 213e6311bcec54ab4fde`). Pages are registered as `register_request_handler(path="/page/<name>.mu", ...)`.
+- Client: default path is `/page/index.mu` (`Browser.py:67` `DEFAULT_PATH`).
+- Path format: `/page/<name>.mu` for micron pages, `/file/<name>` for static file downloads (§11.6.5).
+- Path hash on the wire is the §11.1 `SHA-256(path)[:16]` truncation — `/page/index.mu` and `/page/help.mu` are distinct request_handler keys.
+
+#### 11.6.2 Form data and env-var convention
+
+When a client tap on a micron link with form fields fires a REQUEST, element [2] of the envelope is a msgpack `dict` (NOT pre-msgpacked bytes — see §11.1). Two key prefixes are conventional and special-cased server-side:
+
+| Prefix | Source | Server treatment |
+|---|---|---|
+| `field_<name>` | Form-input values typed by the user | Exported as env var `field_<name>=<value>` to the page's executable handler |
+| `var_<name>`   | URL-query-style parameters embedded in the link itself | Exported as env var `var_<name>=<value>` |
+
+`Node.py:109-111` (upstream master, fetched 2026-05-04):
+
+```python
+if data != None and isinstance(data, dict):
+    for e in data:
+        if isinstance(e, str) and (e.startswith("field_") or e.startswith("var_")):
+            env_map[e] = data[e]
+```
+
+The `field_` vs `var_` distinction is purely cosmetic on the wire (both become env vars), but in micron syntax they have separate origins:
+
+- **Form fields** (`field_<name>`) come from `<flags|name`value>` widgets that render as text inputs / checkboxes / radios. The Browser collects current widget state into a dict at submit time.
+- **URL parameters** (`var_<name>`) come from `key=value` entries in the third backtick component of a link: `` `[label`/page/foo.mu`username=alice|active=true|message] `` produces `{"var_username": "alice", "var_active": "true", ...}` PLUS `field_message` from a widget named `message` (`Browser.py:198-205`). Entries with `=` are var-params; entries without are field-widget names whose current values get included.
+
+##### Checkbox semantics (Browser.py:226-241)
+
+For checkboxes specifically:
+
+- **Unchecked**: the field key is **omitted from the dict entirely** (NOT sent as empty string).
+- **Multi-select** (multiple checkboxes sharing the same field name): values are comma-joined (`{"field_topics": "weather,radio"}`).
+
+Implementations that always send `{"field_<name>": ""}` for unchecked boxes will break server-side handlers that test `if "field_subscribe" in env: ...`.
+
+#### 11.6.3 Link target syntax (parsed by `Browser.py` `expand_shorthands` + `link_request`)
+
+A micron link's `target` string (the second component of `[label`target]` or third of `[label`target`fields]`) is one of:
+
+| Form | Meaning | Browser.py ref |
+|---|---|---|
+| `/path/to/page.mu` | Same-node nav: load `path` on the currently-selected destination. | implicit |
+| `<32hex>` (bare 16-byte truncated identity hash, hex-encoded) | Cross-node nav to `nomadnetwork.node` at that hash, default path `/page/index.mu`. | 255-259 |
+| `<32hex>:/page/x.mu` | Cross-node nav with explicit path. | 255-259 |
+| `nnn@<32hex>[:/path]` | Same as bare-hash form; `nnn` is a shorthand for `nomadnetwork.node`. | 184-189 |
+| `lxmf@<32hex>` / `lxmf.delivery@<32hex>` | Open a conversation in the LXMF (messaging) layer, NOT a page fetch. | 184-189, 266-322 |
+
+`expand_shorthands` (lines 184-189):
+
+```python
+def expand_shorthands(self, destination_type):
+    if destination_type == "nnn":   return "nomadnetwork.node"
+    elif destination_type == "lxmf": return "lxmf.delivery"
+    else: return destination_type
+```
+
+Implementations should normalize hash hex to lower case before keying any cache / repo lookup, and reject inputs with embedded separators (`dead:beef:…`) — the wire form is plain bytes, accepting forgiving variants creates aliases for the same destination and risks cache-poisoning.
+
+#### 11.6.4 Page-level header conventions
+
+A `.mu` page MAY begin with one or more single-line headers prefixed `#!`. These are stripped by `Browser.py` before micron rendering and are NOT part of the page body:
+
+| Header | Effect | Ref |
+|---|---|---|
+| `#!c=<seconds>` | Cache-TTL hint. `0` = "do not cache." Default cache is 12 h. | Browser.py:1315-1335 |
+| `#!bg=<3hex or 6hex>` | Page-wide background color. | Browser.py:1282-1302 |
+| `#!fg=<3hex or 6hex>` | Page-wide foreground color (overrides theme default). | Browser.py:1282-1302 |
+
+The `#!c=N` header is widely used; the color headers are rare. A client that doesn't honor any of them still renders pages correctly.
+
+#### 11.6.5 File downloads (`/file/...`)
+
+Pages whose path starts with `/file/` are static downloads, not micron content. The server's response generator returns:
+
+```python
+return [open(file_path, "rb"), {"name": file_name.encode("utf-8")}]
+```
+
+— a `(file_handle, metadata_dict)` pair. The transport-layer file response shape per §11.2 §"File responses": the file bytes go through the §10 Resource pipeline, AND the metadata is also embedded as a length-prefixed msgpack blob in the Resource advertisement's metadata-prefix slot (§10.2 step 1). Clients receive `[filename_bytes, file_data_bytes]` after Resource assembly (Browser.py:1437-1441).
+
+A client that hasn't implemented file downloads can detect `/file/` paths and either show a "downloads not supported" message or just discard the response.
+
+#### 11.6.6 Authorization: `ALLOW_ALL` vs `ALLOW_LIST`
+
+Pages are registered with one of three allow modes (`Destination.py:35-40`):
+
+- `ALLOW_ALL` — anyone with a Link can fetch. Used for public NomadNet pages, the propagation node's `/get`, etc.
+- `ALLOW_LIST` — caller's identity hash must appear in the page's `.allowed` file. Server checks `remote_identity.hash` against the list at request time (`Node.py:152-154`).
+- `ALLOW_NONE` — registered handlers that exist but reject all requests (rare; debug only).
+
+For `ALLOW_LIST` the client MUST call `link.identify(identity)` immediately after the link transitions to ACTIVE and BEFORE issuing the REQUEST. This sends a `LINKIDENTIFY (context = 0xFB)` packet whose payload carries a signature over `link_id` proving the long-term identity hash. Without it, `remote_identity` is `None` server-side and every `ALLOW_LIST` page returns `DEFAULT_NOTALLOWED`. See `Browser.py:1245-1250` for the upstream call site:
+
+```python
+def link_established(self, link):
+    if self.app.directory.should_identify_on_connect(self.destination_hash):
+        self.link.identify(self.app.identity)
+```
+
+> **Privacy note for client implementers.** Calling `link.identify` on
+> *every* link reveals the user's long-term identity hash to any node
+> they browse — including pages on hostile public hubs. Implementations
+> SHOULD make `identify` opt-in per destination (or per session), only
+> firing it when the user has affirmatively decided to authenticate.
+> Anonymous browsing of `ALLOW_ALL` pages should not pin identity.
+
+#### 11.6.7 Partial pages (server-side includes)
+
+A micron page may embed `` `{<path>[`<refresh_seconds>[`<fields>]]} `` placeholders. The Browser tracks each placeholder, opens / reuses a Link to the partial's destination, fetches `<path>` as a sub-REQUEST, and substitutes the response bytes into the rendered output. If a `<refresh>` is set, the partial is re-fetched periodically.
+
+Implementation reference: `Browser.py:493-606` (`__load_partial`, `start_partial_updater`). Partials are how live "chat tail" / "status" panels work on real NomadNet community pages. A client without partial support sees the literal placeholder text and the page renders as a static snapshot.
+
+#### 11.6.8 Source map (NomadNet ↔ wire)
+
+| Concept | Upstream Python file:line |
+|---|---|
+| Default path | `nomadnet/ui/textui/Browser.py:67` |
+| Form-field collection | `Browser.py:198-241` |
+| `field_` / `var_` env-var mapping | `nomadnet/Node.py:109-111` |
+| Shorthand expansion (`nnn`/`lxmf`) | `Browser.py:184-189` |
+| Cross-node link routing | `Browser.py:248-322` |
+| Identify-on-connect | `Browser.py:1245-1250` |
+| Cache-TTL header `#!c=N` | `Browser.py:1315-1335` |
+| Color headers `#!bg=` / `#!fg=` | `Browser.py:1282-1302` |
+| `/file/...` download dispatch | `Browser.py:781-785, 1420-1462` + `Node.py:128-141` |
+| Partial placeholders | `Browser.py:493-606` |
+| Allow modes / `ALLOW_LIST` enforcement | `Node.py:152-154` |
+
+None of these are wire-spec — they're caller conventions layered on top of §11. A Reticulum client that can't render micron markup or doesn't implement the form/cache/partial conventions can still fetch pages and display the raw bytes; the protocol layer doesn't care about content.
 
 ### 11.7 Source map
 
