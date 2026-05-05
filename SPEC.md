@@ -1990,6 +1990,38 @@ Two interop traps:
 1. **Map_hashes are not guaranteed unique across the whole resource** — only within `COLLISION_GUARD_SIZE` of any sliding-window position. A receiver that searches the entire hashmap for a matching part-hash can mis-place a part if two distant parts collide. The reference receiver searches only `hashmap[consecutive_completed_height : consecutive_completed_height + window]`.
 2. **Parts are link-encrypted but otherwise opaque** — the receiver has no way to validate a part beyond its 4-byte map_hash until the whole resource assembles and the SHA-256 over the reassembled data matches `h`.
 
+> **Implementation gotcha: chunks are NOT individually encrypted —
+> they are raw slices of an already-encrypted whole.** Per §10.2 step
+> 4, the entire `random_hash || (compressed?) data` blob is link-
+> encrypted ONCE, *then* split into MTU-sized parts at step 6. Each
+> wire chunk is just `outerToken[i*sdu : (i+1)*sdu]` — a fragment
+> with no Token-form header (no IV, no HMAC) of its own. Receivers
+> MUST hand inbound chunk bytes directly to the hashmap match
+> (`SHA-256(chunk || random_hash)[:4]`) without attempting per-chunk
+> Token decrypt. The single decrypt step happens once over the
+> concatenated assembly inside `assemble()` (§10.8), not per packet.
+>
+> A receiver that calls `link.decrypt(chunk)` on each inbound
+> RESOURCE part will fail with HMAC verification errors on every
+> chunk — each slice is missing the Token header bytes the
+> decrypt expects. This is a common implementer mistake and the
+> spec text "parts are link-encrypted" reads ambiguously enough
+> that several clean-room ports have made it. Verbatim from
+> `Resource.py:607-625`:
+>
+> ```python
+> for i in range(0, hashmap_entries):
+>     data = self.data[i*self.sdu : (i+1)*self.sdu]   # slice ciphertext
+>     map_hash = self.get_map_hash(data)              # hash the SLICE
+>     part = RNS.Packet(link, data, context=RNS.Packet.RESOURCE)
+>     part.pack()
+>     self.hashmap += part.map_hash
+>     self.parts.append(part)
+> ```
+>
+> The body of each RESOURCE packet is `data` here — a raw slice of
+> the already-encrypted `self.data`. No re-encryption.
+
 ### 10.7 RESOURCE_HMU — hashmap update
 
 When the sender receives a RESOURCE_REQ with `exhausted == 0xFF` and a `last_map_hash`, it locates the position of `last_map_hash` in its full hashmap, advances to the **next** `HASHMAP_MAX_LEN` window, and emits the hashmap continuation (`Resource.py:1030-1064`):
@@ -2008,11 +2040,25 @@ When the receiver has assembled the full resource (`received_count == total_part
 
 1. Concatenate `parts[0..n]` to a single buffer.
 2. `link.decrypt(...)` to plaintext.
-3. Strip the 4-byte `random_hash` prefix.
+3. Strip the 4-byte `random_hash` prefix — **discard, do NOT compare to advertisement.r** (see callout below).
 4. If `compressed`: bz2-decompress.
 5. Recompute `SHA256(plaintext_with_random || random_hash)` and compare to `h`.
 6. If match: peel off metadata if `x` is set, write `data` to the destination; status = `COMPLETE`.
 7. If mismatch: status = `CORRUPT`; cancel.
+
+> **Implementation gotcha: the leading 4 bytes are NOT
+> `advertisement.r`.** Step 3 reads "strip the 4-byte random_hash
+> prefix" — sender-side `Resource.py:567` writes those bytes via
+> `RNS.Identity.get_random_hash()[:4]`, a fresh random call. They
+> are deliberately distinct from `self.random_hash` (the value
+> the advertisement's `r` field carries — used only for the
+> hashmap formula `SHA256(chunk || r)[:4]` and the integrity
+> formula `SHA256(data || r)`). A receiver that does
+> `assert prefix == advertisement.r` will reject every legitimate
+> Resource as corrupt. Just strip and discard. Integrity is proven
+> exclusively by step 5's `SHA256(plaintext_with_random || random_hash)`
+> against `h` — that's the only check that matters; the prefix
+> bytes are scaffolding.
 
 On `COMPLETE`, the receiver emits the proof:
 
@@ -2148,7 +2194,7 @@ The msgpack array layout:
 > type, and every NomadNet `Node.py:109` / LXMF `LXMRouter.__get_handler`
 > drops the request silently with no error response.
 
-`request_id` is the 16-byte truncated hash of `packed_request` — used by the receiver to correlate the inbound RESPONSE with this REQUEST. For single-packet REQUESTs the request_id is computed receiver-side from the packet body bytes; for Resource REQUESTs the request_id is carried explicitly in the advertisement's `q` field (§10.4).
+For single-packet REQUESTs, `request_id = SHA-256(packet.get_hashable_part())[:16]` — i.e. the 16-byte truncation of the **packet hash**, computed over the on-the-wire bytes (low nibble of flags || `raw[2:]` for HEADER_1 / `raw[18:]` for HEADER_2). NOT a hash of the inner plaintext or of the msgpack-encoded `packed_request` blob. The server side at `Link.handle_request:1286` literally calls `packet.getTruncatedHash()`. Both sides MUST hash the same bytes to match. For Resource REQUESTs the request_id is carried explicitly in the advertisement's `q` field (§10.4) and the initiator MUST set it to the truncated `SHA-256(packed_request)[:16]` of the inner plaintext per `Resource.py::__init__` line 478 (Resource path uses the plaintext-hash form because there is no single packet to hash). The receiver uses this id to correlate the inbound RESPONSE with this REQUEST.
 
 ### 11.2 Wire form — RESPONSE (server → initiator)
 
@@ -2172,20 +2218,41 @@ else:
 
 The `request_id` in element [0] of the response msgpack lets the initiator match the response to the original outbound REQUEST in `Link.pending_requests` even when several requests are in flight on the same Link (`Link.handle_response` line 906-925).
 
-> **Security: initiators MUST verify element [0].** The request_id check
-> isn't decorative — without it, a misbehaving or compromised transit
-> relay can replay a stale RESPONSE from a prior request and the
-> initiator accepts it as the answer to whatever's currently pending.
-> An implementation that drives only one in-flight request per link at
-> a time is "lucky" today (the wrong-id RESPONSE just happens to carry
-> sane bytes for the application to display), but as soon as it adds
-> link reuse, partials (NomadNet `[partial]` async sub-fetches), or
-> any kind of pipelining the bug becomes a silent confused-deputy.
-> Compute `expected_id = SHA256(packed_request)[:16]` at REQUEST send
-> time; on every inbound RESPONSE, drop the packet (and log) if
-> `decoded[0] != expected_id`. Implementations that observe a pattern
-> of mismatch logs should surface them — they may indicate a relay
-> misbehaving (or a peer running an out-of-spec stack).
+> **Security: initiators MUST verify element [0].** The request_id
+> check isn't decorative — without it, a misbehaving or compromised
+> transit relay can replay a stale RESPONSE from a prior request and
+> the initiator accepts it as the answer to whatever's currently
+> pending. An implementation that drives only one in-flight request
+> per link at a time is "lucky" today (the wrong-id RESPONSE just
+> happens to carry sane bytes for the application to display), but
+> as soon as it adds link reuse, partials, or any kind of pipelining
+> the bug becomes a silent confused-deputy.
+>
+> **Compute `expected_id` correctly.** Server-side
+> `Link.handle_request:1286` is:
+>
+> ```python
+> request_id = packet.getTruncatedHash()
+> ```
+>
+> i.e. **`SHA-256(packet.get_hashable_part())[:16]`** where
+> `get_hashable_part()` (`Packet.py:332-338`) is:
+>
+> ```
+> hashable = (raw[0] & 0x0F) || raw[2:]              # HEADER_1
+> hashable = (raw[0] & 0x0F) || raw[18:]             # HEADER_2 (skips transport_id slot)
+> ```
+>
+> NOT a hash of the inner plaintext. Compute the same on the
+> initiator from your outbound REQUEST packet's wire bytes; on every
+> inbound RESPONSE, drop the packet (and log) if `decoded[0]`
+> doesn't match. Many clean-room implementations have read this
+> section's prior wording (\"16-byte truncated hash of
+> `packed_request`\") as \"hash the inner plaintext bytes\" and
+> produced a formula that never matches what the server sent —
+> every RESPONSE gets dropped, every page-fetch and `/get` round
+> times out silently. The hashing is over the on-the-wire packet
+> bytes, not the encrypted-then-decrypted payload.
 
 #### File responses
 
