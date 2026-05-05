@@ -10,18 +10,14 @@ Outstanding work for the spec repo.
       official Reticulum manual. Frame it as a complement to (not a
       replacement for) the existing operator-focused docs.
 
-- [ ] **File a `random_hash` interop issue on `attermann/microReticulum`.**
-      `src/Destination.cpp:270-272` emits 10 fully-random bytes
-      where upstream Python emits 5 random + 5 BE-uint40 unix_seconds
-      (§4.1, §9.10). Effect: Python RNS path-table replacement
-      `RNS/Transport.py:1721-1745` rejects fresh announces from
-      Python sources as "stale" once a microReticulum announce has
-      populated the random_blob set, because the random tail is
-      interpreted as a far-future timestamp. Workaround documented
-      in §9.10; the durable fix is implementing the TODO comment in
-      the upstream source — even seconds-since-boot is preferable
-      to random bytes since path-table comparisons care about
-      ordering, not absolute time.
+- [x] **File a `random_hash` interop issue on `attermann/microReticulum`.**
+      Filed as [attermann/microReticulum#48](https://github.com/attermann/microReticulum/issues/48)
+      on 2026-05-04. Documents the missing 5-byte timestamp half of
+      `random_hash`, the path-table replacement effect on mixed-vendor
+      meshes, and a fix recipe (the existing TODO comment, with a
+      suggestion that `millis()/1000` is acceptable for clockless
+      devices since the path-table comparison cares about ordering
+      not absolute time).
 
 ## Test infrastructure
 
