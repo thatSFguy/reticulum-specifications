@@ -24,6 +24,13 @@ Each finding is grounded in upstream source citations (file + line) so it can be
 
 As content grows, `SPEC.md` will be split into per-layer files (packet header, identity, announce, token-crypto, LXMF, link, resource, transport).
 
+## Spec corrections
+
+Errata that may invalidate code built against an earlier revision of `SPEC.md`. Newest first. Feature additions and ordinary edits live in `git log` — this section is reserved for cases where the spec said one thing, that turned out to be wrong, and an implementer who pulled the bad version needs to fix their code.
+
+- **2026-05-06 — §2.1 flag byte: bit 7 is the IFAC flag, not part of `header_type`.**
+  Bad text introduced in [`8c4d550`](../../commit/8c4d550), corrected in [`0c2021e`](../../commit/0c2021e); on master from 2026-05-04 to 2026-05-06. The corrected layout is `ifac_flag(bit 7) | header_type(bit 6) | context_flag(5) | transport_type(4) | destination_type(3-2) | packet_type(1-0)`, matching the official manual §4.6.3 and upstream `RNS/Packet.py:246` (parse mask `0b01000000 >> 6`) / `RNS/Transport.py:1003` (IFAC setter `raw[0] | 0x80`). Implementers who consumed the bad version will mis-parse every IFAC-protected packet as `header_type ∈ {2, 3}` and drop it. Surfaced by [issue #4](../../issues/4) item #1.
+
 ## Scope
 
 **In scope:**
