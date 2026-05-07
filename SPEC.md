@@ -323,6 +323,8 @@ bit 3-2 : destination_type (0=SINGLE, 1=GROUP, 2=PLAIN, 3=LINK)
 bit 1-0 : packet_type      (0=DATA, 1=ANNOUNCE, 2=LINKREQUEST, 3=PROOF)
 ```
 
+`header_type` is a **2-bit field**. Only values `0` (HEADER_1) and `1` (HEADER_2) are defined; values `2` and `3` are RESERVED and never emitted on the wire by upstream. Bit 7 therefore reads `0` on every packet RNS 1.x produces. Implementations MUST NOT treat bit 7 as a separate flag (e.g. an IFAC indicator) — both bits are extracted as one field by upstream's parser (`(self.flags & 0b01000000) >> 6` at `RNS/Packet.py:246`), and a non-zero high bit will be interpreted as `header_type ∈ {2, 3}` and rejected. The IFAC (Interface Authentication Code) is a **separate trailing field** appended after the packet body, never sharing space with the flag byte (`IFAC_MIN_SIZE = 1` byte at `RNS/Reticulum.py:151-154`).
+
 ### 2.2 Two header forms
 
 ```
@@ -657,6 +659,20 @@ Different msgpack encoders produce subtly different byte sequences for the same 
 2. A **stripped** re-encoded version (decode then re-encode the first 4 elements, omitting the optional stamp field).
 
 If either matches, the signature is valid. Strict raw-only verification fails interop with anything that's been through a msgpack re-encode somewhere in the chain.
+
+#### 5.6.1 Canonical encoder for senders
+
+RNS bundles `umsgpack` (`RNS/vendor/umsgpack.py`) and uses it for every signing input on the upstream Python side. Senders SHOULD produce signing-input bytes that match `umsgpack`'s output for the LXMF payload types so receivers' path-1 (raw) verification succeeds and the path-2 (decode + re-encode) fallback stays defensive rather than load-bearing:
+
+| Logical type | umsgpack canonical form |
+|---|---|
+| Python `str` / UTF-8 text | `str` family — `fixstr` / `str8` / `str16` / `str32`, smallest that fits |
+| Python `bytes` | `bin` family — `bin8` / `bin16` / `bin32`, smallest that fits |
+| Integer | smallest signed integer envelope that fits — positive fixint, `uint8`/`16`/`32`/`64`, negative fixint, `int8`/`16`/`32`/`64` (per umsgpack's `_pack_integer`) |
+| Float | `float64` always (9 bytes including the type byte) — never `float32`, even for integer-valued doubles |
+| Map | sorted-by-insertion-order — umsgpack preserves input order, does NOT lex-sort keys |
+
+Mismatches most often originate from integer width (a timestamp encoded as `uint32` by one library and `float64` by another round-trips the same logical value but produces different bytes) and from JS encoders that prefer `str` for byte strings or `float32` for non-integer numbers. Implementing `umsgpack`'s "minimum width that fits" rule for ints and "always float64" rule for floats is sufficient for byte-identical signature inputs against upstream Python LXMF.
 
 ### 5.7 LXMF stamps and tickets (anti-spam)
 
@@ -1565,6 +1581,10 @@ What MUST be stable across all rotations: the long-term encryption / signing key
 
 When fulfilling a `path?` request via `Destination.announce(path_response=True, tag=tag)` (§7.2.4), implementations SHOULD reuse the current ratchet rather than rotate. Rotation cadence is governed by §7.3.1 (the 30-minute window), not by inbound `path?` arrivals — a leaf burst-rotating on a flood of identical-target path? requests would burn through ratchet-ring slots without any forward-secrecy benefit, since the announces are all going to the same in-flight requester. Upstream's `rotate_ratchets()` no-op-if-recent gate enforces this implicitly; a clean-room implementation should mirror the behaviour explicitly.
 
+#### 7.3.5 Ratchet-less announces are always accepted
+
+Emitting `context_flag = 0` (no `ratchet_pub` field, body layout per §4.5 step 1, second branch) is interop-correct against every RNS 1.x receiver. `validate_announce` parses both layouts unconditionally; there are no upstream peers that strict-reject ratchet-less announces. The trade-off is **forward secrecy only**: a ratchet-less destination encrypts every opportunistic message to its long-term X25519 key (§3.2 step 2), so a future leak of that long-term privkey decrypts every prior message. Path-table population, signature verification, dest_hash routing, and Link establishment all work unchanged. A new implementation that defers ratchets to v2 will interop fine; the missing forward secrecy should be called out in its README. A future RNS major *may* make ratchets mandatory, but that would be a wire-incompatible change announced ahead of time.
+
 ### 7.4 Ratchet ring (inbound decrypt tolerance)
 
 Senders cache the most recent ratchet they've seen for each destination. If you rotate your ratchet faster than relays propagate the announce, in-flight messages may arrive encrypted to your *previous* ratchet. To decrypt these, keep a ring of recent ratchet privkeys and try each in order during decrypt. The fallback to the long-term identity privkey is the ultimate safety net.
@@ -1977,6 +1997,16 @@ LoRa devices without an RTC will populate the LXMF `timestamp` field with second
 ### 9.7 Periodic re-announce is non-optional
 
 Even after a successful initial announce, paths in the mesh expire within minutes. Without a 5–15 minute re-announce loop, the second message any peer tries to send you will fail because the relay's path table has aged out. (See also §7.5.)
+
+There is **no upstream-mandated default** — `RNS/Reticulum.py:745` uses `6*60*60` (6 h) for interface-level *discovery* announces and `RNS/Transport.py:162` uses `2*60*60` (2 h) for transport-management announces, but those are not the cadence end-user destinations announce at. Sideband emits roughly every 30 minutes; the upstream manual recommends 30–60 minutes for a desktop client. Practical guidance for application destinations:
+
+| Deployment | RECOMMENDED cadence |
+|---|---|
+| Low-MTU LoRa node, mostly-on radio | 5–10 min — short enough to outpace path-table TTL, sparse enough not to dominate airtime |
+| Always-on rnsd-on-IP relay | 15–30 min — faster doesn't help (peer caches stay fresh between announces) |
+| Mobile / power-constrained client | 5–10 min while radio active, suppress while suspended |
+
+AVOID < 60 s — short intervals trigger ingress rate limiting (§4.5 step 8) and burn ratchet-ring slots without benefit, since ratchets only rotate every 30 min anyway (§7.3.1). AVOID > 30 min on lossy links — the longer the gap, the more likely your next outbound message lands during a window when no relay holds a path back to you.
 
 ### 9.8 The destination hash uses the bare app-name string
 
