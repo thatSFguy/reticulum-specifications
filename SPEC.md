@@ -316,14 +316,36 @@ A clean-room client that targets LXMF interop only can ignore GROUP destinations
 Every Reticulum packet starts with a 1-byte flag field:
 
 ```
-bit 7-6 : header_type      (0 = HEADER_1, 1 = HEADER_2)
+bit 7   : ifac_flag        (0 = open / no IFAC, 1 = IFAC field present)
+bit 6   : header_type      (0 = HEADER_1, 1 = HEADER_2)
 bit 5   : context_flag     (1 = announce includes a ratchet pubkey)
-bit 4   : transport_type   (0 = BROADCAST, 1 = TRANSPORT)
-bit 3-2 : destination_type (0=SINGLE, 1=GROUP, 2=PLAIN, 3=LINK)
-bit 1-0 : packet_type      (0=DATA, 1=ANNOUNCE, 2=LINKREQUEST, 3=PROOF)
+bit 4   : transport_type   (0 = BROADCAST, 1 = TRANSPORT)        — the official manual calls this "propagation_type"
+bit 3-2 : destination_type (0 = SINGLE, 1 = GROUP, 2 = PLAIN, 3 = LINK)
+bit 1-0 : packet_type      (0 = DATA, 1 = ANNOUNCE, 2 = LINKREQUEST, 3 = PROOF)
 ```
 
-`header_type` is a **2-bit field**. Only values `0` (HEADER_1) and `1` (HEADER_2) are defined; values `2` and `3` are RESERVED and never emitted on the wire by upstream. Bit 7 therefore reads `0` on every packet RNS 1.x produces. Implementations MUST NOT treat bit 7 as a separate flag (e.g. an IFAC indicator) — both bits are extracted as one field by upstream's parser (`(self.flags & 0b01000000) >> 6` at `RNS/Packet.py:246`), and a non-zero high bit will be interpreted as `header_type ∈ {2, 3}` and rejected. The IFAC (Interface Authentication Code) is a **separate trailing field** appended after the packet body, never sharing space with the flag byte (`IFAC_MIN_SIZE = 1` byte at `RNS/Reticulum.py:151-154`).
+Each subfield is **1 bit** (or 2 for `destination_type` / `packet_type`). Upstream's parser extracts them with these masks (`RNS/Packet.py:246-250` in RNS 1.2.0):
+
+```python
+self.header_type      = (self.flags & 0b01000000) >> 6     # bit 6 only
+self.context_flag     = (self.flags & 0b00100000) >> 5
+self.transport_type   = (self.flags & 0b00010000) >> 4
+self.destination_type = (self.flags & 0b00001100) >> 2
+self.packet_type      = (self.flags & 0b00000011)
+```
+
+Bit 7 (`ifac_flag`) is set by `Transport.transmit` immediately before transmission when the egress interface has an IFAC identity attached (`RNS/Transport.py:993-1024`). The setter is unambiguous:
+
+```python
+# Set IFAC flag
+new_header = bytes([raw[0] | 0x80, raw[1]])    # 0x80 = bit 7
+# Assemble new payload with IFAC
+new_raw    = new_header + ifac + raw[2:]       # IFAC field is inserted between header and addresses
+```
+
+When `ifac_flag = 1`, an `ifac_size`-byte IFAC field appears immediately after byte 2 of the header — i.e. between the `hops` byte and the start of `ADDRESSES`. `ifac_size` is interface-configured and ranges from `IFAC_MIN_SIZE = 1` byte (`RNS/Reticulum.py:151-154`) up to 64 bytes (full Ed25519 signature). The receiving side strips the IFAC after verification and rebuilds the un-IFACed packet for upstream processing (`RNS/Transport.py:1342-1369`).
+
+> ⚠️ **Spec correction.** Earlier revisions of this section (through commit [`8c4d550`](https://github.com/thatSFguy/reticulum-specifications/commit/8c4d550)) treated `header_type` as a 2-bit field occupying bits 7-6, with bit 7 reserved. That was wrong: bit 7 has always been the IFAC flag (`Transport.transmit` line 1003), and `header_type` is 1 bit at position 6. The official manual §4.6.3 documents the correct layout. Implementations that followed the prior wording will mis-parse IFAC-protected packets as `header_type = 2 or 3` and reject them. Surfaced by the reporter on [issue #4](https://github.com/thatSFguy/reticulum-specifications/issues/4) item #1.
 
 ### 2.2 Two header forms
 

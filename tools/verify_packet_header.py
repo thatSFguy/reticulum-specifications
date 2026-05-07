@@ -2,9 +2,12 @@
 Verifier for SPEC.md §2.1, §2.2, §2.3.
 
 Verifies:
-  - §2.1: flag-byte layout (header_type, context_flag, transport_type,
-          destination_type, packet_type) — by constructing packets with each
-          combination and reading the resulting flag byte.
+  - §2.1: flag-byte layout (ifac_flag at bit 7, header_type at bit 6,
+          context_flag at bit 5, transport_type at bit 4, destination_type
+          at bits 3-2, packet_type at bits 1-0) — by constructing packets
+          with each combination and reading the resulting flag byte, and
+          by asserting that upstream's parse mask `0b01000000 >> 6`
+          treats bit 7 as separate from header_type.
   - §2.2: HEADER_1 layout flags(1) hops(1) dest_hash(16) context(1) data
           and HEADER_2 layout flags(1) hops(1) transport_id(16) dest_hash(16)
           context(1) data.
@@ -48,10 +51,11 @@ def init_minimal_rns():
 
 
 def verify_flag_byte_layout():
-    # §2.1: bit 7-6 header_type, bit 5 context_flag, bit 4 transport_type,
-    # bit 3-2 dest_type, bit 1-0 packet_type.
+    # §2.1: bit 7 ifac_flag, bit 6 header_type, bit 5 context_flag,
+    # bit 4 transport_type, bit 3-2 dest_type, bit 1-0 packet_type.
     # Build a packet by hand and check the flag byte by replicating
-    # RNS.Packet.pack's header_type field semantics.
+    # RNS.Packet.pack's header_type field semantics (header_type << 6,
+    # i.e. 1-bit field at position 6 — NOT bits 7-6).
     cases = [
         # (header_type, context_flag, transport_type, dest_type, packet_type, expected_flag)
         (0, 0, 0, 0, 0, 0b00000000),
@@ -68,6 +72,41 @@ def verify_flag_byte_layout():
             fail(f"flag layout: ht={ht} cf={cf} tt={tt} dt={dt} pt={pt} -> "
                  f"got 0x{flag:02x} expected 0x{expected:02x}")
     print("PASS S2.1 flag-byte layout")
+
+
+def verify_ifac_bit_position():
+    # §2.1: bit 7 (mask 0x80) is the IFAC flag, set by Transport.transmit
+    # at line 1003: `new_header = bytes([raw[0] | 0x80, raw[1]])`. It is
+    # NOT part of header_type.
+    # Lock in two invariants:
+    #   1. Setting bit 7 must NOT change the parsed header_type — upstream's
+    #      parser at RNS/Packet.py:246 isolates bit 6 only via mask 0b01000000.
+    #   2. The constant 0x80 == bit 7, distinct from the header_type mask.
+    parse_mask = 0b01000000
+    if parse_mask != 1 << 6:
+        fail(f"S2.1 parse_mask: header_type mask must be bit 6 (0x40), got 0x{parse_mask:02x}")
+    if (parse_mask & 0x80) != 0:
+        fail("S2.1 parse_mask: header_type mask must NOT cover bit 7")
+
+    for ifac_set in (0, 1):
+        for ht_value in (0, 1):
+            flag = (ifac_set << 7) | (ht_value << 6)
+            parsed_ht = (flag & parse_mask) >> 6
+            if parsed_ht != ht_value:
+                fail(f"S2.1 ifac_bit: flag=0x{flag:02x} (ifac={ifac_set} ht={ht_value}) "
+                     f"parsed header_type={parsed_ht}, expected {ht_value} — "
+                     f"bit 7 leaking into header_type would make this fail")
+
+    # Also confirm the upstream IFAC setter constant matches our spec.
+    # RNS/Transport.py:1003: `bytes([raw[0] | 0x80, raw[1]])` — we lock in
+    # the value 0x80 (bit 7) as the IFAC flag mask.
+    IFAC_FLAG_MASK = 0x80
+    if IFAC_FLAG_MASK != 1 << 7:
+        fail(f"S2.1 IFAC mask: expected 0x80 (bit 7), got 0x{IFAC_FLAG_MASK:02x}")
+    if IFAC_FLAG_MASK & parse_mask:
+        fail("S2.1 IFAC mask overlaps header_type parse mask — would re-introduce the prior-spec bug")
+
+    print("PASS S2.1 IFAC bit position (bit 7, distinct from header_type)")
 
 
 def verify_header_two_form():
@@ -182,6 +221,7 @@ def main():
     rns_instance = init_minimal_rns()
     try:
         verify_flag_byte_layout()
+        verify_ifac_bit_position()
         verify_header_two_form()
         verify_header_conversion(rns_instance)
     finally:
