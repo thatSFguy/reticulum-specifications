@@ -20,6 +20,7 @@ The two views are complementary: SPEC.md tells you what each piece looks like; t
 | [`forward-announce.md`](forward-announce.md) (transport-node rebroadcast logic, announce_cap, queue) | ✅ |
 | [`send-propagated-lxmf.md`](send-propagated-lxmf.md) (PROPAGATED method, via a propagation node) | ✅ |
 | [`receive-propagated-lxmf.md`](receive-propagated-lxmf.md) (recipient pulling messages via `/get`) | ✅ |
+| [`lxmf-outbound-retry.md`](lxmf-outbound-retry.md) (process_outbound retry loop, per-message state machine, fail_message) | ✅ |
 
 ## Conventions
 
