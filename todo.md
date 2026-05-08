@@ -448,6 +448,8 @@ strand when GitHub / PyPI stop being authoritative:
       frontmatter (per `agent.md` §7). Done — `RNS 1.2.0 / LXMF
       0.9.6` is now in the document header.
 
+- [x] **`flows/lxmf-outbound-retry.md`** — outbound retry loop and per-message state machine (`MAX_DELIVERY_ATTEMPTS`, `DELIVERY_RETRY_WAIT`, `PATH_REQUEST_WAIT`, `MAX_PATHLESS_TRIES`, the OPPORTUNISTIC / DIRECT / PROPAGATED retry decision trees, `fail_message`). Source-cited against LXMF 0.9.7. Fills the gap between the per-method send-* flows (each describes one attempt) and the actual delivery semantics (5 attempts, ~50s budget, no automatic method fallback, `SENT` ≠ `DELIVERED` for PROPAGATED). No verifier needed — direct upstream source citations per `agent.md` §1.
+
 - [x] **`tools/verify_stamps.py`** runtime-locks §5.7. Done.
       Verifies workblock determinism (confirms exactly 768 KiB at
       3000 rounds), PoW search-and-validate at target_cost=4 (fast),
