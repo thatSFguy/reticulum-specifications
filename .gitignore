@@ -1,0 +1,22 @@
+# Claude Code per-user config (permission allowlist; tracked separately per machine)
+.claude/settings.local.json
+
+# Scratch copies of upstream source pulled in for cross-referencing during sessions
+# (microReticulum, RNode_Firmware, reticulum-lora-repeater). Live under their own
+# upstream licenses; not redistributed from this repo.
+.claude/*.cpp
+.claude/*.h
+.claude/*.hpp
+.claude/*.ino
+.claude/*.py
+.claude/*.ini
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Local IDE / OS clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
