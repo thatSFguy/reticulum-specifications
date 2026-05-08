@@ -4,8 +4,8 @@ destinations).
 
 Exercises:
   - Upstream LXMF.LXMRouter.get_announce_app_data emits a 2-element msgpack
-    array [display_name_bytes, stamp_cost] in LXMF 0.9.6. The dead-code
-    supported_functionality line at LXMF/LXMRouter.py:999 is computed but
+    array [display_name_bytes, stamp_cost] in LXMF 0.9.7. The dead-code
+    supported_functionality line at LXMF/LXMRouter.py:998 is computed but
     never appended.
   - The wire-byte form for display_name="Reticulum5", stamp_cost=None matches
     the hex documented in SPEC.md S4.3:
@@ -57,7 +57,7 @@ def verify_two_element_wire_bytes():
 
 def verify_producer_is_two_element_in_this_lxmf():
     # Read the LXMRouter source and confirm it appends 2 elements (not 3) in
-    # the LXMF 0.9.6 producer. We do this by inspecting the function source so
+    # the LXMF 0.9.7 producer. We do this by inspecting the function source so
     # the verifier breaks loudly if upstream restores the 3-element variant.
     import inspect
     from LXMF.LXMRouter import LXMRouter
@@ -72,7 +72,7 @@ def verify_producer_is_two_element_in_this_lxmf():
         fail("S4.3 producer NOW appends supported_functionality. "
              "Update SPEC.md S4.3 to describe the 3-element variant as live.")
     print(f"PASS S4.3 LXMF {LXMF.__version__} producer emits 2-element form only "
-          "(supported_functionality is dead code at LXMF/LXMRouter.py:999)")
+          "(supported_functionality is dead code at LXMF/LXMRouter.py:998)")
 
 
 def verify_parser_tolerance():

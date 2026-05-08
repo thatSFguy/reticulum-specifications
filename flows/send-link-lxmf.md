@@ -2,7 +2,7 @@
 
 What happens chronologically when an app calls `LXMRouter.handle_outbound(lxm)` for an `LXMessage` whose `desired_method == DIRECT` (or whose payload exceeds the opportunistic single-packet content limit and is downgraded from `OPPORTUNISTIC` to `DIRECT` at pack time). The `DIRECT` method runs the LXMF body over an established Reticulum Link rather than a single Reticulum DATA packet.
 
-Pinned against **RNS 1.2.0 / LXMF 0.9.6**. Line numbers below are from those versions.
+Pinned against **RNS 1.2.4 / LXMF 0.9.7**. Line numbers below are from those versions.
 
 Out of scope: opportunistic delivery (see [`send-opportunistic-lxmf.md`](send-opportunistic-lxmf.md)), propagation-node delivery (`PROPAGATED`), and paper messages (`PAPER`).
 
@@ -30,7 +30,7 @@ Same as steps 1-2 of `send-opportunistic-lxmf.md`. `LXMessage.pack()` builds the
 
 ### 2. `process_outbound` enters the DIRECT branch
 
-`LXMF/LXMRouter.py:2599`. Logic for an `LXMessage` whose `method == DIRECT`:
+`LXMF/LXMRouter.py:2531-2545`. Logic for an `LXMessage` whose `method == DIRECT`:
 
 ```python
 delivery_destination_hash = lxmessage.get_destination().hash
@@ -63,13 +63,13 @@ Setting `process_outbound` itself as the link's established-callback is the tric
 
 ### 3. `RNS.Link(destination)` builds and sends a LINKREQUEST
 
-`RNS/Link.py:233-327`. The `Link` constructor on the **initiator** side generates a fresh ephemeral X25519 + Ed25519 keypair (`pub_bytes` and `sig_pub_bytes`) and constructs the LINKREQUEST body (`RNS/Link.py:308-324`):
+`RNS/Link.py:233-330`. The `Link` constructor on the **initiator** side generates a fresh ephemeral X25519 + Ed25519 keypair (`pub_bytes` and `sig_pub_bytes`) and constructs the LINKREQUEST body (`RNS/Link.py:308-324`):
 
 ```
 request_data = initiator_X25519_pub(32) || initiator_Ed25519_pub(32) || [signalling(3)]
 ```
 
-Both initiator-side keys are **fresh-ephemeral**, used only for this link. The optional 3-byte `signalling` field, present iff `Reticulum.link_mtu_discovery()` returns true and the next-hop interface advertises an HW MTU, encodes the path-MTU and link-mode hints (SPEC.md §6.1; encode/decode helpers at `RNS/Link.py:148`).
+Both initiator-side keys are **fresh-ephemeral**, used only for this link. The optional 3-byte `signalling` field, present iff `Reticulum.link_mtu_discovery()` returns true and the next-hop interface advertises an HW MTU, encodes the path-MTU and link-mode hints (SPEC.md §6.1; encode/decode helpers at `RNS/Link.py:148-152`).
 
 ```python
 self.packet = RNS.Packet(destination, self.request_data, packet_type=RNS.Packet.LINKREQUEST)
@@ -88,12 +88,12 @@ The LINKREQUEST then goes through the same `Transport.outbound` path as any othe
 
 ### 4. Wait for LRPROOF; verify; complete handshake
 
-The initiator's link sits in `Link.PENDING` while it waits for the responder's LRPROOF. The responder's side of this exchange (entering `Destination.receive` with `packet_type == LINKREQUEST` → `incoming_link_request` → `Link.validate_request` → `Link.handshake` → `Link.prove`, all at `RNS/Link.py:186-227, 353-381`) is its own flow document; this flow describes only what the initiator sees.
+The initiator's link sits in `Link.PENDING` while it waits for the responder's LRPROOF. The responder's side of this exchange (entering `Destination.receive` with `packet_type == LINKREQUEST` → `incoming_link_request` → `Link.validate_request` → `Link.handshake` → `Link.prove`, all at `RNS/Link.py:186-230, 353-381`) is its own flow document; this flow describes only what the initiator sees.
 
 The LRPROOF arrives back at `Transport.inbound` with `packet_type = PROOF`, `context = LRPROOF (0xff)`, `dest_hash = link_id`. `Transport.inbound` looks up the link by its `link_id` and dispatches to `Link.validate_proof` (`RNS/Link.py:396`). For an initiator with link still in `PENDING`:
 
 ```
-proof_data layout (RNS/Link.py:376):
+proof_data layout (RNS/Link.py:371):
    signature(64) || responder_X25519_pub(32) || [signalling(3)]
 ```
 
@@ -103,21 +103,21 @@ Validation (`RNS/Link.py:410-422`):
 2. Read the responder's long-term Ed25519 public key from the `Destination.identity` we already had cached (from a prior announce — line 412: `self.destination.identity.get_public_key()[ECPUBSIZE//2:ECPUBSIZE]`). The Ed25519 pub is **not** sent in the LRPROOF body; it must be known locally already.
 3. Derive `signed_data = link_id || responder_X25519_pub || responder_long_term_Ed25519_pub || [signalling]` (line 417).
 4. Verify the Ed25519 signature against `signed_data` using the responder's long-term Ed25519 pub.
-5. On success: `link.handshake()` runs (`RNS/Link.py:353-368`) — ECDH with the responder's fresh X25519 pub, then HKDF over the shared secret with `salt = link_id`, derives `signing_key(32) || encrypt_key(32)` per SPEC.md §6.4. Link state transitions to `Link.ACTIVE`.
+5. On success: `link.handshake()` runs (`RNS/Link.py:353-370`) — ECDH with the responder's fresh X25519 pub, then HKDF over the shared secret with `salt = link_id`, derives `signing_key(32) || encrypt_key(32)` per SPEC.md §6.4. Link state transitions to `Link.ACTIVE`.
 6. The initiator's `established_callback` registered at step 2 — `LXMRouter.process_outbound` — fires, re-entering step 2 with the link now ACTIVE.
 
 A confirmed-MTU hint in the LRPROOF (length is `64+32+3 = 99` instead of `64+32 = 96`) updates `link.mtu` to the smaller of the responder's hint and the initiator's view (`RNS/Link.py:404-408`). An RTT report message follows automatically (`RNS/Link.py:441`, packet with `context = LRRTT`).
 
 ### 5. Transfer the LXM body over the active link
 
-Back in `process_outbound` (`LXMF/LXMRouter.py:2618-2625`), with `direct_link.status == ACTIVE`:
+Back in `process_outbound` (`LXMF/LXMRouter.py:2620-2630`), with `direct_link.status == ACTIVE`:
 
 ```python
 lxmessage.set_delivery_destination(direct_link)                 # __delivery_destination = link
 lxmessage.send()                                                # LXMessage.send branches on representation
 ```
 
-`LXMessage.send` for DIRECT/PACKET (`LXMF/LXMessage.py:471-484`) calls `self.__as_packet()` which constructs:
+`LXMessage.send` for DIRECT/PACKET (`LXMF/LXMessage.py:471-490`) calls `self.__as_packet()` which constructs:
 
 ```python
 RNS.Packet(self.__delivery_destination, self.packed)            # full LXMF body, dest_hash included
@@ -161,10 +161,10 @@ When the resource concludes successfully, the same `__mark_delivered` path runs 
 
 ### 9. Backchannel identification (optional, after first successful DIRECT delivery)
 
-`LXMF/LXMRouter.py:2532-2545`. After a DIRECT delivery completes (`lxmessage.state == DELIVERED`), if the link doesn't yet have a backchannel identity associated, the initiator's `LXMRouter` calls `direct_link.identify(backchannel_identity)`:
+`LXMF/LXMRouter.py:2531-2545`. After a DIRECT delivery completes (`lxmessage.state == DELIVERED`), if the link doesn't yet have a backchannel identity associated, the initiator's `LXMRouter` calls `direct_link.identify(backchannel_identity)`:
 
 - `direct_link.identify` sends an IDENTIFY packet on the link bound to one of the **sender's** local `lxmf.delivery` destinations.
-- The receiving side's `delivery_link_established` callback (set at `LXMRouter.py:1849-1856`) installs `delivery_packet` on the link's packet callback, so subsequent inbound DATA on this link reaches the LXMF parser.
+- The receiving side's `delivery_link_established` callback (set at `LXMRouter.py:1852-1858`) installs `delivery_packet` on the link's packet callback, so subsequent inbound DATA on this link reaches the LXMF parser.
 - The link is now usable in **both directions** without each side having to open its own Link to the other. The receiver can now reply over this same link.
 
 This enables an interactive conversation over a single link rather than each message opening a new link.

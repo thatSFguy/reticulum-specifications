@@ -1,11 +1,11 @@
 """
 Verifier for SPEC.md S6.5 (regular PROOF packet wire form).
 
-Three scenarios against upstream RNS 1.2.0:
+Three scenarios against upstream RNS 1.2.4:
 
   1. Implicit-mode opportunistic DATA proof: when Reticulum is
      configured with use_implicit_proof = True (the upstream default
-     per Reticulum.py:259), Identity.prove emits a 64-byte body
+     per Reticulum.py:256), Identity.prove emits a 64-byte body
      containing only the Ed25519 signature over packet.packet_hash.
 
   2. Explicit-mode opportunistic DATA proof: when use_implicit_proof

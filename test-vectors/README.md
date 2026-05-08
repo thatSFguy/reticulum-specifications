@@ -4,7 +4,7 @@ Known-good byte sequences that any Reticulum-compatible implementation should be
 
 ## Status
 
-Populated against RNS 1.2.0 / LXMF 0.9.6:
+Populated against RNS 1.2.4 / LXMF 0.9.7:
 
 - ✅ `identities.json` — Alice + Bob identity vectors (regenerator: `../tools/regen_identities.py`, verifier: `../tools/verify_destination_hash.py`).
 - ✅ `announces.json` — two announce vectors (no-ratchet + with-ratchet) signed by Alice (regenerator: `../tools/regen_announces.py`, verifier: `../tools/verify_announce_roundtrip.py`).

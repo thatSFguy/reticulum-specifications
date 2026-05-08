@@ -1,6 +1,6 @@
 # Flow: send a PROPAGATED LXMF message via a propagation node
 
-What happens when an LXMF client submits a message to a propagation node for store-and-forward delivery — the path used when the recipient is offline, intermittent, or simply somewhere the sender can't reach directly. Pinned against **RNS 1.2.0**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §6 (Link), §10 (Resource), §11 (REQUEST/RESPONSE).
+What happens when an LXMF client submits a message to a propagation node for store-and-forward delivery — the path used when the recipient is offline, intermittent, or simply somewhere the sender can't reach directly. Pinned against **RNS 1.2.4 / LXMF 0.9.7**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §6 (Link), §10 (Resource), §11 (REQUEST/RESPONSE).
 
 ---
 
@@ -15,7 +15,7 @@ What happens when an LXMF client submits a message to a propagation node for sto
 
 ### 1. App constructs an LXMessage with `desired_method = PROPAGATED`
 
-Same as `send-opportunistic-lxmf.md` step 1 except the desired_method differs. The router's `handle_outbound` (`LXMF/LXMRouter.py:1639+`) will eventually route this to the propagation pipeline.
+Same as `send-opportunistic-lxmf.md` step 1 except the desired_method differs. The router's `handle_outbound` (`LXMF/LXMRouter.py:1644+`) will eventually route this to the propagation pipeline.
 
 ### 2. `LXMessage.pack()` — propagation-specific encryption
 
@@ -30,7 +30,7 @@ Same as `send-opportunistic-lxmf.md` step 1 except the desired_method differs. T
 
 ### 3. `LXMRouter.process_outbound` for PROPAGATED method
 
-`LXMF/LXMRouter.py:2547-...` (the `PROPAGATED` branch is structurally similar to the `DIRECT` branch in `send-link-lxmf.md`). High-level state:
+`LXMF/LXMRouter.py:2544+` (the `PROPAGATED` branch is structurally similar to the `DIRECT` branch in `send-link-lxmf.md`). High-level state:
 
 - If a Link to the propagation node already exists and is `ACTIVE`: reuse it.
 - Else if the path is known: open a fresh `RNS.Link(propagation_node_destination)` with `LXMRouter.process_outbound` registered as the `link_established_callback` so the LXM is sent as soon as the link establishes.

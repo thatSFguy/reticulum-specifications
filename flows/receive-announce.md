@@ -2,7 +2,7 @@
 
 What happens chronologically on a node when an `ANNOUNCE` packet arrives on one of its interfaces. Without this flow working, nothing else does — no peer is ever known, every outbound message fails at `Identity.recall(dest_hash)`, and no path table entry exists for routing.
 
-Pinned against **RNS 1.2.0**. Line numbers below are from that version.
+Pinned against **RNS 1.2.4**. Line numbers below are from that version.
 
 This flow covers the **receive + ingest** path that every Reticulum node runs (leaf clients and transport nodes alike). The **rebroadcast** logic that transport nodes additionally run is covered separately in `forward-announce.md` (TODO — Tier 3 in `../todo.md`).
 
@@ -22,12 +22,12 @@ This flow covers the **receive + ingest** path that every Reticulum node runs (l
 
 Steps 1-6 of [`receive-opportunistic-lxmf.md`](receive-opportunistic-lxmf.md) apply unchanged:
 
-1. KISS / HDLC deframer (and RNode 2-frame split-packet reassembly per [`../SPEC.md`](../SPEC.md) §8.3 if applicable) hands the raw Reticulum packet bytes to `RNS.Transport.inbound(raw, interface)` (`RNS/Transport.py:1327`).
+1. KISS / HDLC deframer (and RNode 2-frame split-packet reassembly per [`../SPEC.md`](../SPEC.md) §8.3 if applicable) hands the raw Reticulum packet bytes to `RNS.Transport.inbound(raw, interface)` (`RNS/Transport.py:1330`).
 2. IFAC unmask if the interface has `ifac_identity` configured.
 3. `packet = RNS.Packet(None, raw); packet.unpack(); packet.hops += 1`.
 4. RSSI / SNR / Q stats are attached to the packet.
 5. `Transport.packet_filter(packet)` dedup check; the packet's hash is added to `Transport.packet_hashlist` unless it belongs to a link or is an LRPROOF.
-6. Dispatch by `packet.packet_type`. For an announce: `packet_type == ANNOUNCE (1)`, `destination_type == SINGLE (0)`, `transport_type == BROADCAST (0)`. Control reaches `RNS/Transport.py:1628`:
+6. Dispatch by `packet.packet_type`. For an announce: `packet_type == ANNOUNCE (1)`, `destination_type == SINGLE (0)`, `transport_type == BROADCAST (0)`. Control reaches `RNS/Transport.py:1631`:
 
 ```python
 if packet.packet_type == RNS.Packet.ANNOUNCE:
@@ -36,7 +36,7 @@ if packet.packet_type == RNS.Packet.ANNOUNCE:
 
 ### 2. Quick signature-only validation (cheap pre-filter)
 
-`RNS/Transport.py:1629`:
+`RNS/Transport.py:1632`:
 
 ```python
 if interface != None and RNS.Identity.validate_announce(packet, only_validate_signature=True):
@@ -52,7 +52,7 @@ If the signature fails, the announce is silently dropped here without the deque 
 
 ### 3. Ingress rate limiting (defer-and-hold)
 
-`RNS/Transport.py:1632-1643`:
+`RNS/Transport.py:1635-1646`:
 
 ```python
 if not packet.destination_hash in Transport.path_table:
@@ -74,7 +74,7 @@ Held announces are released later by `Interface.process_held_announces()` (`RNS/
 
 ### 4. Local-destination short-circuit
 
-`RNS/Transport.py:1645-1648`:
+`RNS/Transport.py:1648-1651`:
 
 ```python
 local_destination = None
@@ -87,7 +87,7 @@ If the announce's `destination_hash` matches one of our own registered destinati
 
 ### 5. Full announce validation
 
-`RNS/Transport.py:1650`:
+`RNS/Transport.py:1653`:
 
 ```python
 if local_destination == None and RNS.Identity.validate_announce(packet):
@@ -108,7 +108,7 @@ If any check fails, the function returns `False` and the wider dispatch skips ev
 
 ### 6. `random_blob` extraction and `received_from` resolution
 
-`RNS/Transport.py:1651-1677`. The 10-byte `random_hash` is re-extracted as `random_blob` (same bytes, different name in the routing-table code):
+`RNS/Transport.py:1654-1680`. The 10-byte `random_hash` is re-extracted as `random_blob` (same bytes, different name in the routing-table code):
 
 ```python
 random_blob = packet.data[64+10 : 64+10+10]   # bytes 74..84 of the announce body
@@ -120,7 +120,7 @@ The trailing 5 bytes of `random_blob` are the emission timestamp (SPEC.md §4.1)
 
 ### 7. Path table population
 
-`RNS/Transport.py:1679-1969`. The full decision tree for whether and how to update `path_table[destination_hash]` is roughly:
+`RNS/Transport.py:1682-1975`. The full decision tree for whether and how to update `path_table[destination_hash]` is roughly:
 
 ```
 local_and_hops_condition := (packet.hops < PATHFINDER_M+1)   # default 128
@@ -160,7 +160,7 @@ A leaf client that **doesn't** maintain a path table can still send opportunisti
 
 ### 8. Announce handler dispatch
 
-`RNS/Transport.py:1970-2024`. With path-table updated, the receiver fans the announce out to any application-level listeners that registered via `RNS.Transport.register_announce_handler`:
+`RNS/Transport.py:1976-2030`. With path-table updated, the receiver fans the announce out to any application-level listeners that registered via `RNS.Transport.register_announce_handler`:
 
 ```python
 for handler in Transport.announce_handlers:
@@ -183,7 +183,7 @@ Three details that bite implementers:
 
 1. **`aspect_filter` is a name string, not a name_hash.** A handler that wants only `lxmf.delivery` announces sets `self.aspect_filter = "lxmf.delivery"` and Reticulum recomputes the expected dest_hash from `(name, announced_identity)` for each candidate. So a single handler can match across all peers' `lxmf.delivery` destinations without enumerating them.
 2. **`PATH_RESPONSE` is filtered OUT by default.** A handler must opt in via `handler.receive_path_responses = True` to see path-response announces; otherwise it sees only periodic re-announces. The path-table update in step 7 still happens regardless.
-3. **The handler is called in a fresh daemon thread.** A slow handler doesn't block subsequent inbound packets, but it also can't assume serialised execution — two announces from the same destination arriving back-to-back will run two handler threads concurrently. Handlers that mutate shared state need their own locks. (`RNS/Transport.py:1995-2016`.)
+3. **The handler is called in a fresh daemon thread.** A slow handler doesn't block subsequent inbound packets, but it also can't assume serialised execution — two announces from the same destination arriving back-to-back will run two handler threads concurrently. Handlers that mutate shared state need their own locks. (`RNS/Transport.py:1995-2025`.)
 
 LXMF registers two handlers at `LXMF/LXMRouter.py:207-208`:
 
@@ -198,7 +198,7 @@ so any client built on the LXMF router gets contacts/propagation-node discovery 
 
 If `RNS.Reticulum.transport_enabled() == True`, the same `Transport.inbound` dispatch then walks an additional code path that constructs a rebroadcast announce, queues it on each suitable interface (`announce_queue`), and emits it later subject to the per-interface `announce_cap` (default 2% of airtime). This entire path is skipped on a leaf client.
 
-The rebroadcast logic is the bulk of `RNS/Transport.py:1810-1969` and is documented separately in `forward-announce.md` (TODO).
+The rebroadcast logic is the bulk of `RNS/Transport.py:1810-1975` and is documented separately in `forward-announce.md` (TODO).
 
 ---
 

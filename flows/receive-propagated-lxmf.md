@@ -1,6 +1,6 @@
 # Flow: receive a propagated LXMF message (recipient pulls via `/get`)
 
-The closing half of [`send-propagated-lxmf.md`](send-propagated-lxmf.md): how a recipient client retrieves messages that were store-and-forwarded for it by a propagation node. Pinned against **RNS 1.2.0 / LXMF 0.9.6**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §11 (REQUEST/RESPONSE).
+The closing half of [`send-propagated-lxmf.md`](send-propagated-lxmf.md): how a recipient client retrieves messages that were store-and-forwarded for it by a propagation node. Pinned against **RNS 1.2.4 / LXMF 0.9.7**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §11 (REQUEST/RESPONSE).
 
 This is the inverse-side flow that turns "the message was queued at a propagation node" (`send-propagated-lxmf.md` step 9) into "the message arrives in the recipient's inbox".
 
@@ -17,7 +17,7 @@ This is the inverse-side flow that turns "the message was queued at a propagatio
 
 ### 1. Recipient initiates retrieval
 
-`LXMRouter.request_messages_from_propagation_node(identity, max_messages)` (`LXMF/LXMRouter.py:485+`). Triggered by:
+`LXMRouter.request_messages_from_propagation_node(identity, max_messages)` (`LXMF/LXMRouter.py:484+`). Triggered by:
 
 - Manual user action (Sideband "Refresh inbox" button).
 - Periodic background poll (every few minutes by default in long-running clients).
@@ -34,7 +34,7 @@ self.outbound_propagation_link = RNS.Link(
 )
 ```
 
-(`LXMF/LXMRouter.py:514`). Standard Link establishment per `flows/send-link-lxmf.md` steps 3-4.
+(`LXMF/LXMRouter.py:513`). Standard Link establishment per `flows/send-link-lxmf.md` steps 3-4.
 
 ### 3. Identify on the link
 
@@ -47,7 +47,7 @@ data = [None, None]                                              # [wanted, have
 link.request("/get", data, response_callback=on_message_list)
 ```
 
-The propagation node's `message_get_request` handler at `LXMF/LXMRouter.py:1427-1450` walks `propagation_entries` for messages keyed to the requester's destination_hash and returns:
+The propagation node's `message_get_request` handler at `LXMF/LXMRouter.py:1426-1450` walks `propagation_entries` for messages keyed to the requester's destination_hash and returns:
 
 ```python
 [ [transient_id_1(16), size_1(int)],
@@ -86,7 +86,7 @@ Returns this as a §11 RESPONSE. If the bundle fits in `link.mdu` it's a single 
 
 ### 7. Recipient unpacks the bundle and processes each message
 
-The recipient's `propagation_resource_concluded` handler (or its single-packet equivalent) at `LXMF/LXMRouter.py:2194+` walks the bundle:
+The recipient's `propagation_resource_concluded` handler (or its single-packet equivalent) at `LXMF/LXMRouter.py:2200+` walks the bundle:
 
 ```python
 data = msgpack.unpackb(resource.data.read())

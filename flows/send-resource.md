@@ -2,7 +2,7 @@
 
 What happens chronologically when an LXMF DIRECT message, NomadNet page, or `rncp` file transfer too big to fit in one Link DATA packet is sent as an `RNS.Resource`. Builds on top of an established Reticulum Link — a Link must already be `ACTIVE` before this flow starts (see [`send-link-lxmf.md`](send-link-lxmf.md) steps 3-4 for how the Link gets there).
 
-Pinned against **RNS 1.2.0**. Wire-level details are in [`../SPEC.md`](../SPEC.md) §10; this document covers chronology and step ordering.
+Pinned against **RNS 1.2.4**. Wire-level details are in [`../SPEC.md`](../SPEC.md) §10; this document covers chronology and step ordering.
 
 Out of scope: the receive side (`receive-resource.md` — TODO), Resource cancellation paths beyond a brief mention in step 9, and the watchdog / RTT estimation machinery (implementation-private).
 
@@ -125,7 +125,7 @@ body = resource_hash(32) || full_proof(32)
 
 as `RNS.Packet(link, proof_data, packet_type=PROOF, context=RESOURCE_PRF)` — a PROOF-type packet, not DATA.
 
-The initiator's `validate_proof(proof_data)` (`RNS/Resource.py:785-829`):
+The initiator's `validate_proof(proof_data)` (`RNS/Resource.py:782-826`):
 
 1. Checks `len(proof_data) == 64` and `proof_data[32:] == self.expected_proof`.
 2. On match, transitions `status = COMPLETE` and fires the resource callback.
@@ -144,7 +144,7 @@ Both transition `status = FAILED` and notify `link.resource_concluded(self)` so 
 
 ### 10. Watchdog and recovery
 
-`RNS/Resource.py:564-642`. The Resource owns a watchdog thread that runs through the lifecycle and adjusts timeouts based on observed link RTT. Key points for interop:
+`RNS/Resource.py:564-670`. The Resource owns a watchdog thread that runs through the lifecycle and adjusts timeouts based on observed link RTT. Key points for interop:
 
 - **Per-part timeout:** `PART_TIMEOUT_FACTOR = 4` × (link RTT) before any part has arrived; drops to `PART_TIMEOUT_FACTOR_AFTER_RTT = 2` once RTT is calibrated.
 - **Proof timeout:** `PROOF_TIMEOUT_FACTOR = 3` × link RTT after all parts have been sent.

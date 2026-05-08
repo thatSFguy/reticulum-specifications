@@ -2,7 +2,7 @@
 
 What happens chronologically when an app calls `LXMRouter.handle_outbound(lxm)` for an `LXMessage` whose `desired_method == OPPORTUNISTIC` and whose payload fits in a single Reticulum packet.
 
-Pinned against **RNS 1.2.0 / LXMF 0.9.6**. Line numbers below are from those versions.
+Pinned against **RNS 1.2.4 / LXMF 0.9.7**. Line numbers below are from those versions.
 
 Out of scope: messages that need a Reticulum Link (`DIRECT` method, larger payloads), propagation-node delivery (`PROPAGATED`), and paper messages (`PAPER`). Each gets its own flow document.
 
@@ -66,7 +66,7 @@ if not RNS.Transport.has_path(destination_hash) and lxmessage.method == LXMessag
     lxmessage.next_delivery_attempt = time.time() + LXMRouter.PATH_REQUEST_WAIT
 ```
 
-Only fires when **no entry exists** in `Transport.path_table`. Stale-but-present entries are not refreshed by this preamble — they are evicted by the periodic `stale_paths` accumulator in `RNS/Transport.py:747+`, after which the next outbound attempt rediscovers the unknown-path branch and triggers `request_path`. The path-request packet itself (well-known dest hash `6b9f66014d9853faab220fba47d02761`, payload `target_dest_hash || [transport_id ||] tag`) is described in SPEC.md §7.1.
+Only fires when **no entry exists** in `Transport.path_table`. Stale-but-present entries are not refreshed by this preamble — they are evicted by the periodic `stale_paths` accumulator in `RNS/Transport.py:750+`, after which the next outbound attempt rediscovers the unknown-path branch and triggers `request_path`. The path-request packet itself (well-known dest hash `6b9f66014d9853faab220fba47d02761`, payload `target_dest_hash || [transport_id ||] tag`) is described in SPEC.md §7.1.
 
 When this preamble fires the message is queued, not sent — control returns; sending resumes at step 5 after `PATH_REQUEST_WAIT` elapses or an announce response populates the path table.
 
@@ -113,7 +113,7 @@ ephemeral_pub(32) || iv(16) || aes_ciphertext(...) || hmac_sha256(32)
 
 ### 8. `Transport.outbound(packet)` — path-table-aware framing
 
-`RNS/Transport.py:1031-1113`. Verified by [`../tools/verify_packet_header.py`](../tools/verify_packet_header.py).
+`RNS/Transport.py:1034-1116`. Verified by [`../tools/verify_packet_header.py`](../tools/verify_packet_header.py).
 
 - If `path_table[dest][HOPS] > 1`: convert HEADER_1 → HEADER_2 (SPEC.md §2.3). The originator inserts `path_table[dest][NEXT_HOP]` (16-byte transport_id) at offset 2 and flips the flag bits to `HEADER_2 | TRANSPORT | (orig_low_nibble)`. Resulting wire packet is 35 + ciphertext bytes.
 - If `path_table[dest][HOPS] == 1` AND the local node is connected to a shared instance: same conversion applies (lines 1094-1105).
@@ -148,7 +148,7 @@ The receive flow is its own document; see `receive-opportunistic-lxmf.md` (TODO)
 
 ### 12. PROOF receipt returns
 
-`RNS/Transport.py:1031-1054`. Because the packet is `DATA` for a non-PLAIN, non-LINK destination with `create_receipt == True`, `Transport.outbound` registered a `PacketReceipt` on the sender side. When the recipient calls `Packet.prove`, a PROOF packet flies back containing `SHA256(packet.hashable_part)`; the sender's `PacketReceipt` matches it, fires the delivery callback registered at step 5, and the LXMessage state advances `SENT → DELIVERED`.
+`RNS/Transport.py:1034-1057`. Because the packet is `DATA` for a non-PLAIN, non-LINK destination with `create_receipt == True`, `Transport.outbound` registered a `PacketReceipt` on the sender side. When the recipient calls `Packet.prove`, a PROOF packet flies back containing `SHA256(packet.hashable_part)`; the sender's `PacketReceipt` matches it, fires the delivery callback registered at step 5, and the LXMessage state advances `SENT → DELIVERED`.
 
 If no proof arrives within the receipt timeout, `__link_packet_timed_out` runs on the receipt's timeout callback and the LXMessage state can drive a retry (see `LXMRouter.py::process_outbound` retry logic at `:2571+`, which may itself trigger a fresh `request_path` after `MAX_PATHLESS_TRIES`).
 

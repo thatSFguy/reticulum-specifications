@@ -1,6 +1,6 @@
 # Flow: forward an announce (transport-node rebroadcast)
 
-What a transport-mode node does when it receives an inbound announce destined for a non-local destination. This is the flow that makes the mesh actually mesh — without it, announces never propagate beyond direct radio range. Pinned against **RNS 1.2.0**; cross-references [`../SPEC.md`](../SPEC.md) §4.5 (validation), §12.3 (rebroadcast rules), §12.4 (path table).
+What a transport-mode node does when it receives an inbound announce destined for a non-local destination. This is the flow that makes the mesh actually mesh — without it, announces never propagate beyond direct radio range. Pinned against **RNS 1.2.4**; cross-references [`../SPEC.md`](../SPEC.md) §4.5 (validation), §12.3 (rebroadcast rules), §12.4 (path table).
 
 This flow only runs on a node with `enable_transport = Yes` per §12.1. Leaf clients can ignore it entirely.
 
@@ -14,7 +14,7 @@ The receive-announce flow ([`receive-announce.md`](receive-announce.md)) runs fi
 
 ### 2. Eligibility checks
 
-`RNS/Transport.py:1822`. Three conditions all must hold:
+`RNS/Transport.py:1825`. Three conditions all must hold:
 
 ```python
 if (Reticulum.transport_enabled() or is_from_local_client) \
@@ -72,7 +72,7 @@ The actual code is in `Transport.py:1196-1300, 1810-1969`; the structure above i
 
 ### 5. Per-interface `announce_queue` drain
 
-Each interface independently throttles its outbound announces against `interface.announce_cap` (default `Reticulum.ANNOUNCE_CAP = 2.0` = 2% airtime). `Interface.process_announce_queue` (`RNS/Interfaces/Interface.py:232-272`) drains the queue at a rate the cap permits, **picking the lowest-hop-count entry first** so closer destinations propagate before further ones:
+Each interface independently throttles its outbound announces against `interface.announce_cap` (default `Reticulum.ANNOUNCE_CAP = 2.0` = 2% airtime). `Interface.process_announce_queue` (`RNS/Interfaces/Interface.py:237-272`) drains the queue at a rate the cap permits, **picking the lowest-hop-count entry first** so closer destinations propagate before further ones:
 
 ```python
 min_hops = min(e["hops"] for e in self.announce_queue)

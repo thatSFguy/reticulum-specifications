@@ -12,7 +12,7 @@ Verifies:
           and HEADER_2 layout flags(1) hops(1) transport_id(16) dest_hash(16)
           context(1) data.
   - §2.3: originator HEADER_1 → HEADER_2 conversion when path_table reports
-          hops > 1. The conversion logic at RNS/Transport.py:1074-1083 is
+          hops > 1. The conversion logic at RNS/Transport.py:1077-1108 is
           exercised by stubbing Transport.transmit and seeding the path_table
           with a synthetic multi-hop entry. The wire bytes captured at
           transmit-time are compared to the expected HEADER_2 form.
@@ -209,7 +209,7 @@ def verify_header_conversion(rns_instance):
             fail("§2.3 conversion: trailing bytes (orig dest_hash + ctx + payload) mismatch")
 
         print("PASS S2.3 HEADER_1 -> HEADER_2 conversion at originator "
-              "(matches RNS/Transport.py:1074-1083)")
+              "(matches RNS/Transport.py:1077-1108)")
     finally:
         Transport.transmit = real_transmit
         with Transport.path_table_lock:

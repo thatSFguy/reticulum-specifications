@@ -1,0 +1,15 @@
+# Pinned versions the verifier scripts have been run against.
+#
+# Update only after the corresponding verifier scripts have been
+# re-run cleanly against the new upstream version. The README
+# "Spec corrections" section exists to cover the case where the
+# spec ships text that turns out to be wrong against a new pin.
+#
+# Why pin: upstream is migrating distribution off GitHub onto
+# Reticulum-native channels (rngit / rnpkg). PyPI continues
+# "at least until rnpkg is complete" per the RNS 1.2.4 release
+# notes (2026-05-07). A pin keeps the verifier reproducible if
+# upstream stops mirroring to PyPI before our migration is ready.
+
+rns==1.2.4
+lxmf==0.9.7

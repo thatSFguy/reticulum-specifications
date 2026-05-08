@@ -2,7 +2,7 @@
 Verifier for SPEC.md S3 (Token cryptography).
 
 Exercises the modified-Fernet Token construction in two directions
-against upstream RNS 1.2.0:
+against upstream RNS 1.2.4:
 
   1. Identity-style encrypt (with ephemeral X25519 prefix) per S3.1
      opportunistic form. Round-trips a known plaintext through

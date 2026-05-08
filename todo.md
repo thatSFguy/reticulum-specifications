@@ -396,6 +396,42 @@ order: top three save the most debugging hours.
       implicit in §4.5 / §7.x / §10 / §12 today; a single appendix
       table would be a quick reference card.
 
+## Upstream distribution shift
+
+RNS 1.2.4 (2026-05-07) is *"probably the last release that is also
+published to GitHub, since everything can now run over Reticulum
+itself."* Pip continues *"at least until `rnpkg` is complete, and RNS
+is completely self-hosting."* Watch-items so the verifier doesn't
+strand when GitHub / PyPI stop being authoritative:
+
+- [ ] **Stand up a local Reticulum node with internet reach.** Doesn't
+      need to be 24/7. Needed so `rngit` and (later) `rnpkg` can fetch
+      from upstream once the GitHub mirror is gone. Capture the node's
+      identity / config in a private spot (not this repo).
+- [ ] **Capture the upstream Reticulum repo node's destination hash
+      once published** — markqvist will publish a `rngit` address
+      for the official source repo. When that lands, record it
+      somewhere durable (suggest `tools/sources.md`, new file) so
+      anyone bringing up the verifier knows where to fetch from
+      when GitHub goes dark.
+- [ ] **Watch `rnpkg` for install/upgrade commands.** Currently a stub
+      in 1.2.4 (only `--config` / `--exampleconfig` / `--version`
+      flags). When `rnpkg install` / `rnpkg upgrade` ship, swap
+      `pip install -r tools/requirements.txt` instructions to the
+      `rnpkg` equivalent (or document both during the transition).
+- [ ] **`rsg` signature verification.** RNS 1.2.4 introduced a new
+      `rsg` file signature format for release artifacts. Once releases
+      stop being GitHub-signed, we'll need to verify `rsg` signatures
+      on whatever we pull through `rnpkg`/`rngit` to know we got
+      authentic upstream code. Likely a small helper script in
+      `tools/`.
+- [ ] **Mirror upstream source citations into `references/`.** SPEC.md
+      cites upstream Python by file + line throughout. Once upstream
+      moves off GitHub, those citations get harder to follow without a
+      checkout. Consider extracting the cited functions/lines into a
+      `references/` tree keyed by RNS version, so the spec stays
+      navigable even when upstream is Reticulum-only.
+
 ## Spec polishing (lower priority)
 
 - [x] **Navigation polish for `SPEC.md`** — at ~3300 lines, splitting

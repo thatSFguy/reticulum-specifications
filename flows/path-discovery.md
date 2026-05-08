@@ -2,7 +2,7 @@
 
 What happens chronologically when one node wants to reach another whose path is missing from `Transport.path_table`. This flow drives the well-known `rnstransport.path.request` destination (dest_hash `6b9f66014d9853faab220fba47d02761`, see [`../SPEC.md`](../SPEC.md) §1.2 and §7.1) and the path-response announce that returns along the reverse path.
 
-Pinned against **RNS 1.2.0**.
+Pinned against **RNS 1.2.4**.
 
 Out of scope: the LXMF outbound retry that gates this flow (`flows/send-opportunistic-lxmf.md` step 4); the periodic `Transport.jobs` cycle that ages out stale paths; transport-mode rebroadcast of a known path on behalf of a remote requester (Tier 3 spec gap, see `../todo.md`).
 
@@ -20,7 +20,7 @@ Out of scope: the LXMF outbound retry that gates this flow (`flows/send-opportun
 
 ### 1. Initiator: `RNS.Transport.request_path(dest_hash)`
 
-`RNS/Transport.py:2707-2745`. Triggered by:
+`RNS/Transport.py:2713-2750`. Triggered by:
 
 - `LXMRouter.handle_outbound` when `not has_path(dest) and method == OPPORTUNISTIC` (see `send-opportunistic-lxmf.md` step 4).
 - `LXMRouter.process_outbound` retry path after `MAX_PATHLESS_TRIES`.
@@ -45,7 +45,7 @@ Transport.path_requests[destination_hash] = time.time()
 
 The well-known dest hash `6b9f66014d9853faab220fba47d02761` is computed as `SHA256(SHA256("rnstransport.path.request")[:10])[:16]` per [`../SPEC.md`](../SPEC.md) §1.2 (the `identity=None` branch of `Destination.hash`). It is the same on every node — no per-node uniqueness — because the destination is `PLAIN` with no identity attached.
 
-The packet is `DATA` (not ANNOUNCE), `BROADCAST` transport, `HEADER_1`, and `context = NONE`. The body is **unencrypted** because the outer destination is `PLAIN` (`RNS/Packet.py:192-194` skips encryption for PLAIN-type destinations).
+The packet is `DATA` (not ANNOUNCE), `BROADCAST` transport, `HEADER_1`, and `context = NONE`. The body is **unencrypted** because the outer destination is `PLAIN` — `Packet.pack` falls through to `self.destination.encrypt(self.data)` at `RNS/Packet.py:215`, and `Destination.encrypt` returns `plaintext` unchanged for `Destination.PLAIN` (`RNS/Destination.py:592-593`).
 
 Initiator records `Transport.path_requests[destination_hash] = time.time()` for `PATH_REQUEST_GATE_TIMEOUT = 120s` rate-limiting (prevents the same node from repeating identical path? requests faster than `PATH_REQUEST_MI = 20s`).
 

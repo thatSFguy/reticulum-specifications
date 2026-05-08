@@ -1,6 +1,6 @@
 # Flow: receive a Resource (large body) over a Link
 
-The inverse of [`send-resource.md`](send-resource.md). What happens chronologically on the receiver when an inbound Resource transfer arrives. Pinned against **RNS 1.2.0**; see [`../SPEC.md`](../SPEC.md) §10 for the wire bytes.
+The inverse of [`send-resource.md`](send-resource.md). What happens chronologically on the receiver when an inbound Resource transfer arrives. Pinned against **RNS 1.2.4**; see [`../SPEC.md`](../SPEC.md) §10 for the wire bytes.
 
 ---
 
@@ -29,7 +29,7 @@ Branch by `resource_strategy`:
 
 ### 3. Receiver issues the first RESOURCE_REQ
 
-`Resource.request_next()` (`RNS/Resource.py:934-983`) builds the request body per §10.5:
+`Resource.request_next()` (`RNS/Resource.py:931-981`) builds the request body per §10.5:
 
 ```
 exhausted_flag(1) [|| last_map_hash(4)] || resource_hash(32) || requested_map_hashes(N × 4)
