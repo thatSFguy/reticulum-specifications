@@ -106,7 +106,9 @@ Validation (`RNS/Link.py:410-422`):
 5. On success: `link.handshake()` runs (`RNS/Link.py:353-370`) — ECDH with the responder's fresh X25519 pub, then HKDF over the shared secret with `salt = link_id`, derives `signing_key(32) || encrypt_key(32)` per SPEC.md §6.4. Link state transitions to `Link.ACTIVE`.
 6. The initiator's `established_callback` registered at step 2 — `LXMRouter.process_outbound` — fires, re-entering step 2 with the link now ACTIVE.
 
-A confirmed-MTU hint in the LRPROOF (length is `64+32+3 = 99` instead of `64+32 = 96`) updates `link.mtu` to the smaller of the responder's hint and the initiator's view (`RNS/Link.py:404-408`). An RTT report message follows automatically (`RNS/Link.py:441`, packet with `context = LRRTT`).
+A confirmed-MTU hint in the LRPROOF (length is `64+32+3 = 99` instead of `64+32 = 96`) updates `link.mtu` to the smaller of the responder's hint and the initiator's view (`RNS/Link.py:404-408`).
+
+Immediately after step 5 succeeds — and before any application DATA leaves — the initiator MUST emit a Link Round-Trip Time packet (`context = LRRTT (0xfe)`, `RNS/Link.py:440-442`). This is **not** an informational hint; the responder uses LRRTT receipt as the sole trigger to transition its own link state from `HANDSHAKE` to `ACTIVE` and to fire the application's `link_established_callback` (per SPEC.md §6.4.2). On the LXMF responder that callback is what installs `set_resource_strategy(ACCEPT_APP)` (`LXMF/LXMRouter.py:1855`); without it, every Resource ADV the initiator sends — including any LXM body large enough to spill from packet form into Resource form — silently hits the `ACCEPT_NONE` branch on the responder and is dropped. The initiator transitions to `ACTIVE` independently on LRPROOF validation, but the responder does not.
 
 ### 5. Transfer the LXM body over the active link
 
@@ -141,7 +143,7 @@ so the LXMessage advances `SENT → DELIVERED` when the recipient's PROOF for th
 
 ### 6. Wire bytes leave (KISS / HDLC framing)
 
-Same as `send-opportunistic-lxmf.md` step 9 — the framed link DATA packet leaves the interface, with `Transport.outbound` applying the HEADER_1→HEADER_2 conversion if the link's next hop is more than 1 transport hop away. The next-hop interface for a link is cached on the link object (`link.attached_interface`) so the hop count comes from the link establishment time, not a fresh path-table lookup.
+Same as `send-opportunistic-lxmf.md` step 9 — the framed link DATA packet leaves the interface. Note that, in contrast to opportunistic DATA, **`Transport.outbound` does NOT apply the HEADER_1→HEADER_2 conversion for link-addressed packets**, regardless of how many transport hops the link traverses. The HEADER_1→HEADER_2 path is keyed on a `path_table` lookup against `dest_hash`; a link-addressed packet's `dest_hash` is the `link_id`, which lives in `link_table`, not `path_table`. Relays then forward it via `link_table` forwarding — which preserves the header bytes verbatim — so emitting HEADER_2 with `transport_id` set on a link-addressed packet would have it dropped at the destination's `packet_filter` as "for another transport instance" (SPEC.md §6.4.3). The next-hop interface for a link is cached on the link object (`link.attached_interface`) so all subsequent traffic uses that same interface without further path-table lookup.
 
 ### 7. PROOF receipt arrives → `__mark_delivered` fires
 

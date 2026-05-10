@@ -31,6 +31,7 @@ Populated against RNS 1.2.4 / LXMF 0.9.7:
 | `verify_lxmf_opportunistic.py` | §5.1, §5.2, §5.5, §5.6 — full identity → encrypt → decrypt → parse round-trip | ✅ |
 | `verify_proof_packet.py` | §6.5 — implicit (64B) and explicit (96B) proof body forms, validator length-dispatch | ✅ |
 | `verify_link_handshake.py` | §6.1, §6.2, §6.3, §6.6 — LINKREQUEST/LRPROOF body order, link_id derivation, signalling | ✅ |
+| `verify_link_lrrtt.py` | §6.4.2, §6.4.3 — LRRTT wire form, HEADER_1 header, dest_type=LINK, ctx=0xfe, link-form Token body, msgpack float64 plaintext | ✅ |
 | `verify_path_request.py` | §1.2 well-known hashes, §7.1 LXMF path-preamble gating | ✅ |
 | `verify_rnode_split.py` | §8.3 — RNode air-frame split-packet TX/RX state machines | ✅ |
 | `verify_msgpack_quirk.py` | §9.3 — encoding name as bytes vs str affects upstream parsing | ✅ |

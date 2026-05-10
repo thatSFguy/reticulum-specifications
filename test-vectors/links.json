@@ -1,5 +1,5 @@
 {
-  "_about": "Link handshake test vectors. Each vector records a full Reticulum Link handshake: LINKREQUEST (initiator -> responder) and LRPROOF (responder -> initiator). The ephemeral X25519/Ed25519 keys are pinned via the `inputs.*_priv_hex` blobs; both Ed25519 signatures are RFC 8032 deterministic so the resulting wire bytes are reproducible. A clean-room implementation can verify by: (a) packing a LINKREQUEST from the recorded initiator ephemerals and confirming bytes match `linkrequest_raw_hex`; (b) computing `link_id` per SPEC.md S6.3 (N=2 for HEADER_1) and matching `link_id_hex`; (c) packing an LRPROOF as the responder, with bob's identity Ed25519 sig over `link_id || responder_X25519_pub || responder_long_term_Ed25519_pub || signalling`, and matching `lrproof_raw_hex`; (d) running ECDH+HKDF on either side and matching `derived_key_hex`. Regenerate with `generator_script`.",
+  "_about": "Link handshake test vectors. Each vector records a full Reticulum Link handshake: LINKREQUEST (initiator -> responder) and LRPROOF (responder -> initiator). The ephemeral X25519/Ed25519 keys are pinned via the `inputs.*_priv_hex` blobs; both Ed25519 signatures are RFC 8032 deterministic so the resulting wire bytes are reproducible. A clean-room implementation can verify by: (a) packing a LINKREQUEST from the recorded initiator ephemerals and confirming bytes match `linkrequest_raw_hex`; (b) computing `link_id` per SPEC.md S6.3 (N=2 for HEADER_1) and matching `link_id_hex`; (c) packing an LRPROOF as the responder, with bob's identity Ed25519 sig over `link_id || responder_X25519_pub || responder_long_term_Ed25519_pub || signalling`, and matching `lrproof_raw_hex`; (d) running ECDH+HKDF on either side and matching `derived_key_hex`; (e) building an LRRTT packet (S6.4.2) addressed to the link_id with `context=LRRTT (0xfe)` and an encrypted body of `umsgpack.packb(lrrtt.rtt_seconds)`, using `lrrtt.iv_hex` as the Token IV, and matching `lrrtt.raw_hex` / `lrrtt.body_hex`. Regenerate with `generator_script`.",
   "vectors": [
     {
       "label": "alice_to_bob_aes256cbc",
@@ -31,14 +31,23 @@
         "shared_secret_hex": "5bf22caf31c0316785b0b9bc60e56d48582ce59435ce5b3c028052be42631e0f",
         "derived_key_hex": "d4c8238d23a1810c3dbe4caec15253d5a86d7fe6afa8dfa76f915579723fd88cbcd2ab3a0cd96f5b6ffd8abec8307f05cd791dc9c4fca900f706b0313a51ab65",
         "mtu": 500,
-        "mode": 1
+        "mode": 1,
+        "lrrtt": {
+          "rtt_seconds": 0.05,
+          "iv_hex": "44444444444444444444444444444444",
+          "plaintext_hex": "cb3fa999999999999a",
+          "raw_hex": "0c007ee5fe3e4952c9ac4519b537f6278474fe4444444444444444444444444444444408eed3f995972368190afe8851fcc6850767824d5c8980840a16d4e5c873a5977669bb9c488d68ecf0da3ff6111cf630",
+          "body_hex": "4444444444444444444444444444444408eed3f995972368190afe8851fcc6850767824d5c8980840a16d4e5c873a5977669bb9c488d68ecf0da3ff6111cf630"
+        }
       },
-      "rns_version_at_generation": "1.2.0",
+      "rns_version_at_generation": "1.2.4",
       "generator_script": "tools/regen_links.py",
       "verifies_spec_sections": [
         "6.1",
         "6.2",
         "6.3",
+        "6.4.1",
+        "6.4.2",
         "6.6"
       ]
     }

@@ -48,7 +48,7 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
   - [6.1 LINKREQUEST (initiator → responder)](#61-linkrequest-initiator-responder)
   - [6.2 LRPROOF (responder → initiator)](#62-lrproof-responder-initiator)
   - [6.3 link_id derivation](#63-link_id-derivation)
-  - [6.4 Session key derivation](#64-session-key-derivation)
+  - [6.4 Session keys and link activation](#64-session-keys-and-link-activation)
   - [6.5 Packet receipts (regular `PROOF` packets)](#65-packet-receipts-regular-proof-packets)
   - [6.6 MTU and mode signalling (3-byte trailer on LINKREQUEST and LRPROOF)](#66-mtu-and-mode-signalling-3-byte-trailer-on-linkrequest-and-lrproof)
   - [6.7 KEEPALIVE and link teardown](#67-keepalive-and-link-teardown)
@@ -403,7 +403,7 @@ Full context inventory from `RNS/Packet.py:74-92` (RNS 1.2.4):
 | `0xFB` | LINKIDENTIFY | Backchannel-identify proof on an established Link (§5 backchannel) |
 | `0xFC` | LINKCLOSE | Link teardown notification |
 | `0xFD` | LINKPROOF | Defined but **not actually emitted** by upstream RNS 1.2.4 in this revision. Both `Identity.prove` and `Link.prove_packet` build their proof packets with `context = NONE (0x00)` — the proof-ness is conveyed by `packet_type = PROOF (3)`, not by this context byte. Reserved for a future revision; see §6.5 |
-| `0xFE` | LRRTT | Link RTT measurement reply |
+| `0xFE` | LRRTT | Link round-trip-time reply — initiator's link-activation packet (§6.4.2) |
 | `0xFF` | LRPROOF | Link request proof (§6.2) |
 
 ### 2.6 Source
@@ -1005,7 +1005,11 @@ The "hashable part" deliberately strips `header_type`, `context_flag`, `transpor
 
 For LINKREQUEST packets specifically, the trailing signalling bytes (if present, indicated by `len(packet.data) > Link.ECPUBSIZE` in `link_id_from_lr_packet` at `RNS/Link.py:341-348`) are stripped from the END of `hashable_part` before hashing, so the link_id is invariant under MTU-discovery signalling.
 
-### 6.4 Session key derivation
+### 6.4 Session keys and link activation
+
+After the LINKREQUEST/LRPROOF exchange completes, both peers must (a) derive matching link session keys, (b) drive the link state machine to `ACTIVE`, and (c) settle on the wire conventions for all subsequent traffic on the link. The three subsections below cover each step. Skipping any of them silently breaks interop in distinct ways: §6.4.1 wrong → no peer can decrypt anything; §6.4.2 omitted → the responder never reaches `ACTIVE` and silently drops all link DATA; §6.4.3 wrong on multi-hop → packets are dropped at the destination's transport filter.
+
+#### 6.4.1 Session key derivation
 
 Both sides compute:
 
@@ -1017,6 +1021,75 @@ encrypt_key  = session_key[32..64]
 ```
 
 Subsequent DATA packets on the link use the Link-derived-key Token format (section 3.1, no ephemeral_pub prefix).
+
+#### 6.4.2 LRRTT — initiator's link-activation packet
+
+After validating the responder's LRPROOF and deriving session keys, the initiator MUST send a Link Round-Trip Time packet to the responder before transmitting any application DATA. The wire form is:
+
+| Field | Value |
+|---|---|
+| `header_type` | `HEADER_1` |
+| `packet_type` | `DATA (0x00)` |
+| `destination_type` | `LINK (0x03)` |
+| `dest_hash` | `link_id` |
+| `context` | `LRRTT (0xFE)` |
+| body (plaintext) | `umsgpack.packb(rtt_seconds)` — a single msgpack float64 (9 bytes) carrying the initiator's measured RTT in seconds (LRREQ-send to LRPROOF-receive) |
+| body (wire) | the plaintext above, encrypted with the link's session keys per §3.1 (link form Token, no `eph_pub` prefix) |
+
+Source: `RNS/Link.py:440-442` constructs and sends the packet immediately after LRPROOF validation:
+
+```python
+rtt_data   = umsgpack.packb(self.rtt)
+rtt_packet = RNS.Packet(self, rtt_data, context=RNS.Packet.LRRTT)
+rtt_packet.send()
+```
+
+The responder uses receipt of LRRTT as the trigger to transition its link state from `HANDSHAKE` to `ACTIVE` (`RNS/Link.py:534-553`). The initiator transitions independently upon LRPROOF validation (`Link.py:430-432`); the responder MUST NOT transition before LRRTT arrives. The responder routes context `LRRTT` to `Link.rtt_packet()` from its main `receive()` dispatch at `RNS/Link.py:1056-1058`.
+
+`Link.rtt_packet()` is also the only path on the responder side that fires the `link_established` callback (`Link.py:550-551`). Without that callback, application layers cannot install link-state policies that depend on `ACTIVE` — most importantly, LXMF's `LXMRouter.delivery_link_established` (`LXMF/LXMRouter.py:1852-1859`) only calls `link.set_resource_strategy(ACCEPT_APP)` from this callback. Until that strategy is installed, the responder's `Link.receive()` hits the silent-drop branch `elif self.resource_strategy == Link.ACCEPT_NONE: pass` (`RNS/Link.py:1087`) on every inbound `RESOURCE_ADV`, and any oversize LXMF delivered as a Resource is discarded with no log line at default levels. This is silent, end-to-end, default-config message loss for an initiator that completes LRPROOF and immediately sends RESOURCE_ADV without first sending LRRTT.
+
+The exact RTT value reported is non-load-bearing: the responder takes `max(its_own_measurement, initiator_reported)` (`Link.py:540`). Implementations that don't have an accurate RTT measurement at this point may report a coarse estimate or zero — the responder's measurement carries forward when the initiator reports a smaller value. The value is, however, included in the encrypted body and so is integrity-bound to the link session keys; a peer that fails to encrypt this body with the correct link keys will fail decrypt and `rtt_packet` returns without transitioning to `ACTIVE`.
+
+#### 6.4.3 Header type for post-handshake DATA and Resource
+
+All packets sent on an active Link — link DATA (`packet_type=DATA`, `context=NONE`), Resource control packets (`context` ∈ {`RESOURCE_ADV (0x02)`, `RESOURCE_REQ (0x03)`, `RESOURCE_HMU (0x04)`, `RESOURCE_ICL (0x06)`, `RESOURCE_RCL (0x07)`}), Resource part packets (`context=RESOURCE (0x01)`), and link control packets (`KEEPALIVE`, `LRRTT`, `LINKCLOSE`, `LINKIDENTIFY`, `REQUEST`, `RESPONSE`, `CHANNEL`) — MUST be emitted with `header_type=HEADER_1` and no `transport_id`, regardless of whether the responder is reachable directly or through one or more transit relays.
+
+This is asymmetric to the LINKREQUEST that established the link. LINKREQUEST is destination-hash-routed via `path_table` and therefore eligible for `HEADER_2` with `transport_id` set to the next-hop relay; the relay's path_table-forwarding branch strips `transport_id` (HEADER_2 → HEADER_1) at the last hop (`RNS/Transport.py:1500-1517`):
+
+```python
+if remaining_hops > 1:
+    # Just increase hop count and transmit (HEADER_2 preserved)
+elif remaining_hops == 1:
+    # Strip transport headers and transmit
+    new_flags = (RNS.Packet.HEADER_1) << 6 | (Transport.BROADCAST) << 4 | (packet.flags & 0b00001111)
+    new_raw  = struct.pack("!B", new_flags)
+    new_raw += struct.pack("!B", packet.hops)
+    new_raw += packet.raw[(RNS.Identity.TRUNCATED_HASHLENGTH//8)+2:]
+```
+
+Once the link exists, post-handshake traffic addressed to `link_id` is routed via `link_table`, not `path_table`. The link_table forwarding branch (`RNS/Transport.py:1587-1622`) does NOT touch the header — it bumps `hops` and forwards the bytes verbatim:
+
+```python
+new_raw = packet.raw[0:1]
+new_raw += struct.pack("!B", packet.hops)
+new_raw += packet.raw[2:]
+Transport.transmit(outbound_interface, new_raw)
+```
+
+A HEADER_2 link DATA packet would therefore arrive at the destination with `transport_id` intact, where the receiver's `Transport.packet_filter` (`RNS/Transport.py:1283-1285`) drops it as "for another transport instance" because the embedded `transport_id` is the relay's identity, not the receiver's:
+
+```python
+if packet.transport_id != None and packet.packet_type != RNS.Packet.ANNOUNCE:
+    if packet.transport_id != Transport.identity.hash:
+        RNS.log("Ignored packet ... in transport for other transport instance", RNS.LOG_EXTREME)
+        return False
+```
+
+The drop fires only at `LOG_EXTREME` (level 7) and is invisible at the default `LOG_NOTICE` (level 3); see §9.9.
+
+Upstream RNS does not trip this in practice because its own constructors use `Packet`'s defaults (`HEADER_1`, `transport_id=None`) regardless of multi-hop. The relevant ones, all in `RNS/Resource.py` and `RNS/Link.py`, take the form `RNS.Packet(self.link, body, context=...)` (e.g. `Resource.py:521` for `RESOURCE_ADV`); see `Packet.__init__` at `RNS/Packet.py:122-123` for the default values. Upstream-to-upstream interop therefore never exercises this path. A clean-room implementation that copies the LINKREQUEST multi-hop pattern verbatim — setting `transport_id` on every link-bound packet — silently fails on any link with one or more transit relays in the path. The unit tests for that implementation pass (both sides agree on the same wire mistake) but localhost-rnsd interop with a real upstream destination drops every Resource part.
+
+The asymmetry summarized: the same Link is set up via a `HEADER_2`-eligible LINKREQUEST, but uses `HEADER_1` for everything else once established.
 
 ### 6.5 Packet receipts (regular `PROOF` packets)
 
@@ -2849,6 +2922,8 @@ After validation, the link_table entry is marked `validated`, and from now on th
 
 For a `DATA` packet with `destination_type == LINK` whose `dest_hash` is in `link_table`, the relay forwards on the appropriate direction's interface. The link_table entry remembers both sides via `IDX_LT_NH_IF` (toward initiator end) and `IDX_LT_RCVD_IF` (toward responder end); the relay picks based on which interface the inbound packet arrived on.
 
+Unlike the path_table forwarding in §12.2 — which strips `transport_id` (`HEADER_2` → `HEADER_1`) at the last hop — link_table forwarding does NOT touch the header. The relay bumps `hops` and emits `packet.raw[0:1] + struct.pack("!B", packet.hops) + packet.raw[2:]` (`Transport.py:1618-1620`). Whatever header bytes the initiator emitted reach the destination verbatim. This is why the originator's wire conventions for post-handshake link DATA are constrained — see §6.4.3: senders MUST emit `HEADER_1` with no `transport_id` for every link-addressed packet, because a `HEADER_2` link packet would arrive at the destination with `transport_id` intact and be dropped by the destination's `packet_filter` as "for another transport instance".
+
 #### 12.5.3 PROOF receipt forwarding via `reverse_table`
 
 `Transport.py:2199-2208`. When a PROOF arrives whose `dest_hash` is in `reverse_table` (i.e. an opportunistic-DATA proof being routed back to its originator), the relay pops the entry, checks the proof arrived on the correct outbound interface (`receiving_interface == reverse_entry[IDX_RT_OUTB_IF]`), and forwards on the originally-receiving interface:
@@ -3061,6 +3136,8 @@ A client running on a constrained device (less RAM, slower CPU) can scale all of
 | Link establishes but tears down within 5 minutes of inactivity | §6.7 — KEEPALIVE not implemented. Initiator sends `0xFF` ping every `keepalive` seconds; responder replies with `0xFE` pong | §6.7.1 |
 | Sender sees DATA bursts repeatedly retransmitted, link dies | §6.5 — receiver isn't emitting the mandatory PROOF receipt for each CTX_NONE Link DATA packet | `tools/verify_proof_packet.py` |
 | Some peers work, others reject every PROOF I send | §6.5.2 — wrong proof body length. Upstream default emits 64-byte implicit proofs (`signature` only) but your peer expects 96-byte explicit (`packet_hash \|\| signature`). Validator dispatches on length | `tools/verify_proof_packet.py` |
+| Initiator and responder complete LRPROOF but every Resource ADV / link DATA the initiator sends is silently dropped at the responder | §6.4.2 — initiator never emitted LRRTT after LRPROOF. Responder stays in `HANDSHAKE`, `link_established` callback never fires, LXMF's `set_resource_strategy(ACCEPT_APP)` never installs, and `Link.receive` hits the silent `ACCEPT_NONE` branch on every RESOURCE_ADV | §6.4.2 |
+| Single-hop link works, but the same flow over a multi-hop link silently drops every link DATA / Resource part at the destination | §6.4.3 — link-addressed packets emitted as `HEADER_2` with `transport_id` set to the next-hop relay. link_table forwarding doesn't strip `transport_id`, so the destination's `packet_filter` rejects it as "for another transport instance" (LOG_EXTREME). Use `HEADER_1` and `transport_id=None` regardless of hop count | §6.4.3 |
 
 ### Resource transfers (large bodies)
 

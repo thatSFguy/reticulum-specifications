@@ -9,7 +9,7 @@ Populated against RNS 1.2.4 / LXMF 0.9.7:
 - ✅ `identities.json` — Alice + Bob identity vectors (regenerator: `../tools/regen_identities.py`, verifier: `../tools/verify_destination_hash.py`).
 - ✅ `announces.json` — two announce vectors (no-ratchet + with-ratchet) signed by Alice (regenerator: `../tools/regen_announces.py`, verifier: `../tools/verify_announce_roundtrip.py`).
 - ✅ `lxmf.json` — two opportunistic-LXMF vectors Alice → Bob (regenerator: `../tools/regen_lxmf.py`, verifier: `../tools/verify_lxmf_opportunistic.py`).
-- ✅ `links.json` — full Link handshake vector (LINKREQUEST + LRPROOF + derived session key) Alice → Bob (regenerator: `../tools/regen_links.py`, verifier: `../tools/verify_link_handshake.py`).
+- ✅ `links.json` — full Link handshake vector (LINKREQUEST + LRPROOF + derived session key) Alice → Bob, plus an LRRTT packet (§6.4.2) emitted from the initiator with pinned IV and `rtt_seconds = 0.05` (regenerator: `../tools/regen_links.py`, verifiers: `../tools/verify_link_handshake.py`, `../tools/verify_link_lrrtt.py`).
 
 All four files are byte-deterministic across runs: regenerators pin every random source (ephemeral keys, IVs, `random_hash` prefix + timestamp, LXMF timestamp) so the output is reproducible against a fixed upstream RNS / LXMF version.
 

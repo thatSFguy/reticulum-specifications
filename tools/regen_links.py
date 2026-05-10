@@ -48,6 +48,7 @@ import tempfile
 
 import RNS
 from RNS.Link import Link
+from RNS.vendor import umsgpack
 
 
 REPO_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,6 +61,14 @@ IDS_PATH   = os.path.join(REPO_ROOT, "test-vectors", "identities.json")
 INITIATOR_X25519_PRIV   = bytes.fromhex("11"*32)
 INITIATOR_ED25519_PRIV  = bytes.fromhex("22"*32)
 RESPONDER_X25519_PRIV   = bytes.fromhex("33"*32)
+
+# Pinned LRRTT inputs. The IV here gets injected via os.urandom while
+# packing the LRRTT packet so the wire bytes are reproducible. RTT
+# value is the initiator's measured LRREQ->LRPROOF time per S6.4.2;
+# the exact value is non-load-bearing (responder takes max with its
+# own measurement) but pinning it keeps the wire bytes deterministic.
+LRRTT_RTT_SECONDS       = 0.05
+LRRTT_IV                = bytes.fromhex("44"*16)
 
 
 def fail(msg: str) -> None:
@@ -212,6 +221,33 @@ def main():
         if initiator.link_id != responder.link_id:
             fail(f"link_id disagree: ini={initiator.link_id.hex()} res={responder.link_id.hex()}")
 
+        # 4. Build the initiator's LRRTT packet (S6.4.2). The initiator
+        #    emits this immediately after LRPROOF validation, before any
+        #    application DATA. We pin os.urandom so the Token IV is
+        #    deterministic; the rest of the wire form falls out of the
+        #    link's derived_key (already populated above).
+        lrrtt_plaintext = umsgpack.packb(LRRTT_RTT_SECONDS)
+        token_mod = sys.modules["RNS.Cryptography.Token"]
+        real_urandom = token_mod.os.urandom
+
+        def fake_urandom(n):
+            if n == 16: return LRRTT_IV
+            return real_urandom(n)
+
+        token_mod.os.urandom = fake_urandom
+        try:
+            lrrtt_packet = RNS.Packet(initiator, lrrtt_plaintext,
+                                      context=RNS.Packet.LRRTT)
+            lrrtt_packet.pack()
+        finally:
+            token_mod.os.urandom = real_urandom
+
+        # Sanity round-trip: the responder side should decrypt
+        # the captured ciphertext and recover the same float.
+        if responder.decrypt(lrrtt_packet.ciphertext) != lrrtt_plaintext:
+            fail("LRRTT round-trip failed: responder.decrypt did not "
+                 "recover the pinned plaintext.")
+
         # Slice fields per S6.1 / S6.2 for human inspection
         lr_data = captured_lr["data"]
         ini_x25519_pub  = lr_data[:32]
@@ -254,10 +290,18 @@ def main():
                 "derived_key_hex":               initiator.derived_key.hex(),
                 "mtu":                           initiator.mtu,
                 "mode":                          initiator.mode,
+                "lrrtt": {
+                    "rtt_seconds":               LRRTT_RTT_SECONDS,
+                    "iv_hex":                    LRRTT_IV.hex(),
+                    "plaintext_hex":             lrrtt_plaintext.hex(),
+                    "raw_hex":                   lrrtt_packet.raw.hex(),
+                    "body_hex":                  lrrtt_packet.ciphertext.hex(),
+                },
             },
             "rns_version_at_generation":         RNS.__version__,
             "generator_script":                  "tools/regen_links.py",
-            "verifies_spec_sections":            ["6.1", "6.2", "6.3", "6.6"],
+            "verifies_spec_sections":            ["6.1", "6.2", "6.3", "6.4.1",
+                                                  "6.4.2", "6.6"],
         }
 
         payload = {
@@ -276,7 +320,11 @@ def main():
                 "responder, with bob's identity Ed25519 sig over `link_id || "
                 "responder_X25519_pub || responder_long_term_Ed25519_pub || "
                 "signalling`, and matching `lrproof_raw_hex`; (d) running "
-                "ECDH+HKDF on either side and matching `derived_key_hex`. "
+                "ECDH+HKDF on either side and matching `derived_key_hex`; "
+                "(e) building an LRRTT packet (S6.4.2) addressed to the "
+                "link_id with `context=LRRTT (0xfe)` and an encrypted body "
+                "of `umsgpack.packb(lrrtt.rtt_seconds)`, using `lrrtt.iv_hex` "
+                "as the Token IV, and matching `lrrtt.raw_hex` / `lrrtt.body_hex`. "
                 "Regenerate with `generator_script`."
             ),
             "vectors": [vector],
