@@ -4,6 +4,8 @@ This file tells AI coding agents (Claude Code, Codex, Cursor, Copilot Workspace,
 
 If you are an AI agent reading this: follow these rules. If you are a human reviewing an agent's PR: enforce these rules.
 
+**Working on a Reticulum implementation (not just this spec repo) — start with [`playbook.md`](playbook.md).** This file (`agent.md`) governs what evidence is admissible when adding to the spec; `playbook.md` covers how to troubleshoot interop bugs, design tests that don't lie to you, and navigate a protocol whose primary documentation is its source code. Both files are short; read both.
+
 ---
 
 ## 1. Verification is mandatory

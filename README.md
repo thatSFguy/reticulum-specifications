@@ -18,6 +18,9 @@ Each finding is grounded in upstream source citations (file + line) so it can be
 ## What's here
 
 - [`SPEC.md`](SPEC.md) — the single combined spec document, organized by protocol layer
+- [`playbook.md`](playbook.md) — how to troubleshoot interop bugs, design tests that don't lie to you, and navigate the protocol's code-as-spec parts. **Read this if you're starting any Reticulum implementation work, not just contributing to this repo.** Includes an incident registry of past wire-format bugs and their fixes.
+- [`agent.md`](agent.md) — verification rules for adding to this repo (markers, tools/, test-vectors)
+- [`templates/`](templates/) — drop-in `AGENTS.md` for new Reticulum implementation projects in any language. Copy into your project root, edit the marked sections, and the next agent or contributor lands on the right docs automatically.
 - [`flows/`](flows/) — chronological end-to-end narratives (e.g. "send a message"), cross-referencing SPEC.md sections
 - [`tools/`](tools/) — self-contained Python verifier scripts that test SPEC.md claims against upstream RNS / LXMF. Pinned via [`tools/requirements.txt`](tools/requirements.txt) to the upstream versions the scripts were last re-verified against
 - [`test-vectors/`](test-vectors/) — known-good byte sequences each implementation should be able to round-trip (intent: grow into a compliance suite)
