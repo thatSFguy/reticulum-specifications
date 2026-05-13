@@ -43,7 +43,8 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
   - [5.6 Signature verification — msgpack variant tolerance](#56-signature-verification-msgpack-variant-tolerance)
   - [5.7 LXMF stamps and tickets (anti-spam)](#57-lxmf-stamps-and-tickets-anti-spam)
   - [5.8 Propagation node protocol (offline message store-and-forward)](#58-propagation-node-protocol-offline-message-store-and-forward)
-  - [5.9 Source](#59-source)
+  - [5.9 LXMF field constants and helper specifiers](#59-lxmf-field-constants-and-helper-specifiers)
+  - [5.10 Source](#510-source)
 - [6. Reticulum Link protocol](#6-reticulum-link-protocol)
   - [6.1 LINKREQUEST (initiator → responder)](#61-linkrequest-initiator-responder)
   - [6.2 LRPROOF (responder → initiator)](#62-lrproof-responder-initiator)
@@ -947,9 +948,122 @@ Receivers parse this via `pn_announce_data_is_valid` (`LXMF/LXMF.py:191-206`), w
 | `LXMF/LXStamper.py::validate_peering_key` | peering-key PoW validation |
 | `LXMF/LXMF.py:191-206` | `pn_announce_data_is_valid` parser |
 
-### 5.9 Source
+### 5.9 LXMF field constants and helper specifiers
 
-`LXMF/LXMessage.py` for pack/unpack; `LXMF/LXMF.py` for the app_data extraction helpers; `LXMF/LXStamper.py` for stamps; `LXMF/LXMRouter.py` for receive-side stamp/ticket dispatch and propagation handlers; `LXMF/LXMPeer.py` for the propagation peer-to-peer state machine.
+The `fields` dict inside an LXMF message (the 4th element of the msgpack array described in §5.3) is keyed by 1-byte integers. Upstream `LXMF/LXMF.py` (verified against LXMF 0.9.7 by `tools/verify_lxmf_fields.py`) defines the following allocations.
+
+#### 5.9.1 Top-level `fields` dict keys
+
+Sender and receiver agree on these keys; each value's structure is field-specific (described below where it matters at byte level).
+
+| Key | Constant | Purpose |
+|---|---|---|
+| `0x01` | `FIELD_EMBEDDED_LXMS` | A list of further LXMF messages embedded inside this one (used for forwarding / bundling). |
+| `0x02` | `FIELD_TELEMETRY` | A single telemetry snapshot (Sideband telemetry — see Sideband for the inner format; LXMF is opaque to the contents). |
+| `0x03` | `FIELD_TELEMETRY_STREAM` | A list of telemetry snapshots (history flush). |
+| `0x04` | `FIELD_ICON_APPEARANCE` | Sender-supplied avatar / appearance hint. |
+| `0x05` | `FIELD_FILE_ATTACHMENTS` | A list of attached files (multiple attachments per message). |
+| `0x06` | `FIELD_IMAGE` | Single embedded image — `[extension_string, image_bytes]`. See §5.9.2 for the wire shape. |
+| `0x07` | `FIELD_AUDIO` | Single embedded audio clip — `[mode_byte, audio_bytes]`. Mode byte chooses the codec; see §5.9.3. |
+| `0x08` | `FIELD_THREAD` | Conversation thread ID (links related messages). |
+| `0x09` | `FIELD_COMMANDS` | List of commands the sender is requesting the receiver execute (Sideband node/command protocol). |
+| `0x0A` | `FIELD_RESULTS` | List of results for commands previously requested via `FIELD_COMMANDS`. |
+| `0x0B` | `FIELD_GROUP` | Group / channel association metadata. |
+| `0x0C` | `FIELD_TICKET` | Stamp ticket grant — `[expires_unix_seconds(int), ticket_bytes(16)]`. See §5.7 for the anti-spam protocol. |
+| `0x0D` | `FIELD_EVENT` | Event-style payload (alert, state change). |
+| `0x0E` | `FIELD_RNR_REFS` | Reticulum Node Registry references. |
+| `0x0F` | `FIELD_RENDERER` | Renderer hint for the message `content` body — see §5.9.4 for accepted values. |
+| `0xFB` | `FIELD_CUSTOM_TYPE` | App-defined type identifier accompanying `FIELD_CUSTOM_DATA`. |
+| `0xFC` | `FIELD_CUSTOM_DATA` | App-defined opaque data — meaning given by `FIELD_CUSTOM_TYPE`. |
+| `0xFD` | `FIELD_CUSTOM_META` | App-defined metadata alongside `FIELD_CUSTOM_DATA`. |
+| `0xFE` | `FIELD_NON_SPECIFIC` | Development / unstructured payload — not for production. |
+| `0xFF` | `FIELD_DEBUG` | Debug payload — not for production. |
+
+> ⚠️ **UNVERIFIED:** the byte-level shape of `FIELD_EMBEDDED_LXMS`, `FIELD_TELEMETRY*`, `FIELD_FILE_ATTACHMENTS`, `FIELD_COMMANDS`, `FIELD_RESULTS`, `FIELD_GROUP`, `FIELD_EVENT`, and `FIELD_RNR_REFS` is not described here because no test vectors have been captured against upstream Sideband emissions for these. The constants are verified (see `tools/verify_lxmf_fields.py`) but the value structures are application-defined and not pinned by LXMF itself. Future PRs should add per-field byte layouts as test vectors arrive.
+
+#### 5.9.2 `FIELD_IMAGE` (`0x06`) value shape
+
+```
+fields[0x06] = [extension_string(bytes-or-str), image_bytes(bytes)]
+```
+
+The `extension_string` is the lowercase file extension WITHOUT a leading dot ("jpg", "png", "webp"). The `image_bytes` is the raw image file content. Receivers must tolerate the extension arriving as either msgpack `str` (`0xa0..0xbf` / `0xd9..0xdb`) or msgpack `bin` (`0xc4..0xc6`) — different encoders pick differently. See §9.3 for the `str`-vs-`bin` distinction and §10 for how images larger than a single Reticulum DATA packet are delivered via Resource over a Link.
+
+#### 5.9.3 `FIELD_AUDIO` (`0x07`) value shape
+
+```
+fields[0x07] = [mode_byte(int), audio_bytes(bytes)]
+```
+
+`mode_byte` is one of the `AM_*` constants defined in `LXMF/LXMF.py` (verified by `tools/verify_lxmf_fields.py`):
+
+| Byte | Constant | Codec | Notes |
+|---|---|---|---|
+| `0x01` | `AM_CODEC2_450PWB` | Codec2 450 bps pseudo-wideband | |
+| `0x02` | `AM_CODEC2_450` | Codec2 450 bps | |
+| `0x03` | `AM_CODEC2_700C` | Codec2 700C | |
+| `0x04` | `AM_CODEC2_1200` | Codec2 1200 bps | |
+| `0x05` | `AM_CODEC2_1300` | Codec2 1300 bps | |
+| `0x06` | `AM_CODEC2_1400` | Codec2 1400 bps | |
+| `0x07` | `AM_CODEC2_1600` | Codec2 1600 bps | |
+| `0x08` | `AM_CODEC2_2400` | Codec2 2400 bps | |
+| `0x09` | `AM_CODEC2_3200` | Codec2 3200 bps | |
+| `0x10` | `AM_OPUS_OGG` | Opus in OGG container | |
+| `0x11` | `AM_OPUS_LBW` | Opus low-bandwidth | |
+| `0x12` | `AM_OPUS_MBW` | Opus medium-bandwidth | |
+| `0x13` | `AM_OPUS_PTT` | Opus push-to-talk profile | |
+| `0x14` | `AM_OPUS_RT_HDX` | Opus realtime half-duplex | |
+| `0x15` | `AM_OPUS_RT_FDX` | Opus realtime full-duplex | |
+| `0x16` | `AM_OPUS_STANDARD` | Opus standard | |
+| `0x17` | `AM_OPUS_HQ` | Opus high-quality | |
+| `0x18` | `AM_OPUS_BROADCAST` | Opus broadcast | |
+| `0x19` | `AM_OPUS_LOSSLESS` | Opus lossless | |
+| `0xFF` | `AM_CUSTOM` | Client-detected — inspect `audio_bytes` to determine the codec |
+
+#### 5.9.4 `FIELD_RENDERER` (`0x0F`) value shape
+
+```
+fields[0x0F] = renderer_byte(int)
+```
+
+One of the `RENDERER_*` constants:
+
+| Byte | Constant | Rendering |
+|---|---|---|
+| `0x00` | `RENDERER_PLAIN` | Plain text — no formatting |
+| `0x01` | `RENDERER_MICRON` | NomadNet Micron markup (see NomadNet docs) |
+| `0x02` | `RENDERER_MARKDOWN` | CommonMark / GitHub-flavored Markdown |
+| `0x03` | `RENDERER_BBCODE` | BBCode-style tags |
+
+Implementations should fall back to `RENDERER_PLAIN` for any unknown renderer byte rather than rejecting the message.
+
+#### 5.9.5 Propagation-node metadata keys
+
+Distinct from the top-level `fields` dict, these `PN_META_*` keys are used inside the `fields[0x02]` element of a propagation-node announce (§5.8.5 element [2]) or in `/get`-flow metadata responses. Allocations may change before LXMF 1.0.0 — code defensively.
+
+| Byte | Constant | Purpose |
+|---|---|---|
+| `0x00` | `PN_META_VERSION` | Propagation protocol version |
+| `0x01` | `PN_META_NAME` | Operator-supplied node name |
+| `0x02` | `PN_META_SYNC_STRATUM` | Sync tier in the propagation mesh |
+| `0x03` | `PN_META_SYNC_THROTTLE` | Operator-imposed sync throttle |
+| `0x04` | `PN_META_AUTH_BAND` | Auth requirement (open / restricted / private) |
+| `0x05` | `PN_META_UTIL_PRESSURE` | Utilization back-pressure hint |
+| `0xFF` | `PN_META_CUSTOM` | Operator-defined extensions |
+
+> ⚠️ **UNVERIFIED:** the value type for each `PN_META_*` key is not yet pinned by this spec — upstream still treats them as a soft contract. Implementations should preserve unknown keys round-trip rather than dropping them.
+
+#### 5.9.6 Functionality signalling keys
+
+For announce-level capability negotiation:
+
+| Byte | Constant | Meaning |
+|---|---|---|
+| `0x00` | `SF_COMPRESSION` | Sender supports compressed message bodies (see §10.12) |
+
+### 5.10 Source
+
+`LXMF/LXMessage.py` for pack/unpack; `LXMF/LXMF.py` for the app_data extraction helpers and the field/audio/renderer constants enumerated in §5.9; `LXMF/LXStamper.py` for stamps; `LXMF/LXMRouter.py` for receive-side stamp/ticket dispatch and propagation handlers; `LXMF/LXMPeer.py` for the propagation peer-to-peer state machine.
 
 ---
 
