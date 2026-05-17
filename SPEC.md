@@ -150,6 +150,7 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
   - [17.2 Section relevance by category](#172-section-relevance-by-category)
   - [17.3 Worked example: §2.3 originator HEADER_1→HEADER_2 conversion](#173-worked-example-23-originator-header_1header_2-conversion)
   - [17.4 Pragmatic implication](#174-pragmatic-implication)
+  - [17.5 Application protocols layered over Reticulum](#175-application-protocols-layered-over-reticulum)
 - [18. Test vectors](#18-test-vectors)
 - [19. Source map](#19-source-map)
 
@@ -3545,6 +3546,24 @@ If you're a category-1 or category-2 developer reading this spec for **operation
 If you're a category-3 developer building from scratch, you need everything. Verify each section as you go using `tools/verify_*.py`, and treat §14 (failure modes) as your fault-finding entry point when integration testing reveals a discrepancy.
 
 If you're not sure which category you're in: `grep -r "import RNS" your_codebase` is a quick check. Any hit means cat 1 (or cat 2 if it's behind an FFI wall). No hits means cat 3.
+
+### 17.5 Application protocols layered over Reticulum
+
+Reticulum is a transport substrate; user-facing features are *application protocols* built on top. This spec documents **LXMF** (§5) in depth because its wire format is published nowhere else. Other application protocols carry their own authoritative specs and are **out of scope here** — but a clean-room author building a client for one still needs the RNS-layer sections below.
+
+**Reticulum Relay Chat (RRC)** — a live, IRC-style chat protocol. Authoritative spec: <https://rrc.kc1awv.net/> (its CBOR envelope, message types, and state machines live there, not here). RRC is a category-3-style consumer of RNS: it defines its own wire format but relies entirely on Reticulum for transport. An RRC client built clean-room needs:
+
+| RRC depends on | Sections in this spec |
+|---|---|
+| Hub destination (`rrc.hub` aspect) + client identity | §1.1, §1.2, §9.8 |
+| Identity hash as the canonical sender id (RRC envelope key 4, "opaque, do not re-encode") | §1.1; §9.1 — the identity-hash-vs-destination-hash pitfall RRC's rule guards against |
+| All traffic over a single Reticulum Link | §6.1–§6.4, §6.7 |
+| Single-packet CBOR frames sized to the link MTU | §2.1–§2.2, §2.4, §6.6 (MTU is *negotiated* — see note below) |
+| Ordered/reliable delivery, *if* RRC layers over Channel | §6.5, §6.8 |
+
+RRC does **not** use opportunistic packets, Resource transfer (§10), REQUEST/RESPONSE (§11), or LXMF (§5) — an RRC-only client can skip those entirely.
+
+> Two things RRC's spec leaves implicit that this spec makes explicit: link MTU is **negotiated** (§6.6), not a fixed 500 bytes, so frames sized to the default can overflow a smaller link; and a bare Link does not itself guarantee ordered/reliable delivery — that comes from Channel (§6.8) or packet receipts (§6.5).
 
 ---
 
