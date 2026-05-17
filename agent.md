@@ -55,11 +55,34 @@ PRs must include the verifier scripts. Don't commit a "verified" claim without t
 
 Agents working on this repo should have access to:
 
-- A working Python 3 install with `rns` and `lxmf` packages: `pip install rns lxmf`
+- A working Python 3 install with `rns` and `lxmf` packages (install per "Staying current" below — not a bare `pip install rns lxmf`).
 - The `RNS/` and `LXMF/` source trees (typically at `~/AppData/Roaming/Python/Python3xx/site-packages/RNS/` on Windows or `~/.local/lib/python3.x/site-packages/RNS/` on Linux/macOS).
 - Optional but very useful: a packet-trace tool. `tcpdump -i lo -A -X port 4242` works for TCPServerInterface; for BLE you need ADB + an RNode-aware capture tool.
 
 Hardware (RNode, RatDeck, etc.) is NOT required for most verification — most byte-level claims can be checked entirely in Python RNS without any radio.
+
+### Staying current with upstream — and verifying what you install
+
+This spec is only as good as the upstream version it was checked against. **Before any verification pass, confirm you are looking at the latest RNS:**
+
+1. **Check the latest upstream version.** Upstream is mid-migration *off* GitHub: the RNS 1.2.4 release notes announced 1.2.4 would "probably be the last release also published to GitHub," and GitHub releases do stop around **1.2.5** (1.2.6/1.2.7 are PyPI-only). Reticulum is moving to self-hosting — `rngit` (git served over Reticulum) and `rnpkg` (package distribution over Reticulum). Per Mark Qvist, "updates to pip will continue at least until `rnpkg` is complete." Check, in order:
+   - PyPI: `pip index versions rns` / `pip index versions lxmf` — most current while it lasts, but PyPI carries **no `.rsg`**, so PyPI alone is unverifiable.
+   - GitHub releases: <https://github.com/markqvist/Reticulum/releases> — signed (`.rsg`) but frozen near 1.2.5.
+   - `rngit` / `rnpkg` over Reticulum — the eventual canonical source of signed artifacts.
+
+   PyPI runs *ahead* of the newest signed release (1.2.7 on PyPI vs 1.2.5 signed, 2026-05-17). Re-check every session — do not assume a frozen version.
+
+2. **Verify the package signature before installing.** Since RNS 1.2.x, signed releases ship a detached `.rsg` signature beside each artifact (on the GitHub release page while that lasts; via `rngit`/`rnpkg` afterward). Get the wheel *and* its `.rsg`, then:
+
+   ```
+   rnid -i bc7291552be7a58f361522990465165c -V rns-<version>-py3-none-any.whl
+   ```
+
+   `bc7291552be7a58f361522990465165c` is Mark Qvist's release-signing Reticulum identity — confirm that hash itself against a trusted channel (a release announcement) before trusting it. `rnid` works fully offline. Install the **exact wheel you verified** (`pip install --upgrade ./rns-<version>-py3-none-any.whl`), not a fresh `pip install rns` that re-downloads from PyPI.
+
+3. **Prefer the latest *signed* version.** If PyPI is ahead of the newest release carrying a `.rsg`, install the signed one and note the gap — do not silently install an unverifiable newer version.
+
+4. **After a version bump**, re-run every `tools/verify_*.py`, re-check the source-cited line numbers in any section you touch, and only advance SPEC.md's `**Last verified against:**` line once the whole document has been re-checked against the new version.
 
 ---
 
