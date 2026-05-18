@@ -34,6 +34,7 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
   - [4.3 `app_data` format for LXMF delivery destinations](#43-app_data-format-for-lxmf-delivery-destinations)
   - [4.4 Announce filtering by `name_hash`](#44-announce-filtering-by-name_hash)
   - [4.5 Announce validation rules (receive side)](#45-announce-validation-rules-receive-side)
+  - [4.6 `rrc.hub` announce app_data (Reticulum Relay Chat)](#46-rrchub-announce-app_data-reticulum-relay-chat)
 - [5. LXMF wire format](#5-lxmf-wire-format)
   - [5.1 Opportunistic delivery (single Reticulum DATA packet)](#51-opportunistic-delivery-single-reticulum-data-packet)
   - [5.2 Direct delivery (over an established Reticulum Link)](#52-direct-delivery-over-an-established-reticulum-link)
@@ -624,6 +625,32 @@ These are not wire-spec MUST rules but most working clients implement them; with
 | `RNS/Transport.py:3106-3122` | `timebase_from_random_blob`, `announce_emitted` |
 | `RNS/Interfaces/Interface.py:60-200` | ingress-limit constants, `should_ingress_limit`, `hold_announce`, `process_held_announces` |
 | `RNS/Packet.py:83` | `PATH_RESPONSE = 0x0B` context constant |
+
+### 4.6 `rrc.hub` announce app_data (Reticulum Relay Chat)
+
+Reticulum Relay Chat hubs announce a destination on the `rrc.hub`
+aspect — `name_hash = SHA256("rrc.hub")[:10] = ac9fd3a81e4036f86e1d`.
+Unlike §4.3 (LXMF delivery), the `app_data` is **not** a `[name,
+cost]` array, and the two hub implementations disagree on its shape:
+
+- **`rrcd`** — the Python reference hub. `app_data` is a **msgpack
+  map**: `{"proto": "rrc", "v": 1, "hub": <hub_name>}`. The human hub
+  name is the `"hub"` key's value (a string); `"proto"` is always
+  `"rrc"` and `"v"` is the app_data schema version (`1`). Source:
+  `rrcd` `service.py` — `app_data = encode({"proto": "rrc", "v": 1,
+  "hub": self.config.hub_name})`.
+- **`reticulum-relay-chat`** — the Go hub. `app_data` is the hub name
+  as **plain UTF-8 bytes**, unwrapped. Source:
+  `internal/service/service.go` — `BuildAnnounce(id, "rrc.hub",
+  []byte(s.cfg.Hub.Name), ...)`.
+
+A client listing RRC hubs should resolve the name as: the `"hub"`
+value when `app_data` decodes to a msgpack map; else a bare
+msgpack/UTF-8 string; else a generic "RRC hub" label. The same name
+is also delivered authoritatively in the RRC `WELCOME` body key
+`B_WELCOME_HUB` once a session is established — a client that only
+parses LXMF-shaped app_data will show a garbled name in its node
+list until the user connects.
 
 ---
 
