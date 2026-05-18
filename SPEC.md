@@ -630,27 +630,37 @@ These are not wire-spec MUST rules but most working clients implement them; with
 
 Reticulum Relay Chat hubs announce a destination on the `rrc.hub`
 aspect — `name_hash = SHA256("rrc.hub")[:10] = ac9fd3a81e4036f86e1d`.
-Unlike §4.3 (LXMF delivery), the `app_data` is **not** a `[name,
-cost]` array, and the two hub implementations disagree on its shape:
+Unlike §4.3 (LXMF delivery), the `app_data` is **not** a msgpack
+`[name, cost]` array, and the two hub implementations disagree on
+its shape:
 
-- **`rrcd`** — the Python reference hub. `app_data` is a **msgpack
-  map**: `{"proto": "rrc", "v": 1, "hub": <hub_name>}`. The human hub
-  name is the `"hub"` key's value (a string); `"proto"` is always
-  `"rrc"` and `"v"` is the app_data schema version (`1`). Source:
-  `rrcd` `service.py` — `app_data = encode({"proto": "rrc", "v": 1,
-  "hub": self.config.hub_name})`.
+- **`rrcd`** — the Python reference hub. `app_data` is a **CBOR**
+  (RFC 8949) map: `{"proto": "rrc", "v": 1, "hub": <hub_name>}` —
+  CBOR, *not* msgpack, because RRC's wire codec (`rrcd/codec.py`,
+  Python `cbor2`) is CBOR throughout. The human hub name is the
+  `"hub"` key's value (a text string); `"proto"` is always `"rrc"`
+  and `"v"` is the app_data schema version (`1`). Source: `rrcd`
+  `service.py` — `app_data = encode({"proto": "rrc", "v": 1, "hub":
+  self.config.hub_name})`, where `encode` is the CBOR encoder.
 - **`reticulum-relay-chat`** — the Go hub. `app_data` is the hub name
   as **plain UTF-8 bytes**, unwrapped. Source:
   `internal/service/service.go` — `BuildAnnounce(id, "rrc.hub",
   []byte(s.cfg.Hub.Name), ...)`.
 
+> ⚠️ **CBOR-vs-msgpack gotcha.** A CBOR 3-entry map begins with byte
+> `0xa3`. In msgpack `0xa3` is `fixstr` of length 3 — so a client that
+> blindly msgpack-decodes the `rrcd` app_data reads the next three
+> bytes (`0x65 0x70 0x72`, the CBOR text-string header of `"proto"`
+> plus its first two characters) as the 3-character string `"epr"`.
+> Decode `rrc.hub` app_data with a CBOR decoder, keyed on the
+> `rrc.hub` name_hash — do not feed it to the LXMF (msgpack) app_data
+> parser.
+
 A client listing RRC hubs should resolve the name as: the `"hub"`
-value when `app_data` decodes to a msgpack map; else a bare
-msgpack/UTF-8 string; else a generic "RRC hub" label. The same name
+value when `app_data` CBOR-decodes to a map; else a bare UTF-8 string
+(the Go hub's shape); else a generic "RRC hub" label. The same name
 is also delivered authoritatively in the RRC `WELCOME` body key
-`B_WELCOME_HUB` once a session is established — a client that only
-parses LXMF-shaped app_data will show a garbled name in its node
-list until the user connects.
+`B_WELCOME_HUB` once a session is established.
 
 ---
 
