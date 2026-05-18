@@ -963,7 +963,7 @@ Sender and receiver agree on these keys; each value's structure is field-specifi
 | `0x02` | `FIELD_TELEMETRY` | A single telemetry snapshot (Sideband telemetry — see Sideband for the inner format; LXMF is opaque to the contents). |
 | `0x03` | `FIELD_TELEMETRY_STREAM` | A list of telemetry snapshots (history flush). |
 | `0x04` | `FIELD_ICON_APPEARANCE` | Sender-supplied avatar / appearance hint. |
-| `0x05` | `FIELD_FILE_ATTACHMENTS` | A list of attached files (multiple attachments per message). |
+| `0x05` | `FIELD_FILE_ATTACHMENTS` | A list of attached files (multiple attachments per message). See §5.9.7 for the wire shape. |
 | `0x06` | `FIELD_IMAGE` | Single embedded image — `[extension_string, image_bytes]`. See §5.9.2 for the wire shape. |
 | `0x07` | `FIELD_AUDIO` | Single embedded audio clip — `[mode_byte, audio_bytes]`. Mode byte chooses the codec; see §5.9.3. |
 | `0x08` | `FIELD_THREAD` | Conversation thread ID (links related messages). |
@@ -980,7 +980,7 @@ Sender and receiver agree on these keys; each value's structure is field-specifi
 | `0xFE` | `FIELD_NON_SPECIFIC` | Development / unstructured payload — not for production. |
 | `0xFF` | `FIELD_DEBUG` | Debug payload — not for production. |
 
-> ⚠️ **UNVERIFIED:** the byte-level shape of `FIELD_EMBEDDED_LXMS`, `FIELD_TELEMETRY*`, `FIELD_FILE_ATTACHMENTS`, `FIELD_COMMANDS`, `FIELD_RESULTS`, `FIELD_GROUP`, `FIELD_EVENT`, and `FIELD_RNR_REFS` is not described here because no test vectors have been captured against upstream Sideband emissions for these. The constants are verified (see `tools/verify_lxmf_fields.py`) but the value structures are application-defined and not pinned by LXMF itself. Future PRs should add per-field byte layouts as test vectors arrive.
+> ⚠️ **UNVERIFIED:** the byte-level shape of `FIELD_EMBEDDED_LXMS`, `FIELD_TELEMETRY*`, `FIELD_COMMANDS`, `FIELD_RESULTS`, `FIELD_GROUP`, `FIELD_EVENT`, and `FIELD_RNR_REFS` is not described here because no test vectors have been captured against upstream Sideband emissions for these. The constants are verified (see `tools/verify_lxmf_fields.py`) but the value structures are application-defined and not pinned by LXMF itself. Future PRs should add per-field byte layouts as test vectors arrive. (`FIELD_FILE_ATTACHMENTS` was on this list until 2026-05-18 — its shape is now documented in §5.9.7 from upstream Sideband source.)
 
 #### 5.9.2 `FIELD_IMAGE` (`0x06`) value shape
 
@@ -1061,6 +1061,37 @@ For announce-level capability negotiation:
 | Byte | Constant | Meaning |
 |---|---|---|
 | `0x00` | `SF_COMPRESSION` | Sender supports compressed message bodies (see §10.12) |
+
+#### 5.9.7 `FIELD_FILE_ATTACHMENTS` (`0x05`) value shape
+
+```
+fields[0x05] = [ [filename(str-or-bytes), file_bytes(bytes)], ... ]
+```
+
+A list of attachments — one LXMF message may carry more than one
+file. Each attachment is itself a 2-element list: element `[0]` is the
+file name, element `[1]` is the raw file content. As with `FIELD_IMAGE`
+(§5.9.2) the file name may arrive as msgpack `str` or `bin` depending
+on the encoder — receivers must tolerate both (see §9.3).
+
+The file name is **sender-controlled and untrusted**. Upstream Sideband
+strips `../` from it on receive (`sbapp/ui/messages.py`:
+`filename = str(attachment[0]).replace("../", "")`); receivers MUST
+sanitise it — reject or strip path separators, `..` segments and
+control characters — before display or save, and never let it
+influence a write path. The extension is likewise untrusted: do not
+auto-open or auto-execute an attachment based on its claimed type.
+
+Files larger than a single Reticulum DATA packet are delivered as a
+Resource over a Link, identically to large `FIELD_IMAGE` payloads
+(§10).
+
+Source: `markqvist/Sideband` `sbapp/sideband/core.py`
+(`fields[LXMF.FIELD_FILE_ATTACHMENTS] = [attachment]`, where each
+`attachment = [filename, filedata]`) and `sbapp/ui/messages.py`
+(receive side indexes `attachment[0]` filename / `attachment[1]`
+bytes). Confirmed from upstream source 2026-05-18; a captured wire
+test vector would further pin the msgpack `str`-vs-`bin` choice.
 
 ### 5.10 Source
 
