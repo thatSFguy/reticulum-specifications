@@ -191,6 +191,13 @@ Spec-only repos with a "the source is the source of truth" attitude die slowly b
 
 Each entry: date, one-line symptom, spec section that governs it, one-line fix, one-sentence lesson. Append-only. New entries go at the top.
 
+### 2026-05-19 — fwdsvc dropped parts bundled into an exhausted RESOURCE_REQ
+
+- **Symptom:** Images relayed mobile→mobile through the Fwd service never arrive (whole LXMF message lost); mobile→Sideband through the same service works. Recipient logs hundreds of `RESOURCE chunk did not match any known hashmap slot`. Only triggers for resources large enough to need RESOURCE_HMU (>`HASHMAP_MAX_LEN` ≈ 74 parts).
+- **Spec section:** §10.7. An `exhausted == 0xFF` RESOURCE_REQ MAY still carry a `requested_map_hashes` trailer, and a conformant sender serves those parts **and** the RESOURCE_HMU. The fwdsvc Go sender did `if req.Exhausted { serveHmu(req); continue }`, skipping `fulfillRequest` entirely — its own comment claimed this "mirrors upstream `Resource.request()`", but upstream (`Resource.py:982-1071`, checked against RNS 1.2.9, the current release) runs part fulfilment unconditionally and *then* sends the HMU. The mobile receiver flags `exhausted` on the first REQ of each hashmap window and bundles ~74 part-hashes with it — which a reference RNS sender honours — so fwdsvc served HMUs and dropped every bundled part across all 19 windows.
+- **Fix:** `resource_sender.go` Run loop now runs `fulfillRequest` for every REQ, then `serveHmu` when `req.Exhausted`. It never skips part fulfilment. (`reticulum-forwarding-service`.)
+- **Lesson:** mobile→Sideband "working" was a false green — a reference RNS receiver drains each segment before it flags exhausted, so on a clean link it sends part-less exhausted REQs and never exercised the bug. A lenient/conventional peer masks a divergence as effectively as a self-round-trip does (§5.1); the fault is receiver-dependent in a hop whose sender is constant. A `// mirrors upstream` comment proves nothing without the §2.4 / §6.2 check behind it.
+
 ### 2026-05-10 — LRPROOF signed_data signalling asymmetry
 
 - **Symptom:** Mobile-app's Kotlin engine fails LRPROOF signature verification against fwdsvc on every attempt. Falls back to opportunistic; link delivery never works.

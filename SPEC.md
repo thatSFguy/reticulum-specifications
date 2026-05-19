@@ -2508,6 +2508,34 @@ The segment_index is `part_index // HASHMAP_MAX_LEN`. The receiver applies this 
 
 If the part_index doesn't land on a `HASHMAP_MAX_LEN` boundary, the sender treats it as a sequencing error and cancels the resource (`Resource.py:1043-1046`).
 
+> **An exhausted RESOURCE_REQ MAY still carry parts — a conformant
+> sender fulfils them *and* sends the RESOURCE_HMU.** When the
+> `hashmap_exhausted_flag` is `0xFF`, the REQ body may still end with a
+> non-empty `requested_map_hashes` trailer (§10.5). The sender MUST emit
+> the requested part packets **and** the hashmap continuation; the two
+> are independent. Serving the HMU is not a substitute for fulfilling
+> the bundled part requests.
+>
+> In the RNS reference (`Resource.py:982-1071`, `request()` — verified
+> against RNS 1.2.9, the current release), the part-fulfilment loop runs
+> for every REQ regardless of the flag, and the `if wants_more_hashmap:`
+> HMU branch runs afterward, in addition. The reference receiver
+> (`request_next`, `Resource.py:931-981`) routinely produces this
+> packet shape: as its window scan reaches the end of the known
+> hashmap, it has already accumulated the still-outstanding part-hashes
+> from the known region into `requested_hashes`, then sets the exhausted
+> flag and stops — emitting
+> `0xFF || last_map_hash(4) || resource_hash(32) || requested_map_hashes`.
+>
+> A receiver MAY keep part requests and hashmap pulls in separate REQ
+> packets — emitting a **part-less** exhausted REQ
+> (body `0xFF || last_map_hash(4) || resource_hash(32)`, no trailing
+> map_hashes) purely to pull the continuation. This interoperates with
+> every conformant sender. But it is a receiver-side simplification
+> only: a sender MUST NOT assume peers do this, and MUST NOT skip part
+> fulfilment for an exhausted REQ. A sender that does drops every
+> bundled part silently — see `playbook.md` §7 (2026-05-19).
+
 ### 10.8 RESOURCE_PRF — final proof
 
 When the receiver has assembled the full resource (`received_count == total_parts`), it runs `assemble()` (`Resource.py:672-726`):
