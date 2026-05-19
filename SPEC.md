@@ -1502,7 +1502,7 @@ def send_keepalive(self):
     keepalive_packet.send()
 ```
 
-Body is a single byte `0xFF` — the "ping" sentinel. The packet is Token-encrypted with the link's session key per §3.1 link-derived form, so the wire body is `iv(16) || ciphertext(...) || hmac(32)`; the decrypted plaintext is just `b'\xff'`.
+Body is a single byte `0xFF` — the "ping" sentinel. **KEEPALIVE is NOT Token-encrypted** — `RNS/Packet.py` `pack()` puts `KEEPALIVE` in its not-encrypted branch alongside `RESOURCE`, `RESOURCE_PRF`, link `PROOF`, and `CACHE_REQUEST` (`self.ciphertext = self.data`, `Packet.py:206-209` in RNS 1.2.9). The wire body is the single sentinel byte in the clear — no IV, no ciphertext expansion, no HMAC.
 
 The **responder** receives this in `Link.receive` at `RNS/Link.py:1149-1153` and answers with the "pong" sentinel (in 1.2.4 the body is `bytes([0xFE])`):
 
@@ -1518,7 +1518,7 @@ So:
 - **Pong** = responder → initiator, body `0xFE`.
 - Only the initiator originates KEEPALIVE traffic. The responder never spontaneously pings.
 
-Both sentinel bytes are arbitrary; what actually matters for keep-alive purposes is that *any* inbound traffic on the link refreshes `last_inbound` (the watchdog's anchor for staleness decisions). KEEPALIVE packets, like all link DATA, also generate the mandatory PROOF receipt per §6.5, which is itself inbound traffic on the return path. So a successful ping/pong exchange resets the staleness clock on **both** sides via three round-trip artifacts: ping → pong → pong-proof.
+Both sentinel bytes are arbitrary; what actually matters for keep-alive purposes is that *any* inbound traffic on the link refreshes `last_inbound` (the watchdog's anchor for staleness decisions). KEEPALIVE packets do **not** generate a PROOF receipt — the link-DATA proof path in `RNS/Link.py` `receive()` is gated on `packet.context == RNS.Packet.NONE` (`Link.py:988` in RNS 1.2.9), and KEEPALIVE takes its own branch at line 1149-1153. So a successful ping/pong exchange resets the staleness clock on **both** sides via the two-packet exchange itself: ping → pong (no pong-proof).
 
 A clean-room responder MUST emit the pong on inbound `0xFF`; without it the initiator's watchdog will declare the link stale on the next cycle.
 
