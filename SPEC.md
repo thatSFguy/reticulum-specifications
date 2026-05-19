@@ -1599,6 +1599,59 @@ For a clean-room implementation that wants links to survive idle periods longer 
 5. On every inbound `LINKCLOSE`, decrypt, verify body equals `link_id`, transition to `CLOSED`.
 6. On `CLOSED`, zero the session keys and cancel any in-progress Resources.
 
+#### 6.7.6 LINKIDENTIFY (`context = 0xFB`)
+
+A separate Link control DATA packet — not part of the keepalive /
+teardown cycle, but documented here alongside the other context-dispatched
+Link control packets. Used by the initiator to prove which long-term
+identity is making the request without re-running the Link handshake;
+§11.6 covers the calling context on the NomadNet REQUEST path.
+
+`Link.identify(identity)` (`RNS/Link.py:459-475` in RNS 1.2.9):
+
+```python
+def identify(self, identity):
+    if self.initiator and self.status == Link.ACTIVE:
+        signed_data = self.link_id + identity.get_public_key()
+        signature  = identity.sign(signed_data)
+        proof_data = identity.get_public_key() + signature
+        proof      = RNS.Packet(self, proof_data, RNS.Packet.DATA,
+                                context = RNS.Packet.LINKIDENTIFY)
+        proof.send()
+```
+
+Wire body (128 bytes):
+
+```
+public_key(64) || signature(64)
+```
+
+- `public_key` is the initiator's **full 64-byte Identity public key**
+  — the same `get_public_key()` that LINKREQUEST and announces use,
+  the concatenation of the Ed25519 verification key and the X25519
+  encryption key per §3.
+- `signature` is `identity.sign(link_id(16) || public_key(64))` — the
+  signature is over the link_id concatenated with the public_key,
+  NOT over `link_id` alone. The responder verifies with `public_key`
+  over that same concatenation.
+
+The packet is a `DATA` packet on the active Link, so it IS
+link-encrypted per §3.1 link-derived form like ordinary link DATA —
+`context = 0xFB` is NOT in `RNS/Packet.py` `pack()`'s not-encrypted
+set, unlike KEEPALIVE (§6.7.1) or link `PROOF` (§6.5).
+
+The responder's `receive()` (`RNS/Link.py:1010-1029`) decrypts the
+body, splits off the 64-byte public_key prefix, reconstructs
+`signed_data = link_id || public_key`, verifies the signature, and on
+success sets `self.remote_identity` so subsequent REQUEST handlers can
+check the caller against per-page allowlists (§11.6).
+
+A clean-room implementation MUST build the payload as
+`public_key || signature` (NOT just the signature) and sign the
+concatenation `link_id || public_key` (NOT `link_id` alone). Either
+mistake makes every `ALLOW_LIST`-protected page return
+`DEFAULT_NOTALLOWED`.
+
 ### 6.8 Channel mode (`CHANNEL = 0x0E`)
 
 A Channel is a **continuous, bi-directional, message-typed stream** on top of an established Link. Distinct from §11 REQUEST/RESPONSE (single-shot, client-server) and §10 Resources (large unidirectional transfers): Channel messages are short, can flow in either direction at any time, and carry an application-defined type byte the receiver dispatches on. NomadNet uses it for its "channel" API (live chat over a Link), and any application can register custom message types via `RNS.Channel.Channel.register_message_type`.
@@ -2908,7 +2961,7 @@ Pages are registered with one of three allow modes (`Destination.py:35-40`):
 - `ALLOW_LIST` — caller's identity hash must appear in the page's `.allowed` file. Server checks `remote_identity.hash` against the list at request time (`Node.py:152-154`).
 - `ALLOW_NONE` — registered handlers that exist but reject all requests (rare; debug only).
 
-For `ALLOW_LIST` the client MUST call `link.identify(identity)` immediately after the link transitions to ACTIVE and BEFORE issuing the REQUEST. This sends a `LINKIDENTIFY (context = 0xFB)` packet whose payload carries a signature over `link_id` proving the long-term identity hash. Without it, `remote_identity` is `None` server-side and every `ALLOW_LIST` page returns `DEFAULT_NOTALLOWED`. See `Browser.py:1245-1250` for the upstream call site:
+For `ALLOW_LIST` the client MUST call `link.identify(identity)` immediately after the link transitions to ACTIVE and BEFORE issuing the REQUEST. This sends a `LINKIDENTIFY (context = 0xFB)` packet whose 128-byte payload is `public_key(64) || signature(64)`, with the signature computed over `link_id || public_key` — proving the long-term identity hash to the responder. The wire format is specified in §6.7.6. Without it, `remote_identity` is `None` server-side and every `ALLOW_LIST` page returns `DEFAULT_NOTALLOWED`. See `Browser.py:1245-1250` for the upstream call site:
 
 ```python
 def link_established(self, link):
