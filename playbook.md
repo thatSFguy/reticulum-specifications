@@ -191,6 +191,13 @@ Spec-only repos with a "the source is the source of truth" attitude die slowly b
 
 Each entry: date, one-line symptom, spec section that governs it, one-line fix, one-sentence lesson. Append-only. New entries go at the top.
 
+### 2026-05-19 — Exhausted RESOURCE_REQ bundled with parts; sender drops them
+
+- **Symptom:** Images relayed mobile→mobile through the Fwd service never arrive (whole LXMF message lost); mobile→Sideband through the same service works, and P2P mobile↔mobile images work. Recipient logs hundreds of `RESOURCE chunk did not match any known hashmap slot`. Only triggers for resources large enough to need RESOURCE_HMU (>`HASHMAP_MAX_LEN` parts).
+- **Spec section:** §10.7. An `exhausted == 0xFF` RESOURCE_REQ is answered with a RESOURCE_HMU **only** — the sender discards the REQ's `requested_map_hashes` (`resource_sender.go`: `if req.Exhausted { serveHmu; continue }`). The mobile receiver flagged `exhausted` on the *first* REQ of every hashmap window — bundling 74 part-hashes with it — so the sender served HMUs and never sent those parts. It drained all 19 HMU windows receiving zero parts, then received only the final window, which `receivePart`'s consecutive-height search window couldn't place.
+- **Fix:** `Resource.nextRequestBatch` now emits two distinct REQ shapes: a non-exhausted batch carrying parts, or a **part-less** exhausted batch (pure HMU pull) once every known map_hash is requested. Never both. (`reticulum-mobile-app` `Resource.kt`.)
+- **Lesson:** Self-round-trip masks this completely — our own sender leniently honoured the bundled parts, so P2P worked; only a spec-strict peer (fwdsvc/RNS) exposed it. §5.1 again. The spec prose was silent that an exhausted REQ's part list is discarded — now stated explicitly in §10.7.
+
 ### 2026-05-10 — LRPROOF signed_data signalling asymmetry
 
 - **Symptom:** Mobile-app's Kotlin engine fails LRPROOF signature verification against fwdsvc on every attempt. Falls back to opportunistic; link delivery never works.

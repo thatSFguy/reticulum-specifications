@@ -2508,6 +2508,29 @@ The segment_index is `part_index // HASHMAP_MAX_LEN`. The receiver applies this 
 
 If the part_index doesn't land on a `HASHMAP_MAX_LEN` boundary, the sender treats it as a sequencing error and cancels the resource (`Resource.py:1043-1046`).
 
+> **An exhausted RESOURCE_REQ is answered with a RESOURCE_HMU *only* — its
+> `requested_map_hashes` list (§10.5) is discarded.** When the
+> `hashmap_exhausted_flag` is `0xFF`, the sender's REQ handler serves the
+> hashmap continuation and does **not** emit part packets for that REQ,
+> even if it carries a non-empty `requested_map_hashes` trailer. Upstream
+> RNS branches on the flag before reaching its part-fulfilment path; the
+> fwdsvc Go port makes it explicit — `resource_sender.go`:
+> `if req.Exhausted { serveHmu(req); continue }`, where `continue` skips
+> the `fulfillRequest` call entirely.
+>
+> Consequently a receiver MUST treat "request parts" and "pull the next
+> hashmap window" as **two separate REQ packets**: request outstanding
+> parts with `exhausted = 0x00`, and only once the known hashmap has no
+> unrequested parts left, emit a **part-less** REQ with `exhausted = 0xFF`
+> (body = `0xFF || last_map_hash(4) || resource_hash(32)`, no trailing
+> map_hashes) to pull the continuation. A receiver that bundles parts into
+> an exhausted REQ has every one of those parts silently dropped by the
+> sender, and — for a resource spanning many HMU windows — receives no
+> part data at all until the final, naturally-non-exhausted window. Two
+> implementations that *both* make this mistake still interoperate (each
+> leniently honours the other's bundled parts), so a self-round-trip test
+> cannot catch it; see `playbook.md` §7 (2026-05-19) and §5.1.
+
 ### 10.8 RESOURCE_PRF — final proof
 
 When the receiver has assembled the full resource (`received_count == total_parts`), it runs `assemble()` (`Resource.py:672-726`):
