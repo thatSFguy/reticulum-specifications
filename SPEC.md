@@ -712,6 +712,8 @@ signature    = Ed25519_sign(signed_data, sender_identity.Ed25519_priv)
 
 For opportunistic delivery, `destination_hash` is the recipient's destination hash (from the outer packet header, not from the LXMF body).
 
+The `msgpack_payload` MUST be the exact bytes received on the wire — not a decode-then-re-encode — when computing `message_hash`. The same value is reused as the LXMF `message_id` (workblock input for stamps in §5.7, target identifier for reactions in §5.9.8 and replies in §5.9.9). A receiver that re-encodes will compute a divergent identifier for any message whose `fields` map does not round-trip byte-identically — most commonly reply messages — which breaks both the §5.6 path-1 raw-signature check and any relay rewrite-cache keyed on the value. For a stamped message (§5.7.1) the raw payload on the wire is a 5-element array; the hash is over the first 4 elements, which requires a byte-canonical re-pack per §5.6.1.
+
 ### 5.6 Signature verification — msgpack variant tolerance
 
 Different msgpack encoders produce subtly different byte sequences for the same logical value (e.g. integer encoding choice, string vs bin selection). The signer signed over THEIR encoder's output. A receiver should try verifying against:
@@ -1129,6 +1131,44 @@ Source: `markqvist/Sideband` `sbapp/sideband/core.py`
 (receive side indexes `attachment[0]` filename / `attachment[1]`
 bytes). Confirmed from upstream source 2026-05-18; a captured wire
 test vector would further pin the msgpack `str`-vs-`bin` choice.
+
+#### 5.9.8 `fields[16]` (`0x10`): tap-back reactions (app extension)
+
+> ⚠️ **UNVERIFIED:** this key is outside the upstream LXMF allocation range (§5.9.1) — there is no `FIELD_REACTION` constant in `LXMF/LXMF.py`. The shape below is a convergent app-extension across three shipping FOSS clients (`reticulum-mobile-app`, `Quad4-Software/MeshChatX`, `torlando-tech/columba` `release/v0.10.x` and later). Documented here because the convergence is stable enough for new implementations to interop. Replace with the upstream allocation if/when `markqvist/LXMF` blesses one.
+
+```
+fields[16] = {
+  "reaction_to": <target LXMF message_id, 64-char hex string>,
+  "emoji":       <unicode>,
+  "sender":      <reactor's identity hash, 32-char hex string>,
+}
+```
+
+- The carrying LXMF has empty `content` and empty `title`; `fields[16]` IS the entire payload.
+- `reaction_to` is the canonical LXMF `message_id` (= `message_hash` of §5.5; the same value used as the workblock input for stamps in §5.7). It MUST be derived from the recipient-side raw wire payload bytes per the §5.5 normative rule — a decode-re-encode diverges for any non-trivial `fields` map (including reply-carrying messages, §5.9.9) and the reaction misses the relay rewrite-cache for that target.
+- `sender` is the reactor's **identity hash** (`SHA256(identity_public_key)[:16]`), NOT the lxmf.delivery `source_hash`. Both are 16-byte SHA-256 truncations and trivially easy to conflate, but receivers key reaction aggregation by `(emoji, sender)`, so emitting the destination hash mis-buckets against every (identity-hash-emitting) peer. All three convergent clients emit the identity hash (`python/reticulum_wrapper.py::send_reaction` in Columba `release/v0.10.x` and `v2.0.0-beta+`; `meshchat.py::send_reaction` in MeshChatX; `ReticulumEngine.kt::sendReaction` in `reticulum-mobile-app`).
+- Receivers MUST aggregate by `(emoji, sender)` with dedup and SHOULD NOT render the reaction-carrying LXMF as a separate bubble.
+- String-vs-bytes tolerance: msgpack values may arrive as `str` or `bin` depending on encoder. Receivers MUST accept both — same precedent as §5.6 for the LXMF signature.
+- **Inner-map decode tolerance.** The `fields[16]` value is a msgpack map. Strongly-typed decoders may surface it as either a string-keyed map or an `Any`-keyed map (`Map<String, Any>` / `Map<Any?, Any?>`, `map[string]any` / `map[any]any`, etc.), depending on the runtime msgpack library's choice given the key types seen on the wire. Receivers MUST tolerate both via a runtime cast that does not depend on the outer map's static key type. A silent type-assertion failure on the "wrong" variant produces a no-log no-error drop indistinguishable on the receive side from "the message never arrived."
+- **Relay routing.** If the target message arrived over a Link whose validated §6.7.6 LINKIDENTIFY peer differs from the LXMF body's `source_hash`, the reaction-carrying LXMF MUST egress to the link peer's destination hash, not `source_hash`; otherwise the reaction bypasses the relay's fanout and is delivered direct to the original sender instead of the relay group.
+
+#### 5.9.9 `fields[0x30]` + optional `fields[0x31]`: reply-to threading (app extension)
+
+> ⚠️ **UNVERIFIED:** as with §5.9.8, these keys are outside the upstream LXMF allocation range. The shape below is the convergent app-extension across the same three FOSS clients. Columba's earlier `release/v0.10.x` builds used a legacy single-key shape (`fields[16] = {"reply_to": <hex>}`); Columba `v2.0.0-beta` (released 2026-05-23) and later emit the dual-key shape per `torlando-tech/columba#926`. The legacy-tolerance branch in the inbound rule below has a finite lifetime — drop it once `< v2.0.0-beta` Columba is no longer in the field.
+
+```
+fields[0x30] = <raw 32-byte LXMF message_id (NOT hex-encoded)>
+fields[0x31] = <UTF-8 quoted content>     # optional
+```
+
+- `fields[0x30]` IS the canonical LXMF `message_id` from §5.7 — the raw 32 bytes on the wire, not a hex-encoded string. The `message_id` MUST be computed over raw wire payload bytes per §5.5; a decode-re-encode diverges for reply messages (their `fields` map is non-trivial) and breaks any relay rewrite-cache keyed on the value.
+- `fields[0x31]` (optional) carries the quoted text for offline-receiver fallback so the recipient can render a quote preview even when the original message hasn't arrived locally. Useful on intermittent links; SHOULD be omitted when the sender doesn't want to pay the airtime.
+- **Legacy-tolerance (inbound only).** Receivers SHOULD also accept Columba's earlier `fields[16] = {"reply_to": <64-char hex>}` shape for interop with already-deployed `release/v0.10.x` builds. Senders MUST NOT emit it — emit only `[0x30]`/`[0x31]`. The same inner-map dual-shape tolerance described in §5.9.8 applies to this legacy parse branch (the value is a msgpack map).
+- **Bandwidth rationale.** The dual-key shape is roughly 2× smaller than the legacy single-key shape for the same information — 32 raw bytes + 1-byte key vs. a msgpack-encoded dict carrying a hex-string hash. This is the [Zen of Reticulum](https://reticulum.network/manual/zen.html) alignment cited by the MeshChatX maintainer in `Quad4-Software/MeshChatX#14` and accepted by the Columba maintainer in `torlando-tech/columba#926`.
+- The raw-bytes branches (`fields[0x30]`, `fields[0x31]`) are not maps and do not have the §5.9.8 inner-map risk, but receivers MUST still tolerate both `bytes` and `str` carriers per §5.6 in case an encoder ships the hash hex-encoded by mistake.
+- **Relay routing.** Same as §5.9.8 — if the target message arrived over a Link whose §6.7.6 LINKIDENTIFY peer differs from `source_hash`, the reply-carrying LXMF MUST egress to the link peer's destination hash.
+
+Reference implementations: `Quad4-Software/MeshChatX` (`meshchatx/src/backend/lxmf_utils.py`; `meshchat.py::send_reaction`); `torlando-tech/columba` v2.0.0-beta and later (`python/reticulum_wrapper.py`); `thatSFguy/reticulum-mobile-app` (`shared/.../engine/ReticulumEngine.kt::extractField16`, `sendReaction`, `tryDeliverOverLink::replyFields`).
 
 ### 5.10 Source
 
