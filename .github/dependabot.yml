@@ -1,0 +1,20 @@
+# Watches the pinned upstream versions in tools/requirements.txt and opens a
+# PR when markqvist/Reticulum (rns) or markqvist/LXMF (lxmf) publish a new
+# release to PyPI. The PR triggers .github/workflows/verify.yml, which re-runs
+# every tools/verify_*.py against the new version — so a red check tells you
+# exactly which wire-format claims drifted before you merge the bump.
+#
+# Caveat: Dependabot reads PyPI. Upstream is migrating distribution to
+# rngit/rnpkg; PyPI mirroring continues "at least until rnpkg is complete"
+# (see tools/requirements.txt). If upstream stops publishing to PyPI, this
+# goes quiet and you'd fall back to a scheduled check or watching rngit.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/tools"        # location of requirements.txt
+    schedule:
+      interval: "daily"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "upstream-sync"
