@@ -447,7 +447,7 @@ Reverse of encrypt. Critically:
 
 ### 3.4 Source
 
-`RNS/Cryptography/Token.py` (and the equivalents in vendor crypto modules). The webclient's `reference/js-reference/crypto.js` is a faithful port.
+`RNS/Cryptography/Token.py` (and the equivalents in vendor crypto modules).
 
 ---
 
@@ -557,7 +557,7 @@ context_flag == 0 (no ratchet):
    app_data     = data[148                                    :    ]   # may be empty
 ```
 
-A client that uses a fixed offset for `signature` regardless of the flag (a real bug from the SF webclient's first cut) silently rejects every ratchet-bearing announce as having a bad signature.
+A client that uses a fixed offset for `signature` regardless of the flag silently rejects every ratchet-bearing announce as having a bad signature.
 
 #### 2. Signature verification
 
@@ -1160,13 +1160,9 @@ fields[0x40] = {
 - **Inner-map decode tolerance.** The `fields[0x40]` value is a msgpack map. Strongly-typed decoders may surface it as an integer-keyed or `Any`-keyed map (`Map<Long, Any>` / `Map<Any?, Any?>`, `map[any]any`, etc.), depending on the runtime msgpack library and the key types seen on the wire. Receivers MUST tolerate this via a runtime cast that does not depend on the outer map's static key type. A silent type-assertion failure produces a no-log no-error drop indistinguishable on the receive side from "the message never arrived."
 - **Relay routing.** If the target message arrived over a Link whose validated §6.7.6 LINKIDENTIFY peer differs from the LXMF body's `source_hash`, the reaction-carrying LXMF MUST egress to the link peer's destination hash, not `source_hash`; otherwise the reaction bypasses the relay's fanout and is delivered direct to the original sender instead of the relay group.
 
-> **Inbound interop:** older clients (and Columba as a fallback) still emit a non-upstream reaction shape at `fields[0x10]`. New code MUST NOT emit it but SHOULD parse it on inbound — see §5.9.12.
-
-Reference implementations (emit `0x40`): `Quad4-Software/MeshChatX` (`meshchatx/src/backend/lxmf_utils.py`, `meshchatx/src/frontend/js/lxmfReactions.js`); `torlando-tech/columba` (`rns-api/.../util/ReactionWireCodec.kt`, `LxmfFields.kt`).
-
 #### 5.9.9 `FIELD_REPLY_TO` (`0x30`) + optional `FIELD_REPLY_QUOTE` (`0x31`): reply-to threading
 
-> ✅ **Official as of LXMF 1.0.0** (2026-05-28): `FIELD_REPLY_TO = 0x30` (`LXMF/LXMF.py:23`) and `FIELD_REPLY_QUOTE = 0x31` (`:24`). The byte shape documented here — first written up as a convergent app-extension across three FOSS clients before any upstream allocation existed — matches the upstream allocation exactly (raw-bytes hash at `0x30`, UTF-8 quote at `0x31`).
+> ✅ **Official as of LXMF 1.0.0** (2026-05-28): `FIELD_REPLY_TO = 0x30` (`LXMF/LXMF.py:23`) and `FIELD_REPLY_QUOTE = 0x31` (`:24`).
 
 ```
 fields[0x30] = <raw 32-byte LXMF message_id (NOT hex-encoded)>
@@ -1177,10 +1173,6 @@ fields[0x31] = <UTF-8 quoted content>     # optional
 - `fields[0x31]` (optional) carries the quoted text for offline-receiver fallback so the recipient can render a quote preview even when the original message hasn't arrived locally. Useful on intermittent links; SHOULD be omitted when the sender doesn't want to pay the airtime.
 - The raw-bytes branches (`fields[0x30]`, `fields[0x31]`) are not maps, but receivers MUST still tolerate both `bytes` and `str` carriers per §5.6 in case an encoder ships the hash hex-encoded by mistake.
 - **Relay routing.** Same as §5.9.8 — if the target message arrived over a Link whose §6.7.6 LINKIDENTIFY peer differs from `source_hash`, the reply-carrying LXMF MUST egress to the link peer's destination hash.
-
-> **Inbound interop:** Columba's `release/v0.10.x` builds emitted a non-upstream single-key reply shape at `fields[16]`. New code MUST NOT emit it but SHOULD parse it on inbound — see §5.9.12.
-
-Reference implementations (emit `0x30`/`0x31`): `Quad4-Software/MeshChatX`; `torlando-tech/columba` v2.0.0-beta and later (`python/reticulum_wrapper.py`); `thatSFguy/reticulum-mobile-app` (`shared/.../engine/ReticulumEngine.kt::tryDeliverOverLink::replyFields`).
 
 #### 5.9.10 `FIELD_COMMENT` (`0x41`): message-as-comment
 
@@ -1207,42 +1199,6 @@ fields[0x42] = {
 
 - `CONTINUATION_OF` (`0x00`, `LXMF/LXMF.py:126`) is the canonical LXMF `message_id` of the continued message — raw 32 bytes per §5.5, NOT hex-encoded.
 - The same inner-map decode tolerance and `bytes`/`str` carrier tolerance described in §5.9.8 apply.
-
-#### 5.9.12 Deployed third-party field variants (not in upstream — inbound tolerance only)
-
-> ⚠️ **Non-normative — not part of the upstream `markqvist/LXMF` allocation.** The shapes below are reverse-engineered from third-party clients that shipped reactions/replies *before* LXMF 1.0.0 blessed official fields (§5.9.8, §5.9.9). New implementations **MUST NOT emit** them. Treat this subsection purely as a parser-compatibility checklist for traffic already on the wire — it exists so a from-scratch client doesn't silently drop reactions/replies from un-upgraded peers, and it can be deleted once these forms are no longer in the field. Everything else in §5.9 is grounded in upstream source citations; nothing here is.
-
-**Migration status (2026-06-19):**
-- `Quad4-Software/MeshChatX` — migrated to the upstream forms; no longer emits or interprets the legacy reaction shape (`legacy field-16 reaction payloads are no longer emitted or interpreted as reactions`, per its CHANGELOG).
-- `torlando-tech/columba` — emits the upstream `0x40` / `0x30` forms; still emits the legacy `0x10` reaction as a *fallback* for un-upgraded peers (`FIELD_REACTION_LEGACY` in `rns-api/.../util/LxmfFields.kt`).
-- `thatSFguy/reticulum-mobile-app` — not yet migrated; still emits the legacy `fields[0x10]` reaction and the legacy reply path (`ReticulumEngine.kt::extractField16`, `sendReaction`).
-
-##### Legacy reaction — `fields[0x10]` (= `16`), string-keyed
-
-```
-fields[16] = {
-  "reaction_to": <target LXMF message_id, 64-char hex string>,
-  "emoji":       <unicode>,
-  "sender":      <reactor's identity hash, 32-char hex string>,
-}
-```
-
-- `reaction_to` is the §5.5 `message_id` as a **64-char hex string** (contrast the raw bytes of the upstream `0x40` form). Still derive it from the recipient-side raw wire payload bytes per §5.5.
-- `sender` is the reactor's **identity hash** (`SHA256(identity_public_key)[:16]`), NOT the lxmf.delivery `source_hash`. Receivers key aggregation by `(emoji, sender)`, so emitting the destination hash mis-buckets against every (identity-hash-emitting) peer. (The upstream `0x40` form drops this field entirely — attribution there is the carrying message's source identity.)
-- Same inner-map decode tolerance and `bytes`/`str` carrier tolerance as §5.9.8 apply.
-- Original sources: `python/reticulum_wrapper.py::send_reaction` (Columba `release/v0.10.x`); pre-migration `meshchat.py::send_reaction` (MeshChatX); `ReticulumEngine.kt::sendReaction` / `extractField16` (`reticulum-mobile-app`).
-
-##### Legacy reply — `fields[0x10]` (= `16`), single-key
-
-Columba `release/v0.10.x` carried a reply as a single-key string-keyed dict at `fields[16]`:
-
-```
-fields[16] = { "reply_to": <target LXMF message_id, 64-char hex string> }
-```
-
-- Parse on inbound only; emit §5.9.9's `0x30` / `0x31` instead. Columba `v2.0.0-beta` (2026-05-23) and later emit the dual-key shape per `torlando-tech/columba#926`.
-- **Why upstream chose `0x30`/`0x31` over this:** the dual-key raw-bytes shape is ~2× smaller for the same information (32 raw bytes + 1-byte key vs. a msgpack dict carrying a hex-string hash) — the [Zen of Reticulum](https://reticulum.network/manual/zen.html) alignment cited in `Quad4-Software/MeshChatX#14` and `torlando-tech/columba#926`.
-- **Disambiguation:** `fields[16]` is overloaded between the legacy reaction shape (above) and this legacy reply shape. A `fields[16]` map carrying `reaction_to`/`emoji`/`sender` is a reaction; one carrying `reply_to` (and no reaction keys) is a reply and renders as a normal message — MeshChatX's `convert_*` path treats `fields[16]` with `reply_to` as a normal message, not a reaction.
 
 ### 5.10 Source
 
@@ -1841,7 +1797,7 @@ A clean-room client that only implements opportunistic LXMF can ignore Channel e
 
 ### 6.9 Source
 
-`RNS/Link.py`, `RNS/Packet.py::prove`, `RNS/Identity.py::prove`, `RNS/PacketReceipt.py::validate_proof`, `RNS/Channel.py`. The webclient's `reference/js-reference/link.js` is a faithful port.
+`RNS/Link.py`, `RNS/Packet.py::prove`, `RNS/Identity.py::prove`, `RNS/PacketReceipt.py::validate_proof`, `RNS/Channel.py`.
 
 ---
 
@@ -3798,7 +3754,7 @@ Three classes of section in this spec:
 
 A reader hitting §2.3 might wonder "do I need this?" Three different answers:
 
-- **Cat 1 (e.g. MeshChat, Sideband):** No — `RNS.Transport.outbound` at lines 1074-1083 does the conversion automatically when you call `Packet.send()` to a destination with `path_table[dest][HOPS] > 1`. Your app just calls `LXMessage.send()` or `Packet.send()` and §2.3 happens invisibly. You can read §2.3 to understand WHY some captures show HEADER_2 with a transport_id, but you have no code to write.
+- **Cat 1 (e.g. Sideband):** No — `RNS.Transport.outbound` at lines 1074-1083 does the conversion automatically when you call `Packet.send()` to a destination with `path_table[dest][HOPS] > 1`. Your app just calls `LXMessage.send()` or `Packet.send()` and §2.3 happens invisibly. You can read §2.3 to understand WHY some captures show HEADER_2 with a transport_id, but you have no code to write.
 - **Cat 2 (wrappers):** Same as Cat 1 — the wrapped Python RNS does the conversion. Your wrapper is just relaying API calls.
 - **Cat 3 (clean-room):** **Yes, you implement §2.3 yourself.** Failure to do so means your packets aren't forwarded by transit relays — they're processed and dropped silently per `Transport.py:1500` (only HEADER_2 packets with `transport_id == relay.identity.hash` enter the forwarding branch). The symptom is "messages I send through a relay never arrive, but direct-link messages do." Sideband works in shared-instance and direct-TCP modes both because **upstream** does the conversion; a clean-room app working only via shared-instance is masking the missing §2.3.
 
