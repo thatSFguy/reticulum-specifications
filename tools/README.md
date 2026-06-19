@@ -19,7 +19,7 @@ The scripts read `RNS.__version__` at startup and print it in their output so a 
 
 ## Status
 
-Populated against RNS 1.2.4 / LXMF 0.9.7:
+Populated against RNS 1.3.5 / LXMF 1.0.1:
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|
@@ -29,6 +29,7 @@ Populated against RNS 1.2.4 / LXMF 0.9.7:
 | `verify_announce_app_data.py` | §4.3 — LXMF announce app_data 2-element form, parser tolerance | ✅ |
 | `verify_announce_roundtrip.py` | §4.1, §4.2, §4.5 — announce body layout, signature, dest_hash recompute, tamper rejection | ✅ |
 | `verify_lxmf_opportunistic.py` | §5.1, §5.2, §5.5, §5.6 — full identity → encrypt → decrypt → parse round-trip | ✅ |
+| `verify_lxmf_fields.py` | §5.9 — every `FIELD_*` / `AM_*` / `RENDERER_*` / `PN_META_*` / `SF_*` / reaction-comment-continuation dict-index constant matches upstream, plus an audit that fails if upstream adds an un-enumerated constant | ✅ |
 | `verify_proof_packet.py` | §6.5 — implicit (64B) and explicit (96B) proof body forms, validator length-dispatch | ✅ |
 | `verify_link_handshake.py` | §6.1, §6.2, §6.3, §6.6 — LINKREQUEST/LRPROOF body order, link_id derivation, signalling | ✅ |
 | `verify_link_lrrtt.py` | §6.4.2, §6.4.3 — LRRTT wire form, HEADER_1 header, dest_type=LINK, ctx=0xfe, link-form Token body, msgpack float64 plaintext | ✅ |
