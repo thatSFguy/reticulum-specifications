@@ -39,6 +39,11 @@ EXPECTED_FIELDS = {
     "FIELD_EVENT":            0x0D,
     "FIELD_RNR_REFS":         0x0E,
     "FIELD_RENDERER":         0x0F,
+    "FIELD_REPLY_TO":         0x30,
+    "FIELD_REPLY_QUOTE":      0x31,
+    "FIELD_REACTION":         0x40,
+    "FIELD_COMMENT":          0x41,
+    "FIELD_CONTINUATION":     0x42,
     "FIELD_CUSTOM_TYPE":      0xFB,
     "FIELD_CUSTOM_DATA":      0xFC,
     "FIELD_CUSTOM_META":      0xFD,
@@ -90,6 +95,21 @@ EXPECTED_SF = {
     "SF_COMPRESSION": 0x00,
 }
 
+# Inner-dict index constants for the dict-valued fields added in LXMF 1.0.0
+# (§5.9.8 reactions, §5.9.10 comments, §5.9.11 continuations).
+EXPECTED_REACTION = {
+    "REACTION_TO":      0x00,
+    "REACTION_CONTENT": 0x01,
+}
+
+EXPECTED_COMMENT = {
+    "COMMENT_FOR": 0x00,
+}
+
+EXPECTED_CONTINUATION = {
+    "CONTINUATION_OF": 0x00,
+}
+
 
 def verify_group(label: str, expected: dict[str, int]) -> None:
     print(f"== {label} ==")
@@ -113,9 +133,13 @@ def verify_no_unknown_field_constants() -> None:
     print("== unknown-constant audit ==")
     known = (
         set(EXPECTED_FIELDS) | set(EXPECTED_AUDIO_MODES) |
-        set(EXPECTED_RENDERERS) | set(EXPECTED_PN_META) | set(EXPECTED_SF)
+        set(EXPECTED_RENDERERS) | set(EXPECTED_PN_META) | set(EXPECTED_SF) |
+        set(EXPECTED_REACTION) | set(EXPECTED_COMMENT) | set(EXPECTED_CONTINUATION)
     )
-    prefixes = ("FIELD_", "AM_", "RENDERER_", "PN_META_", "SF_")
+    prefixes = (
+        "FIELD_", "AM_", "RENDERER_", "PN_META_", "SF_",
+        "REACTION_", "COMMENT_", "CONTINUATION_",
+    )
     for attr in dir(LXMF_consts):
         if not any(attr.startswith(p) for p in prefixes):
             continue
@@ -137,6 +161,9 @@ def main() -> None:
     verify_group("RENDERER_* (FIELD_RENDERER values)", EXPECTED_RENDERERS)
     verify_group("PN_META_* (propagation-node metadata keys)", EXPECTED_PN_META)
     verify_group("SF_* (functionality signalling)", EXPECTED_SF)
+    verify_group("REACTION_* (FIELD_REACTION dict indices)", EXPECTED_REACTION)
+    verify_group("COMMENT_* (FIELD_COMMENT dict indices)", EXPECTED_COMMENT)
+    verify_group("CONTINUATION_* (FIELD_CONTINUATION dict indices)", EXPECTED_CONTINUATION)
     verify_no_unknown_field_constants()
     print()
     print("PASS")

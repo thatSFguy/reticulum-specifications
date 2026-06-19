@@ -3,13 +3,14 @@ Verifier for SPEC.md S4.3 (announce app_data format for LXMF delivery
 destinations).
 
 Exercises:
-  - Upstream LXMF.LXMRouter.get_announce_app_data emits a 2-element msgpack
-    array [display_name_bytes, stamp_cost] in LXMF 0.9.7. The dead-code
-    supported_functionality line at LXMF/LXMRouter.py:998 is computed but
-    never appended.
+  - Upstream LXMF.LXMRouter.get_announce_app_data emits a 3-element msgpack
+    array [display_name_bytes, stamp_cost, [SF_COMPRESSION]] as of LXMF 1.0.x.
+    (The LXMF 0.9.7 producer computed supported_functionality but never
+    appended it, emitting only 2 elements — see SPEC.md S4.3.)
   - The wire-byte form for display_name="Reticulum5", stamp_cost=None matches
     the hex documented in SPEC.md S4.3:
-        92 c4 0a 52 65 74 69 63 75 6c 75 6d 35 c0
+        3-element: 93 c4 0a 52 65 74 69 63 75 6c 75 6d 35 c0 91 00
+        2-element (legacy ≤0.9.x): 92 c4 0a 52 65 74 69 63 75 6c 75 6d 35 c0
   - The parsers in LXMF/LXMF.py tolerate:
       * raw UTF-8 ("original announce format")
       * 1-element msgpack array
@@ -36,43 +37,56 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
-def verify_two_element_wire_bytes():
-    # SPEC.md S4.3 hex example: display_name="Reticulum5", stamp_cost=None.
+def verify_three_element_wire_bytes():
+    # SPEC.md S4.3 hex example: display_name="Reticulum5", stamp_cost=None,
+    # supported_functionality=[SF_COMPRESSION].
     # Spec layout:
-    #   92                              # fixarray, 2 elements
+    #   93                              # fixarray, 3 elements
     #   c4 0a                           # bin8, length 10
     #   52 65 74 69 63 75 6c 75 6d 35   # "Reticulum5"
     #   c0                              # nil (stamp_cost)
-    expected = bytes.fromhex("92" + "c40a" + "5265746963756c756d35" + "c0")
+    #   91                              # fixarray, 1 element
+    #   00                              # SF_COMPRESSION
+    expected = bytes.fromhex("93" + "c40a" + "5265746963756c756d35" + "c0" + "91" + "00")
 
     name = b"Reticulum5"
-    peer_data = [name, None]
+    peer_data = [name, None, [LXMF_helpers.SF_COMPRESSION]]
     actual = umsgpack.packb(peer_data)
     if actual != expected:
-        fail(f"S4.3 2-element wire bytes mismatch:\n"
+        fail(f"S4.3 3-element wire bytes mismatch:\n"
              f"  got: {actual.hex()}\n"
              f"  want: {expected.hex()}")
-    print("PASS S4.3 2-element wire bytes (umsgpack.packb([b'Reticulum5', None]))")
+    print("PASS S4.3 3-element wire bytes "
+          "(umsgpack.packb([b'Reticulum5', None, [SF_COMPRESSION]]))")
 
 
-def verify_producer_is_two_element_in_this_lxmf():
-    # Read the LXMRouter source and confirm it appends 2 elements (not 3) in
-    # the LXMF 0.9.7 producer. We do this by inspecting the function source so
-    # the verifier breaks loudly if upstream restores the 3-element variant.
+def verify_legacy_two_element_wire_bytes():
+    # Legacy ≤0.9.x producer form, still accepted on inbound. Documented in
+    # SPEC.md S4.3 as the 2-element form.
+    expected = bytes.fromhex("92" + "c40a" + "5265746963756c756d35" + "c0")
+    actual = umsgpack.packb([b"Reticulum5", None])
+    if actual != expected:
+        fail(f"S4.3 legacy 2-element wire bytes mismatch:\n"
+             f"  got: {actual.hex()}\n"
+             f"  want: {expected.hex()}")
+    print("PASS S4.3 legacy 2-element wire bytes (umsgpack.packb([b'Reticulum5', None]))")
+
+
+def verify_producer_is_three_element_in_this_lxmf():
+    # Read the LXMRouter source and confirm it appends 3 elements in the
+    # LXMF 1.0.x producer. We inspect the function source so the verifier
+    # breaks loudly if upstream reverts to (or diverges from) the 3-element
+    # [display_name, stamp_cost, supported_functionality] form.
     import inspect
     from LXMF.LXMRouter import LXMRouter
 
     src = inspect.getsource(LXMRouter.get_announce_app_data)
-    if "peer_data = [display_name, stamp_cost]" not in src:
-        fail(f"S4.3 producer line not found in LXMRouter.get_announce_app_data. "
-             f"Upstream may have restored the 3-element variant. Source:\n{src}")
-    if "peer_data.append(supported_functionality)" in src:
-        # If upstream re-enables this, the spec needs the 3-element variant
-        # marked as "current upstream" instead of "parser-tolerated only".
-        fail("S4.3 producer NOW appends supported_functionality. "
-             "Update SPEC.md S4.3 to describe the 3-element variant as live.")
-    print(f"PASS S4.3 LXMF {LXMF.__version__} producer emits 2-element form only "
-          "(supported_functionality is dead code at LXMF/LXMRouter.py:998)")
+    if "peer_data = [display_name, stamp_cost, supported_functionality]" not in src:
+        fail(f"S4.3 3-element producer line not found in "
+             f"LXMRouter.get_announce_app_data. Upstream may have changed the "
+             f"app_data producer shape — re-check SPEC.md S4.3. Source:\n{src}")
+    print(f"PASS S4.3 LXMF {LXMF.__version__} producer emits 3-element form "
+          "[display_name, stamp_cost, supported_functionality]")
 
 
 def verify_parser_tolerance():
@@ -113,8 +127,9 @@ def verify_parser_tolerance():
 
 def main():
     print(f"verify_announce_app_data.py against RNS {RNS.__version__} / LXMF {LXMF.__version__}")
-    verify_two_element_wire_bytes()
-    verify_producer_is_two_element_in_this_lxmf()
+    verify_three_element_wire_bytes()
+    verify_legacy_two_element_wire_bytes()
+    verify_producer_is_three_element_in_this_lxmf()
     verify_parser_tolerance()
     print("ALL PASS")
 
