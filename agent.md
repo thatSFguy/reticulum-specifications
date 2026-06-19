@@ -8,6 +8,35 @@ If you are an AI agent reading this: follow these rules. If you are a human revi
 
 ---
 
+## 0. Prime directive — the spec is the authority; do not reference other apps
+
+This repo began (pre-1.0) by reverse-engineering third-party client apps because **no spec existed**. That era is over. The spec exists now and is authoritative. From here on, this rule is **strict and has no exceptions**:
+
+> **Every normative claim MUST be grounded in an admissible upstream source — cited by file + line at the version pinned in [`tools/requirements.txt`](tools/requirements.txt) — or by a wire test vector verified against upstream. Third-party client apps are NOT a source of truth and MUST NOT appear in `SPEC.md` as one.**
+
+**Admissible sources** (in order of strength):
+
+1. **`markqvist/Reticulum` (RNS)** and **`markqvist/LXMF`** — the reference libraries. The primary authority for anything they define.
+2. **`markqvist/Sideband`** — the protocol author's own reference client. Admissible **only** as upstream-adjacent for app-layer field *structures that the LXMF library itself does not pin* (e.g. `FIELD_TELEMETRY`, `FIELD_COMMANDS`, `FIELD_FILE_ATTACHMENTS` shapes). Cite by file + line. If LXMF defines the thing, cite LXMF, not Sideband.
+3. **A runnable `tools/` verifier** or a captured wire test vector.
+
+**Not admissible — ever:** any other client app, third-party (e.g. MeshChat, MeshChatX, Columba) *or* our own (e.g. our mobile app, webclient, repeater). They have bugs, and the spec is the authority they conform to — not the reverse.
+
+Concretely, **do not**:
+
+- **Document a field, shape, or behavior that exists only in an app and not in upstream.** If it is not in upstream, it is out of scope for this spec — full stop.
+- **Cite an app as authority or evidence** — no "MeshChatX does X", "Columba emits Y", "the mobile-app's `sendReaction` shows…", and no "Reference implementations: \<app\>" lists. Upstream source (file + line) is the only admissible citation; a runnable `tools/` verifier is the only admissible test.
+- **Track app migration status, app version history, or app-specific fallbacks** anywhere in `SPEC.md`.
+- **Weaken or qualify a conformance rule to accommodate a non-conforming app.** When upstream and an app disagree, **upstream wins and the app is non-conformant.** The app changes to match the spec — never the reverse.
+
+If an app does something the spec doesn't cover, that is the app's problem: file it on the app's own tracker, not in `SPEC.md`. Apps conform to the spec; the spec does not conform to apps.
+
+**Why this is enforced strictly:** §5.9.8 once documented an app-only `fields[0x10]` reaction shape — invented by third-party clients before upstream allocated `FIELD_REACTION = 0x40`. Because the spec referenced that app behavior, the reference was then used to argue the spec should keep tolerating the app form — an app's behavior being treated as a constraint on the spec. That inversion is exactly what this directive prevents. (See README "Spec corrections", 2026-06-19.)
+
+Note this strengthens, and takes precedence over, the softer guidance in §1 ("What does NOT count as verification") and §8 ("Don't"): pre-spec, app behavior was an acceptable *unverified starting point*; post-spec, it is **not admissible at all**.
+
+---
+
 ## 1. Verification is mandatory
 
 Every claim in this repository falls into one of three states:
@@ -172,7 +201,7 @@ The goal is for this spec to be useful even when run against an RNS version a ye
 ## 8. Don't
 
 - Don't paste large blocks of upstream code into this repo (license & churn). Cite by file + line + small inline snippet only.
-- Don't add claims based purely on what some other client does. Other clients have bugs too.
+- Don't add claims based on what some other client does — not even as a marked-unverified starting point. Per the §0 prime directive, third-party app behavior is **not admissible** in `SPEC.md`; only upstream source citations and `tools/` verifiers are. Other clients have bugs, and the spec is now the authority they must conform to.
 - Don't remove a `⚠️` or `🔮` marker without doing the verification work.
 - Don't commit a verifier that swallows discrepancies (`if expected != actual: print("close enough")`). Either it matches or it doesn't.
 - Don't trust your own training data on this — Reticulum-specific protocol details are sparse on the public web and most LLM knowledge is wrong or out of date. Verify everything.
