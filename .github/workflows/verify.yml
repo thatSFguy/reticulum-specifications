@@ -1,0 +1,38 @@
+# Runs every tools/verify_*.py against the pinned upstream rns/lxmf on each PR.
+# When Dependabot (see .github/dependabot.yml) opens a version-bump PR, this
+# workflow re-verifies the spec's wire-format claims against the new upstream
+# and reports per-script pass/fail — the "prompt to review" for upstream drift.
+name: verify
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned upstream
+        run: pip install -r tools/requirements.txt
+
+      - name: Run verifiers
+        run: |
+          cd tools
+          fail=0
+          for f in verify_*.py; do
+            echo "::group::$f"
+            if python "$f"; then
+              echo "PASS $f"
+            else
+              echo "::error::$f FAILED"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
