@@ -13,13 +13,15 @@ This repo collects those findings in one place. The hope is that future client a
 - The web-based Reticulum client at [`reticulum-lora-webclient`](https://github.com/thatSFguy/reticulum-lora-webclient)
 - The native Android client at [`reticulum-mobile-app`](https://github.com/thatSFguy/reticulum-mobile-app)
 
-Each finding is grounded in upstream source citations (file + line) so it can be re-verified as RNS evolves.
+Each finding is grounded in upstream source citations (file + line) so it can be re-verified as RNS evolves. Now that the spec exists, **upstream is the only source of truth** — see the [`agent.md`](agent.md) §0 prime directive.
+
+Tagged releases (CalVer — see [releases](../../releases), e.g. `v2026.06.19`) record the exact `RNS` / `LXMF` versions the whole document was last verified against. A GitHub Actions `verify` workflow re-runs every `tools/verify_*.py` on each PR, and Dependabot opens a bump PR whenever upstream publishes a new release — so wire-format drift surfaces immediately.
 
 ## What's here
 
 - [`SPEC.md`](SPEC.md) — the single combined spec document, organized by protocol layer
 - [`playbook.md`](playbook.md) — how to troubleshoot interop bugs, design tests that don't lie to you, and navigate the protocol's code-as-spec parts. **Read this if you're starting any Reticulum implementation work, not just contributing to this repo.** Includes an incident registry of past wire-format bugs and their fixes.
-- [`agent.md`](agent.md) — verification rules for adding to this repo (markers, tools/, test-vectors)
+- [`agent.md`](agent.md) — rules for adding to this repo: the **§0 prime directive** (the spec is authoritative and follows upstream only — third-party app behavior is not admissible evidence), plus verification markers, `tools/` verifiers, and test-vectors
 - [`templates/`](templates/) — drop-in `AGENTS.md` for new Reticulum implementation projects in any language. Copy into your project root, edit the marked sections, and the next agent or contributor lands on the right docs automatically.
 - [`flows/`](flows/) — chronological end-to-end narratives (e.g. "send a message"), cross-referencing SPEC.md sections
 - [`tools/`](tools/) — self-contained Python verifier scripts that test SPEC.md claims against upstream RNS / LXMF. Pinned via [`tools/requirements.txt`](tools/requirements.txt) to the upstream versions the scripts were last re-verified against
@@ -53,6 +55,7 @@ Errata that may invalidate code built against an earlier revision of `SPEC.md`. 
 - Operator/user documentation — see [the official manual](https://markqvist.github.io/Reticulum/manual/)
 - API design choices for any specific implementation
 - Networking layer config (interfaces, transport modes) — already well documented
+- Third-party client-app behaviors and conventions — the spec follows upstream (`markqvist/Reticulum`, `markqvist/LXMF`, and the author's `markqvist/Sideband` for app-layer shapes LXMF itself doesn't pin). Apps conform to the spec, not the reverse — see [`agent.md`](agent.md) §0.
 
 ## Source citations
 
@@ -69,7 +72,7 @@ If you've debugged a Reticulum interop problem and the answer wasn't in the upst
 
 **Symptom:** what you observed that prompted the investigation.
 
-**What's happening:** the actual mechanism, ideally with upstream source citation (file + line).
+**What's happening:** the actual mechanism, with an admissible upstream source citation (file + line) — see [`agent.md`](agent.md) §0 for what counts (RNS / LXMF / Sideband; third-party app behavior does not).
 
 **Implication / fix:** what an implementation must do to interop.
 
