@@ -11,5 +11,5 @@
 # notes (2026-05-07). A pin keeps the verifier reproducible if
 # upstream stops mirroring to PyPI before our migration is ready.
 
-rns==1.3.5
+rns==1.3.7
 lxmf==1.0.1
