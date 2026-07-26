@@ -2,7 +2,7 @@
 
 A byte-level reference for implementing Reticulum-compatible clients. This document focuses on what implementations need to interop with the canonical Python implementation ([`markqvist/Reticulum`](https://github.com/markqvist/Reticulum) and [`markqvist/LXMF`](https://github.com/markqvist/LXMF)) plus the existing client ecosystem (Sideband, Nomadnet, MeshChat, the various firmware projects).
 
-**Last verified against:** `RNS 1.3.5` / `LXMF 1.0.1` / `RNode_Firmware` (master at the spec's last revision date). Each section's source citations were re-checked against these versions; runtime verifiers in [`tools/`](tools/) lock the wire-format claims in against actually-running upstream code. When you upgrade past these, re-run every `tools/verify_*.py` and look for `FAIL`s.
+**Last verified against:** `RNS 1.4.1` / `LXMF 1.1.0` / `RNode_Firmware` (master at the spec's last revision date). Each section's source citations were re-checked against these versions; runtime verifiers in [`tools/`](tools/) lock the wire-format claims in against actually-running upstream code. When you upgrade past these, re-run every `tools/verify_*.py` and look for `FAIL`s.
 
 Source citations refer to the standard `pip install rns lxmf` install layout (`RNS/`, `LXMF/`).
 
@@ -373,17 +373,43 @@ if path_entry[IDX_PT_HOPS] > 1:
         new_raw += packet.raw[2:]                        # original dest_hash + context + payload
 ```
 
+Since RNS 1.3.7 the "hops byte unchanged" line carries a conditional: when the node has the `local_hops_delta` privacy option enabled, the emitted hops byte is the node's random delta instead of the packet's own value (`RNS/Transport.py:1157` in RNS 1.4.1) — see §2.4.
+
 For destinations 0 or 1 hops away, the originator may stay HEADER_1 — the receiving rnsd auto-fills the transport_id when the destination matches a local client (`for_local_client` branch at `RNS/Transport.py:1454` in RNS 1.2.4). Implementations that always emit HEADER_1 will silently fail to deliver to multi-hop destinations even with a known path.
 
 ### 2.4 Hop count
 
-Byte 1 is `hops`, an 8-bit counter that each transit relay increments by 1. `0` for a packet still on the originator. `255` would in theory wrap, but no Reticulum mesh in practice has paths anywhere near that long.
+Byte 1 is `hops`, an 8-bit counter that each transit relay increments by 1. `0` for a packet still on the originator (but see the hops-delta callout below). Valid wire values are `0`–`127`: since RNS 1.3.8, `Packet.unpack` raises on `hops >= Transport.PATHFINDER_M` (= 128, the maximum path length — `RNS/Transport.py:63` in RNS 1.4.1), so a packet arriving with `hops ≥ 128` is dropped as malformed (`RNS/Packet.py:247-248`; verified by `tools/verify_packet_header.py`). Implementations SHOULD enforce the same bound on receive.
+
+> **Hops on the wire are not a trustworthy origin/distance signal —
+> the `local_hops_delta` originator-privacy option (RNS ≥ 1.3.7).**
+> When a node enables the `[reticulum]` config option
+> `local_hops_delta` (default off — `RNS/Reticulum.py:256`, `:510-512`
+> in RNS 1.4.1), it picks a random delta in `[2, 7]` once at startup
+> (`(random_byte % 6) + 2`, `RNS/Transport.py:240`) and emits packets
+> it originates with the hops byte set to that delta instead of `0`.
+> The delta applies when `packet.hops == 0`, the destination type is
+> not PLAIN or GROUP, and the outbound interface is not a
+> shared-instance / local-client interface (`should_apply_delta`,
+> `RNS/Transport.py:1361-1364`; apply sites `:1157`, `:1177`,
+> `:1190-1191`, `:1347-1350`, plus the shared-instance local-client
+> emission sites `:1692`, `:1736`, `:2258`, `:2343`). A HEADER_1
+> ANNOUNCE is additionally rewritten to HEADER_2 with the transport
+> bit set and the node's own transport identity hash inserted as
+> `transport_id` (`mangle_hops(…, transport_insert=True)`,
+> `RNS/Transport.py:1367-1369`), making a mangled announce
+> indistinguishable from one relayed on behalf of a remote originator.
+> Receivers MUST NOT infer "sender is the originator" from
+> `hops == 0`/`1`, and MUST NOT treat announce hop counts as exact
+> path length — a peer with this option enabled inflates them by a
+> constant 2–7. (Link-ID and proof hashing are unaffected: §6.3/§7.2
+> already strip the hops byte before hashing.)
 
 ### 2.5 Context byte
 
 Single byte after the destination hash (offset 18 for HEADER_1, offset 34 for HEADER_2). Common values:
 
-Full context inventory from `RNS/Packet.py:74-92` (RNS 1.2.4):
+Full context inventory from `RNS/Packet.py:72-92` (RNS 1.4.1):
 
 | Hex | Name | Used for |
 |---|---|---|
@@ -494,10 +520,10 @@ Note that `dest_hash` is INCLUDED in the signed data even though it's not in the
 
 ### 4.3 `app_data` format for LXMF delivery destinations
 
-Upstream `LXMF/LXMRouter.py::get_announce_app_data` produces a 3-element msgpack array (verified against LXMF 1.0.1 by `tools/verify_announce_app_data.py`):
+Upstream `LXMF/LXMRouter.py::get_announce_app_data` produces a 3-element msgpack array (verified against LXMF 1.1.0 by `tools/verify_announce_app_data.py`):
 
 ```python
-# LXMF/LXMRouter.py:985-1001 in LXMF 1.0.1
+# LXMF/LXMRouter.py:1034-1050 in LXMF 1.1.0
 supported_functionality = [SF_COMPRESSION]                          # LXMF/LXMF.py:142
 peer_data = [display_name, stamp_cost, supported_functionality]     # stamp_cost = None unless 1 ≤ N ≤ 254
 return msgpack.packb(peer_data)
@@ -516,7 +542,7 @@ c0         # nil (stamp_cost)
 
 Encoding the display name as msgpack `bin` (`0xc4 NN`) is required for upstream interop — see section 9.3 below. The stamp_cost field can be `int 0` (`0x00`) or `nil` (`0xc0`); upstream's `stamp_cost_from_app_data` doesn't strict-type-check.
 
-**The third element `[capability_flags]`** (a list; the only flag currently defined is `SF_COMPRESSION = 0x00` at `LXMF/LXMF.py:142`) **is emitted by the LXMF 1.0.1 producer** — `LXMRouter.py:998-999` computes `supported_functionality = [SF_COMPRESSION]` and appends it to `peer_data`. Note this changed: the LXMF 0.9.7 producer computed the list but never appended it, so announces from `≤ 0.9.x` carry only 2 elements. The parser reads the element via `compression_support_from_app_data` (`LXMF/LXMF.py:187-199`): a missing third element, or a non-list third element, is treated as "compression supported"; otherwise support is `SF_COMPRESSION in peer_data[2]`. Receivers MUST therefore accept the 2-element form (older deployments) and the 3-element form (LXMF 1.0.x+) interchangeably.
+**The third element `[capability_flags]`** (a list; the only flag currently defined is `SF_COMPRESSION = 0x00` at `LXMF/LXMF.py:142`) **is emitted by the LXMF 1.0.x+ producer** — `LXMRouter.py:1047-1048` (LXMF 1.1.0) computes `supported_functionality = [SF_COMPRESSION]` and appends it to `peer_data`. Note this changed: the LXMF 0.9.7 producer computed the list but never appended it, so announces from `≤ 0.9.x` carry only 2 elements. The parser reads the element via `compression_support_from_app_data` (`LXMF/LXMF.py:187-199`): a missing third element, or a non-list third element, is treated as "compression supported"; otherwise support is `SF_COMPRESSION in peer_data[2]`. Receivers MUST therefore accept the 2-element form (older deployments) and the 3-element form (LXMF 1.0.x+) interchangeably.
 
 The parser also tolerates a 1-element msgpack array (just the name) and a raw UTF-8 string ("original announce format" branch at `LXMF/LXMF.py:138-139`) — see `LXMF/LXMF.py::display_name_from_app_data` for all four accepted shapes.
 
@@ -993,7 +1019,7 @@ Receivers parse this via `pn_announce_data_is_valid` (`LXMF/LXMF.py:191-206`), w
 
 ### 5.9 LXMF field constants and helper specifiers
 
-The `fields` dict inside an LXMF message (the 4th element of the msgpack array described in §5.3) is keyed by 1-byte integers. Upstream `LXMF/LXMF.py` (verified against LXMF 1.0.1 by `tools/verify_lxmf_fields.py`) defines the following allocations.
+The `fields` dict inside an LXMF message (the 4th element of the msgpack array described in §5.3) is keyed by 1-byte integers. Upstream `LXMF/LXMF.py` (verified against LXMF 1.1.0 by `tools/verify_lxmf_fields.py`) defines the following allocations.
 
 #### 5.9.1 Top-level `fields` dict keys
 
@@ -1087,7 +1113,7 @@ Implementations should fall back to `RENDERER_PLAIN` for any unknown renderer by
 
 #### 5.9.5 Propagation-node metadata keys
 
-Distinct from the top-level `fields` dict, these `PN_META_*` keys are used inside the `fields[0x02]` element of a propagation-node announce (§5.8.5 element [2]) or in `/get`-flow metadata responses. Upstream marked these unstable until the LXMF 1.0.0 release; as of LXMF 1.0.1 the allocations below are confirmed unchanged (verified by `tools/verify_lxmf_fields.py`), but the upstream **value types** remain a soft contract — code defensively.
+Distinct from the top-level `fields` dict, these `PN_META_*` keys are used inside the `fields[0x02]` element of a propagation-node announce (§5.8.5 element [2]) or in `/get`-flow metadata responses. Upstream marked these unstable until the LXMF 1.0.0 release; as of LXMF 1.1.0 the allocations below are confirmed unchanged (verified by `tools/verify_lxmf_fields.py`), but the upstream **value types** remain a soft contract — code defensively.
 
 | Byte | Constant | Purpose |
 |---|---|---|
@@ -1805,7 +1831,7 @@ A clean-room client that only implements opportunistic LXMF can ignore Channel e
 
 ### 7.1 Path requests: peers send `path?` before opportunistic LXMF when no path is known
 
-The path-request preamble in upstream LXMF is **conditional, not unconditional** (verified by `tools/verify_path_request.py` against LXMF 1.0.1):
+The path-request preamble in upstream LXMF is **conditional, not unconditional** (verified by `tools/verify_path_request.py` against LXMF 1.1.0):
 
 ```python
 # LXMF/LXMRouter.py::handle_outbound, ~line 1672
@@ -2558,6 +2584,14 @@ The advertisement is sent once on `Resource.advertise()`; if no part requests ar
 > `bz2.decompress()` API for resource bodies** — it has no output
 > bound and will allocate as much memory as the input legitimately
 > expands to.
+>
+> Since RNS 1.3.9 upstream also enforces a hard parse-time bound on
+> the advertisement itself: `ResourceAdvertisement.unpack` raises on
+> `t > Resource.MAX_EFFICIENT_SIZE * 3` (= 3 × (1 MiB − 1) =
+> 3,145,725 bytes; `RNS/Resource.py:1366`, `:116` in RNS 1.4.1), so
+> the ADV is dropped before any allocation. A legitimate per-segment
+> `t` never reaches this bound, because senders split anything larger
+> than `MAX_EFFICIENT_SIZE` into separately-advertised segments.
 
 ### 10.5 RESOURCE_REQ — receiver requests parts
 
@@ -2621,7 +2655,7 @@ Two interop traps:
 
 ### 10.7 RESOURCE_HMU — hashmap update
 
-When the sender receives a RESOURCE_REQ with `exhausted == 0xFF` and a `last_map_hash`, it locates the position of `last_map_hash` in its full hashmap, advances to the **next** `HASHMAP_MAX_LEN` window, and emits the hashmap continuation (`Resource.py:1030-1064`):
+When the sender receives a RESOURCE_REQ with `exhausted == 0xFF` and a `last_map_hash`, it locates the position of `last_map_hash` in its full hashmap, advances to the **next** `HASHMAP_MAX_LEN` window, and emits the hashmap continuation (`Resource.py:1033-1074` in RNS 1.4.1):
 
 ```
 body = resource_hash(32) || umsgpack.packb([segment_index(int), hashmap_segment_bytes])
@@ -2629,7 +2663,16 @@ body = resource_hash(32) || umsgpack.packb([segment_index(int), hashmap_segment_
 
 The segment_index is `part_index // HASHMAP_MAX_LEN`. The receiver applies this with `Resource.hashmap_update(segment, hashmap)` to extend its known hashmap and continues issuing RESOURCE_REQ for the new range.
 
-If the part_index doesn't land on a `HASHMAP_MAX_LEN` boundary, the sender treats it as a sequencing error and cancels the resource (`Resource.py:1043-1046`).
+If the part_index doesn't land on a `HASHMAP_MAX_LEN` boundary, the sender treats it as a sequencing error and cancels the resource (`Resource.py:1045-1048`).
+
+> **HMU hardening (RNS ≥ 1.3.9).** The receiver ignores any
+> RESOURCE_HMU that arrives while it is not actually waiting for one
+> (`waiting_for_hmu` gate in `hashmap_update_packet`,
+> `Resource.py:481`), and an HMU whose hashmap segment decodes to
+> zero map-hashes cancels the transfer (`Resource.py:497-501`). The
+> sender likewise cancels instead of emitting an empty hashmap
+> continuation (`Resource.py:1058-1061`). Implementations should not
+> rely on out-of-turn or empty HMUs being tolerated.
 
 > **An exhausted RESOURCE_REQ MAY still carry parts — a conformant
 > sender fulfils them *and* sends the RESOURCE_HMU.** When the
@@ -2701,7 +2744,7 @@ The initiator's `validate_proof` (`Resource.py:785-824`) checks `proof_data[32:]
 Either side can cancel; the body is just `resource_hash(32)`:
 
 - **`RESOURCE_ICL (0x06)`** — initiator cancel. Sent when the initiator decides to abort (e.g. the user kills the upload, the link MTU shrinks below the resource's pre-packed parts, the watchdog gives up after `MAX_RETRIES = 16`).
-- **`RESOURCE_RCL (0x07)`** — receiver reject / cancel. Sent on advertisement reject (`Resource.reject(adv_packet)` at line 155-163, e.g. resource too large per app callback) or on receiver-side abort.
+- **`RESOURCE_RCL (0x07)`** — receiver reject / cancel. Sent on advertisement reject (`Resource.reject(adv_packet)`, `Resource.py:155-165` in RNS 1.4.1, e.g. resource too large per app callback) and — since RNS 1.3.9 — on any receiver-side abort while the link is still active (`Resource.cancel()` receiver branch, `Resource.py:1104-1110`). Before 1.3.9 only the reject path put RCL on the wire; a mid-transfer receiver abort was silent. Inbound RCL handling has existed on both sides throughout (`Link.py:1114`).
 
 Either form transitions the resource to `FAILED`, releases the parts, and notifies the link's resource-concluded callback.
 
@@ -2749,16 +2792,19 @@ This also means swapping in a new link session key mid-transfer would break decr
 
 | File | What it pins down |
 |---|---|
-| `RNS/Resource.py:43-156` | Class header, constants, state machine values, `reject` / `accept` |
-| `RNS/Resource.py:248-478` | `Resource.__init__` — preparation, hashmap construction, collision guard |
-| `RNS/Resource.py:520-596` | `__advertise_job`, watchdog, advertisement retransmit |
-| `RNS/Resource.py:672-726` | `assemble` — receiver reassembly, decrypt, decompress, hash-match |
-| `RNS/Resource.py:755-829` | `prove` and `validate_proof` |
-| `RNS/Resource.py:831-932` | `receive_part` — receiver-side part insertion + window adjust |
-| `RNS/Resource.py:934-983` | `request_next` — receiver-side RESOURCE_REQ construction |
-| `RNS/Resource.py:985-1064` | `request` — initiator-side fulfillment + RESOURCE_HMU emission |
-| `RNS/Resource.py:1237-1383` | `ResourceAdvertisement` — pack/unpack of the ADV msgpack dict |
-| `RNS/Packet.py:72-78` | RESOURCE_* context constants |
+| `RNS/Resource.py:43-165` | Class header, constants, state machine values, `reject` |
+| `RNS/Resource.py:167-246` | `accept` — receiver-side advertisement acceptance |
+| `RNS/Resource.py:248-477` | `Resource.__init__` — preparation, hashmap construction, collision guard |
+| `RNS/Resource.py:508-562` | `advertise`, `__advertise_job` |
+| `RNS/Resource.py:564-674` | `watchdog_job` / `__watchdog_job` — retry/timeout state machine, advertisement retransmit |
+| `RNS/Resource.py:676-754` | `assemble` — receiver reassembly, decrypt, decompress, hash-match |
+| `RNS/Resource.py:756-831` | `prove` and `validate_proof` |
+| `RNS/Resource.py:833-934` | `receive_part` — receiver-side part insertion + window adjust |
+| `RNS/Resource.py:936-986` | `request_next` — receiver-side RESOURCE_REQ construction |
+| `RNS/Resource.py:988-1082` | `request` — initiator-side fulfillment + RESOURCE_HMU emission |
+| `RNS/Resource.py:1084-1117` | `cancel` — ICL/RCL emission on abort |
+| `RNS/Resource.py:1247-1367` | `ResourceAdvertisement` — pack/unpack of the ADV msgpack dict |
+| `RNS/Packet.py:72-79` | RESOURCE_* context constants |
 
 ---
 

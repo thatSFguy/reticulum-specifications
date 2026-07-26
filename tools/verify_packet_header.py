@@ -16,6 +16,9 @@ Verifies:
           exercised by stubbing Transport.transmit and seeding the path_table
           with a synthetic multi-hop entry. The wire bytes captured at
           transmit-time are compared to the expected HEADER_2 form.
+  - §2.4: hop-count bound — Packet.unpack accepts hops 0..127 and rejects
+          hops >= Transport.PATHFINDER_M (128) as malformed (RNS >= 1.3.8,
+          RNS/Packet.py:247-248).
 
 Exit code 0 on PASS, non-zero on FAIL.
 """
@@ -127,6 +130,31 @@ def verify_header_two_form():
     print("PASS S2.2 HEADER_2 wire form")
 
 
+def verify_hop_count_bound():
+    # §2.4: valid wire hops are 0..127. Since RNS 1.3.8, Packet.unpack raises
+    # on hops >= Transport.PATHFINDER_M (= 128), so unpack() returns False and
+    # the packet is dropped as malformed.
+    if Transport.PATHFINDER_M != 128:
+        fail(f"S2.4 PATHFINDER_M: expected 128, got {Transport.PATHFINDER_M}")
+
+    def inbound_packet(hops):
+        flag = (RNS.Packet.HEADER_1 << 6) | (RNS.Destination.SINGLE << 2) | RNS.Packet.DATA
+        raw = bytes([flag, hops]) + bytes(16) + b"\x00" + b"hello"
+        pkt = RNS.Packet.__new__(RNS.Packet)
+        pkt.raw = raw
+        return pkt
+
+    for hops in (0, 1, 127):
+        if not inbound_packet(hops).unpack():
+            fail(f"S2.4 hop bound: unpack rejected valid hops={hops}")
+    for hops in (128, 200, 255):
+        if inbound_packet(hops).unpack():
+            fail(f"S2.4 hop bound: unpack accepted invalid hops={hops} "
+                 f"(>= PATHFINDER_M) — expected drop as malformed")
+
+    print("PASS S2.4 hop-count bound (0..127 accepted, >= 128 dropped)")
+
+
 def verify_header_conversion(rns_instance):
     # §2.3: with a path_table entry where hops > 1, an outbound HEADER_1 packet
     # must be converted to HEADER_2 with the next-hop transport_id at offset 2.
@@ -223,6 +251,7 @@ def main():
         verify_flag_byte_layout()
         verify_ifac_bit_position()
         verify_header_two_form()
+        verify_hop_count_bound()
         verify_header_conversion(rns_instance)
     finally:
         try:
