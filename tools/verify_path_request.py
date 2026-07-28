@@ -7,14 +7,17 @@ Verifies:
         == 6b9f66014d9853faab220fba47d02761
   - The full SPEC table for `name_hash` values.
   - The path-request payload format constructed by upstream
-    `RNS.Transport.request_path` (LXMF/LXMRouter.py:1672-1674 calls path):
+    `RNS.Transport.request_path` (LXMF/LXMRouter.py:1777-1780 calls path):
        transport-disabled (leaf): destination_hash(16) || tag(16)         -> 32B
        transport-enabled         : destination_hash(16) || transport_id(16)
                                    || tag(16)                             -> 48B
-  - That LXMF triggers a path? request from `LXMRouter.handle_outbound` at
-    line 1672 ONLY when `not has_path(destination_hash) and method ==
-    OPPORTUNISTIC`. The "always-precedes" claim in older spec drafts is too
-    strong: the request is conditional on the path-table miss.
+  - That LXMF triggers a path? request from `LXMRouter.handle_outbound`
+    (line 1777 in LXMF 1.1.0) ONLY when `not has_path(destination_hash) and
+    method == OPPORTUNISTIC`. The "always-precedes" claim in older spec drafts
+    is too strong: the request is conditional on the path-table miss.
+  - The S7.1 retry-loop timing constants on the LXMRouter class
+    (LXMF/LXMRouter.py:30-34): PATH_REQUEST_WAIT = 7, DELIVERY_RETRY_WAIT = 10,
+    MAX_DELIVERY_ATTEMPTS = 5, MAX_PATHLESS_TRIES = 1.
 
 Exit code 0 on PASS, non-zero on FAIL.
 """
@@ -93,11 +96,30 @@ def verify_lxmf_only_when_pathless():
           "(LXMF/LXMRouter.py handle_outbound)")
 
 
+def verify_retry_constants():
+    # S7.1 timing constants — class-level on LXMRouter (LXMF/LXMRouter.py:30-34).
+    expected = {
+        "PATH_REQUEST_WAIT": 7,
+        "DELIVERY_RETRY_WAIT": 10,
+        "MAX_DELIVERY_ATTEMPTS": 5,
+        "MAX_PATHLESS_TRIES": 1,
+    }
+    for name, want in expected.items():
+        got = getattr(LXMRouter, name, None)
+        if got != want:
+            fail(f"S7.1 LXMRouter.{name}: got {got!r} want {want!r} "
+                 f"(LXMF {LXMF.__version__}) — upstream changed the retry "
+                 "timing; update SPEC.md S7.1 and flows/lxmf-outbound-retry.md")
+    print("PASS S7.1 retry constants (PATH_REQUEST_WAIT=7, DELIVERY_RETRY_WAIT=10, "
+          "MAX_DELIVERY_ATTEMPTS=5, MAX_PATHLESS_TRIES=1)")
+
+
 def main():
     print(f"verify_path_request.py against RNS {RNS.__version__} / LXMF {LXMF.__version__}")
     verify_well_known_hashes()
     verify_request_path_payload_format()
     verify_lxmf_only_when_pathless()
+    verify_retry_constants()
     print("ALL PASS")
 
 
