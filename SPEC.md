@@ -1834,14 +1834,25 @@ A clean-room client that only implements opportunistic LXMF can ignore Channel e
 The path-request preamble in upstream LXMF is **conditional, not unconditional** (verified by `tools/verify_path_request.py` against LXMF 1.1.0):
 
 ```python
-# LXMF/LXMRouter.py::handle_outbound, ~line 1672
+# LXMF/LXMRouter.py::handle_outbound, ~line 1777
 if not RNS.Transport.has_path(destination_hash) and lxmessage.method == LXMessage.OPPORTUNISTIC:
     RNS.log("Pre-emptively requesting unknown path for opportunistic ...", RNS.LOG_DEBUG)
     RNS.Transport.request_path(destination_hash)
     lxmessage.next_delivery_attempt = time.time() + LXMRouter.PATH_REQUEST_WAIT
 ```
 
-In other words: a `path?` is sent before the LXM **only when no entry exists in `Transport.path_table`** for the target — `has_path()` is just a key-presence check via `LXMRouter.handle_outbound`. Existing-but-stale path entries are NOT replaced by this preamble; LXMF instead leans on the periodic `Transport.jobs` cycle to evict expired path entries (`stale_paths` accumulator at `RNS/Transport.py:750+`), after which the next outbound LXM rediscovers the unknown-path branch and triggers the `request_path`. A second `request_path` is issued from the retry path (`LXMRouter.py:2568+`) once `lxmessage.delivery_attempts >= MAX_PATHLESS_TRIES`, so on a flaky path peers can see multiple `path?` retransmits without intervening DATA — that matches BLE-trace observations.
+In other words: a `path?` is sent before the LXM **only when no entry exists in `Transport.path_table`** for the target — `has_path()` is just a key-presence check via `LXMRouter.handle_outbound`. Existing-but-stale path entries are NOT replaced by this preamble; LXMF instead leans on the periodic `Transport.jobs` cycle to evict expired path entries (`stale_paths` accumulator at `RNS/Transport.py:750+`), after which the next outbound LXM rediscovers the unknown-path branch and triggers the `request_path`. A second `request_path` is issued from the retry path (`LXMRouter.py:2736+`) once `lxmessage.delivery_attempts >= MAX_PATHLESS_TRIES`, so on a flaky path peers can see multiple `path?` retransmits without intervening DATA — that matches BLE-trace observations.
+
+The timing constants governing the preamble and the retry loop are class-level on `LXMRouter` (`LXMF/LXMRouter.py:30-34` in LXMF 1.1.0; verified by `tools/verify_path_request.py`):
+
+| Constant | Value | Role |
+|---|---|---|
+| `PATH_REQUEST_WAIT` | `7` s | Deferral after issuing the `path?` preamble (or a retry-path `request_path`) before the next delivery attempt. |
+| `DELIVERY_RETRY_WAIT` | `10` s | Wait between delivery attempts when a path is known but the prior attempt produced no delivery proof. Constant across attempts — no exponential backoff. |
+| `MAX_DELIVERY_ATTEMPTS` | `5` | Delivery attempts before the message is marked failed. |
+| `MAX_PATHLESS_TRIES` | `1` | Attempts without a path before the retry loop fires the second `request_path` above. |
+
+The full per-message retry state machine consuming these constants is walked in [`flows/lxmf-outbound-retry.md`](flows/lxmf-outbound-retry.md).
 
 A `path?` request itself is a regular DATA packet (verified by `tools/verify_path_request.py`):
 
