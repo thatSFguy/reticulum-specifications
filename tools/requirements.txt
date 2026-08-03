@@ -12,4 +12,4 @@
 # upstream stops mirroring to PyPI before our migration is ready.
 
 rns==1.4.1
-lxmf==1.1.0
+lxmf==1.1.1
