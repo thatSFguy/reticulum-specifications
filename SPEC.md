@@ -885,16 +885,21 @@ self.propagation_destination = RNS.Destination(
 
 Per §1.2, the well-known `name_hash` is `e03a09b77ac21b22258e` (`SHA256("lxmf.propagation")[:10]`). The propagation node's identity is its own — different propagation nodes have different identity hashes and therefore different destination hashes. Receivers of `lxmf.propagation` announces filter by name_hash to surface "propagation node available" UI separately from "messageable peer available" UI per §4.4.
 
-The destination registers four request handlers via `register_request_handler` (`LXMRouter.py:669-675`):
+A propagation node registers request handlers across **two** destinations, not one (`LXMRouter.py:669-676`; verified by `tools/verify_lxmf_peer_constants.py`):
 
-| Path | Constant | Allow | Purpose |
-|---|---|---|---|
-| `/offer` | `LXMPeer.OFFER_REQUEST_PATH` | `ALLOW_ALL` | Peer-to-peer message-set offer (§5.8.2) |
-| `/get` | `LXMPeer.MESSAGE_GET_PATH` | `ALLOW_ALL` | Client message retrieval (§5.8.3) |
-| `/stats` | `LXMRouter.STATS_GET_PATH` | implementation-defined | Operator stats query |
-| `/sync` | `LXMRouter.SYNC_REQUEST_PATH` | `ALLOW_LIST` | Operator-triggered sync push |
+| Path | Constant | Destination | Allow | Purpose |
+|---|---|---|---|---|
+| `/offer` | `LXMPeer.OFFER_REQUEST_PATH` | `lxmf.propagation` | `ALLOW_ALL` | Peer-to-peer message-set offer (§5.8.2) |
+| `/get` | `LXMPeer.MESSAGE_GET_PATH` | `lxmf.propagation` | `ALLOW_ALL` | Client message retrieval (§5.8.3) |
+| `/pn/get/stats` | `LXMRouter.STATS_GET_PATH` | `lxmf.propagation.control` | `ALLOW_LIST` | Operator stats query |
+| `/pn/peer/sync` | `LXMRouter.SYNC_REQUEST_PATH` | `lxmf.propagation.control` | `ALLOW_LIST` | Operator-triggered sync push |
+| `/pn/peer/unpeer` | `LXMRouter.UNPEER_REQUEST_PATH` | `lxmf.propagation.control` | `ALLOW_LIST` | Operator-triggered peer removal |
 
-All four are reached over an active Reticulum Link via the §11 REQUEST/RESPONSE protocol. The link must be `identify()`-d before `/offer` and `/get` requests are honored — that's how the propagation node knows which client / peer is making the request.
+The two public paths (`/offer`, `/get`) are the interop surface and are the only ones an ordinary client or peer uses. The three `/pn/…` control paths are registered on a **separate** destination — `RNS.Destination(identity, IN, SINGLE, "lxmf", "propagation", "control")`, name_hash `4576672b3f55049c2e46` — whose `allowed_list` is `[self.identity.hash]`, i.e. the node's own operator identity and nobody else. A client MUST NOT expect to reach them on the `lxmf.propagation` destination hash, and an implementation that omits them entirely is still spec-compliant for interop; they exist so an operator can drive their own node remotely.
+
+All five are reached over an active Reticulum Link via the §11 REQUEST/RESPONSE protocol. The link must be `identify()`-d first in every case: `/offer` and `/get` use the identity to decide *whose* mail is being offered or fetched, and the control paths reject an unidentified link with `ERROR_NO_IDENTITY` before any allow-list check (`LXMRouter.py:843-844`, `:855-856`).
+
+Both control-path handlers that take an argument (`/pn/peer/sync`, `/pn/peer/unpeer`) expect `data` to be a bare 16-byte peer destination hash — not a msgpack wrapper — and return `ERROR_INVALID_DATA` for any other type or length, `ERROR_NOT_FOUND` if that hash isn't a current peer, and `True` on success (`LXMRouter.py:843-866`).
 
 #### 5.8.2 Peer-to-peer sync via `/offer`
 
@@ -941,7 +946,7 @@ Error responses (`LXMPeer.py:24-31`):
 | `ERROR_INVALID_DATA` | `0xf4` | Offer payload didn't match the expected `[key, [ids]]` shape. |
 | `ERROR_INVALID_STAMP` | `0xf5` | Inbound stamp failed validation. |
 | `ERROR_THROTTLED` | `0xf6` | Peer is rate-limiting; postpone for `PN_STAMP_THROTTLE` (default 30 minutes). |
-| `ERROR_NOT_FOUND` | `0xfd` | (Used by `/sync` and stats-query paths) |
+| `ERROR_NOT_FOUND` | `0xfd` | Control paths only: the 16-byte hash passed to `/pn/peer/sync` or `/pn/peer/unpeer` is not a current peer. |
 | `ERROR_TIMEOUT` | `0xfe` | Request timed out. |
 
 > ⚠️ There is a gap at `0xf2` — upstream defines no constant for it. Values are **not** contiguous;
@@ -1017,7 +1022,7 @@ Receivers parse this via `pn_announce_data_is_valid` (`LXMF/LXMF.py:191-206`), w
 | `LXMF/LXMRouter.py:669-670` | `/offer` and `/get` handler registration |
 | `LXMF/LXMRouter.py:1426-1500` | `message_get_request` handler (client `/get`) |
 | `LXMF/LXMRouter.py:2145-2200` | `offer_request` handler (peer `/offer`) |
-| `LXMF/LXMPeer.py:14-50` | path constants and error-response constants |
+| `LXMF/LXMPeer.py:14-31` | request-path, peer-state and error-response constants |
 | `LXMF/LXMPeer.py:373-489` | initiator-side `/offer` flow |
 | `LXMF/LXStamper.py::validate_peering_key` | peering-key PoW validation |
 | `LXMF/LXMF.py:191-206` | `pn_announce_data_is_valid` parser |
