@@ -153,8 +153,22 @@ def verify_ticket_shortcut(target_cost=4):
                     fields={}, desired_method=LXMessage.OPPORTUNISTIC)
     lxm.message_id = hashlib.sha256(b"ticket-shortcut-test").digest()
 
-    ticket = os.urandom(LXMessage.TICKET_LENGTH)                  # 16B
-    expected_stamp = RNS.Identity.truncated_hash(ticket + lxm.message_id)
+    # The wrong-ticket half of this check falls through to the PoW path, so
+    # the ticket must be chosen such that its derived stamp does NOT happen to
+    # satisfy target_cost by chance. A random 16-byte stamp clears a 4-bit
+    # target ~6% of the time (1/2**target_cost), which made this verifier fail
+    # roughly 1 CI run in 18 before the stamp was pinned this way. Search for a
+    # ticket whose stamp misses the target; the loop exits on the first try
+    # ~94% of the time.
+    workblock = LXStamper.stamp_workblock(lxm.message_id)
+    for _ in range(64):
+        ticket = os.urandom(LXMessage.TICKET_LENGTH)              # 16B
+        expected_stamp = RNS.Identity.truncated_hash(ticket + lxm.message_id)
+        if LXStamper.stamp_value(workblock, expected_stamp) < target_cost:
+            break
+    else:
+        fail("S5.7.3 could not find a ticket whose stamp misses the PoW target "
+             f"in 64 tries at target_cost={target_cost} — this should be ~1 in 2**64")
     lxm.stamp = expected_stamp
 
     if not lxm.validate_stamp(target_cost, tickets=[ticket]):
@@ -163,13 +177,15 @@ def verify_ticket_shortcut(target_cost=4):
         fail(f"S5.7.3 stamp_value = {lxm.stamp_value}, want COST_TICKET")
     print("PASS S5.7.3 LXMessage.validate_stamp accepts ticket stamp shortcut")
 
-    # With wrong ticket — must NOT match the ticket shortcut, and the
-    # PoW path won't validate either (because expected_stamp wasn't
-    # generated against the workblock). validate_stamp returns False.
+    # With a wrong ticket the shortcut must not fire. The stamp was pinned
+    # above to miss the PoW target, so the fall-through PoW path can't rescue
+    # it either and validate_stamp returns False deterministically.
     wrong_ticket = os.urandom(LXMessage.TICKET_LENGTH)
     lxm.stamp_value = None
     if lxm.validate_stamp(target_cost, tickets=[wrong_ticket]):
         fail("S5.7.3 validate_stamp accepted with wrong ticket")
+    if lxm.stamp_value == LXMessage.COST_TICKET:
+        fail("S5.7.3 ticket shortcut fired for a ticket that does not derive the stamp")
     print("PASS S5.7.3 validate_stamp rejects ticket-shortcut stamp under wrong ticket")
 
 
