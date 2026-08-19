@@ -14,7 +14,7 @@ The receive-announce flow ([`receive-announce.md`](receive-announce.md)) runs fi
 
 ### 2. Eligibility checks
 
-`RNS/Transport.py:1825`. Three conditions all must hold:
+`RNS/Transport.py:1945`. Three conditions all must hold:
 
 ```python
 if (Reticulum.transport_enabled() or is_from_local_client) \

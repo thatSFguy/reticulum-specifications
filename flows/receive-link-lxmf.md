@@ -47,7 +47,7 @@ where `signature = sign(link_id || responder_X25519_pub || responder_long_term_E
 
 After the initiator validates the LRPROOF and sends `Link.LRRTT (0xFE)` carrying its measured RTT, the responder receives it at `Link.receive` line 1056-1059 and calls `rtt_packet`. The responder's RTT cache updates and `Link.STATUS = ACTIVE` triggers the `link_established_callback` registered via `Destination.set_link_established_callback`.
 
-For LXMF, that callback is `LXMRouter.delivery_link_established` (`LXMF/LXMRouter.py:1852-1858`):
+For LXMF, that callback is `LXMRouter.delivery_link_established` (`LXMF/LXMRouter.py:1956-1962`):
 
 ```python
 link.track_phy_stats(True)
@@ -72,7 +72,7 @@ The handler calls `packet.prove()` immediately (mandatory PROOF receipt per §6.
 
 ### 6. Inbound LXMF DATA — Resource representation
 
-A larger LXMF body arrives as a Resource transfer per `flows/receive-resource.md`. The Link's `resource_strategy = ACCEPT_APP` triggers `delivery_resource_advertised(resource)` (`LXMF/LXMRouter.py:1867-1874`):
+A larger LXMF body arrives as a Resource transfer per `flows/receive-resource.md`. The Link's `resource_strategy = ACCEPT_APP` triggers `delivery_resource_advertised(resource)` (`LXMF/LXMRouter.py:1977-1984`):
 
 ```python
 def delivery_resource_advertised(self, resource):

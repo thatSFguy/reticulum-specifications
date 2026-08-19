@@ -15,7 +15,7 @@ What happens when an LXMF client submits a message to a propagation node for sto
 
 ### 1. App constructs an LXMessage with `desired_method = PROPAGATED`
 
-Same as `send-opportunistic-lxmf.md` step 1 except the desired_method differs. The router's `handle_outbound` (`LXMF/LXMRouter.py:1644+`) will eventually route this to the propagation pipeline.
+Same as `send-opportunistic-lxmf.md` step 1 except the desired_method differs. The router's `handle_outbound` (`LXMF/LXMRouter.py:1746+`) will eventually route this to the propagation pipeline.
 
 ### 2. `LXMessage.pack()` — propagation-specific encryption
 
@@ -30,7 +30,7 @@ Same as `send-opportunistic-lxmf.md` step 1 except the desired_method differs. T
 
 ### 3. `LXMRouter.process_outbound` for PROPAGATED method
 
-`LXMF/LXMRouter.py:2544+` (the `PROPAGATED` branch is structurally similar to the `DIRECT` branch in `send-link-lxmf.md`). High-level state:
+`LXMF/LXMRouter.py:2713+` (the `PROPAGATED` branch is structurally similar to the `DIRECT` branch in `send-link-lxmf.md`). High-level state:
 
 - If a Link to the propagation node already exists and is `ACTIVE`: reuse it.
 - Else if the path is known: open a fresh `RNS.Link(propagation_node_destination)` with `LXMRouter.process_outbound` registered as the `link_established_callback` so the LXM is sent as soon as the link establishes.
@@ -48,7 +48,7 @@ The stamp is appended to the wire body: `lxmf_data += propagation_stamp` (the pr
 
 ### 6. Submit via Link DATA (PACKET representation)
 
-If `representation == PACKET`, the sender emits a Link DATA packet (`context = NONE`) carrying `propagation_packed`. The propagation node's `propagation_packet` callback (`LXMRouter.py:2080+`) decodes the msgpack outer, extracts the LXMF bodies, validates the propagation stamp if required, and stores each one in `propagation_entries[transient_id]`.
+If `representation == PACKET`, the sender emits a Link DATA packet (`context = NONE`) carrying `propagation_packed`. The propagation node's `propagation_packet` callback (`LXMRouter.py:2234+`) decodes the msgpack outer, extracts the LXMF bodies, validates the propagation stamp if required, and stores each one in `propagation_entries[transient_id]`.
 
 The Link DATA packet gets the standard mandatory PROOF receipt per §6.5; the receipt resolves the sender's `PacketReceipt` and `LXMessage.state` advances to `SENT`. **The state goes to `SENT`, not `DELIVERED`** — propagated messages are "delivered to the propagation node" but not yet "delivered to the recipient". The recipient pulls them later via `/get` (§5.8.3).
 

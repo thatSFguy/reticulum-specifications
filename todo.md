@@ -59,7 +59,7 @@ to remove their markers:
       app_data variant.** Verified against LXMF 0.9.6 by
       `tools/verify_announce_app_data.py`. Finding: in this LXMF
       version the producer emits a 2-element form only (the
-      `supported_functionality` line at `LXMF/LXMRouter.py:999` is
+      `supported_functionality` line at `LXMF/LXMRouter.py:1047` is
       dead code); the parser is prepared for a 3-element form via
       `compression_support_from_app_data`. SPEC.md §4.3 updated to
       describe the actual current behavior.
@@ -68,7 +68,7 @@ to remove their markers:
       LXMF 0.9.6 by `tools/verify_path_request.py`. Finding: the
       preamble fires only when `not has_path()` AND method is
       OPPORTUNISTIC; the retry path can fire a second `request_path`
-      after `MAX_PATHLESS_TRIES` (`LXMRouter.py:2571+`). SPEC.md §7.1
+      after `MAX_PATHLESS_TRIES` (`LXMRouter.py:2740+`). SPEC.md §7.1
       rewritten accordingly. Also fixed a documentation bug in §1.2
       (path-request name_hash column).
 
@@ -84,6 +84,24 @@ to remove their markers:
 - [x] **`tools/verify_proof_packet.py` locks in §6.5.** Done.
 - [x] **`tools/verify_rnode_split.py` locks in §8.3.** Done.
 - [x] **`tools/verify_link_handshake.py` locks in §6.2 / §6.3.** Done.
+
+- [ ] **A verifier for the `LXMPeer` / `LXMRouter` request-path and error constants.**
+      The §5.8.2 error table carried three wrong values from its introduction until
+      2026-08-19 (see the README errata) because nothing asserted them against
+      upstream. `tools/verify_lxmf_fields.py` covers `LXMF.FIELD_*` and `PN_META_*`
+      but not `LXMPeer.ERROR_*`, `LXMPeer.*_REQUEST_PATH`, or
+      `LXMRouter.{STATS_GET,SYNC_REQUEST,UNPEER_REQUEST}_PATH`. Extend it (or add
+      `tools/verify_lxmf_peer_constants.py`) so a value change or a new allocation
+      fails CI on the next Dependabot bump.
+
+- [ ] **§5.8.2 omits the `/unpeer` request handler.** The spec says the propagation
+      destination "registers four request handlers" and tables `/offer`, `/get`,
+      `/stats`, `/sync`. Upstream registers a fifth,
+      `LXMRouter.UNPEER_REQUEST_PATH = "/pn/peer/unpeer"`
+      (`LXMF/LXMRouter.py:676`), and has since at least LXMF 0.9.7 — so this is a
+      long-standing gap, not upstream drift. Document its request/response shape
+      and correct the count. Note the `/stats` and `/sync` paths are namespaced
+      (`/pn/get/stats`, `/pn/peer/sync`) unlike the bare `/offer` and `/get`.
 
 ## Spec gaps for a functional client (priority-ordered)
 
@@ -173,7 +191,7 @@ re-research.
 - [x] **SPEC.md §1.3 expansion: identity on-disk format.** Done — and
       the previous wording was actually wrong about the byte order!
       Empirically verified by reading `Identity.get_private_key()` at
-      `RNS/Identity.py:694-698` and `load_private_key` at line 706-717,
+      `RNS/Identity.py:694-697` and `load_private_key` at line 706-717,
       then round-tripping `to_file(path)` and reading back the bytes
       against `test-vectors/identities.json`: the on-disk order is
       X25519_priv(32) || Ed25519_priv(32), **same** as the public_key
@@ -197,7 +215,7 @@ re-research.
       message requires both peers online simultaneously. Authoritative
       source: `LXMF/LXMRouter.py::process_propagated`, the
       `lxmf.propagation` peering exchange (`peer()` / `sync()` between
-      nodes — `LXMRouter.py:1892+, 2118+`). The `propagated` method is
+      nodes — `LXMRouter.py:2001+, 2239+`). The `propagated` method is
       already in `LXMessage.py` but the wire protocol between
       propagation nodes is undocumented. Cross-flow:
       `flows/send-propagated-lxmf.md` (already a `⏳` entry in
