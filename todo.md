@@ -85,23 +85,22 @@ to remove their markers:
 - [x] **`tools/verify_rnode_split.py` locks in §8.3.** Done.
 - [x] **`tools/verify_link_handshake.py` locks in §6.2 / §6.3.** Done.
 
-- [ ] **A verifier for the `LXMPeer` / `LXMRouter` request-path and error constants.**
-      The §5.8.2 error table carried three wrong values from its introduction until
-      2026-08-19 (see the README errata) because nothing asserted them against
-      upstream. `tools/verify_lxmf_fields.py` covers `LXMF.FIELD_*` and `PN_META_*`
-      but not `LXMPeer.ERROR_*`, `LXMPeer.*_REQUEST_PATH`, or
-      `LXMRouter.{STATS_GET,SYNC_REQUEST,UNPEER_REQUEST}_PATH`. Extend it (or add
-      `tools/verify_lxmf_peer_constants.py`) so a value change or a new allocation
-      fails CI on the next Dependabot bump.
+- [x] **A verifier for the `LXMPeer` / `LXMRouter` request-path and error constants.**
+      Done — `tools/verify_lxmf_peer_constants.py`. Asserts the eight `LXMPeer.ERROR_*`
+      response bytes, the documented `0xf2` gap, and the five request-path strings across
+      both destinations. Also audits for unenumerated `ERROR_*` / `*_PATH` allocations,
+      which is the check that would have caught the missing `ERROR_INVALID_STAMP` and the
+      wrong `ERROR_THROTTLED` / `ERROR_NOT_FOUND` values (see the README errata).
 
-- [ ] **§5.8.2 omits the `/unpeer` request handler.** The spec says the propagation
-      destination "registers four request handlers" and tables `/offer`, `/get`,
-      `/stats`, `/sync`. Upstream registers a fifth,
-      `LXMRouter.UNPEER_REQUEST_PATH = "/pn/peer/unpeer"`
-      (`LXMF/LXMRouter.py:676`), and has since at least LXMF 0.9.7 — so this is a
-      long-standing gap, not upstream drift. Document its request/response shape
-      and correct the count. Note the `/stats` and `/sync` paths are namespaced
-      (`/pn/get/stats`, `/pn/peer/sync`) unlike the bare `/offer` and `/get`.
+- [x] **§5.8.1 omitted the `/unpeer` request handler and the control-destination split.**
+      Done. The section previously said the propagation destination "registers four
+      request handlers" on one destination. Upstream registers five across two: `/offer`
+      and `/get` on `lxmf.propagation` (`ALLOW_ALL`), and `/pn/get/stats`,
+      `/pn/peer/sync`, `/pn/peer/unpeer` on a separate `lxmf.propagation.control`
+      destination (name_hash `4576672b3f55049c2e46`) whose allow-list holds only the
+      node operator's own identity hash. The table also gave bare `/stats` and `/sync`
+      rather than the real `/pn/…` path strings. All corrected, with the control-path
+      argument shape (bare 16-byte peer hash) documented.
 
 ## Spec gaps for a functional client (priority-ordered)
 
