@@ -77,7 +77,7 @@ If `segment_index < total_segments`, the sender prepares and sends the next RESO
 
 ### 9. Cancellation paths
 
-`RESOURCE_ICL` (sender cancel) → receiver pops the matching incoming Resource and discards accumulated parts (`Link.py:1131-1138`).
+`RESOURCE_ICL` (sender cancel) → receiver pops the matching incoming Resource and discards accumulated parts (`Link.py:1105-1112`).
 `RESOURCE_RCL` (sender hears the receiver rejected) → already handled receiver-side at step 2.
 
 ---

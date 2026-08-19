@@ -47,7 +47,7 @@ data = [None, None]                                              # [wanted, have
 link.request("/get", data, response_callback=on_message_list)
 ```
 
-The propagation node's `message_get_request` handler at `LXMF/LXMRouter.py:1426-1450` walks `propagation_entries` for messages keyed to the requester's destination_hash and returns:
+The propagation node's `message_get_request` handler at `LXMF/LXMRouter.py:1482-1506` walks `propagation_entries` for messages keyed to the requester's destination_hash and returns:
 
 ```python
 [ [transient_id_1(16), size_1(int)],
@@ -86,7 +86,7 @@ Returns this as a §11 RESPONSE. If the bundle fits in `link.mdu` it's a single 
 
 ### 7. Recipient unpacks the bundle and processes each message
 
-The recipient's `propagation_resource_concluded` handler (or its single-packet equivalent) at `LXMF/LXMRouter.py:2200+` walks the bundle:
+The recipient's `propagation_resource_concluded` handler (or its single-packet equivalent) at `LXMF/LXMRouter.py:2339+` walks the bundle:
 
 ```python
 data = msgpack.unpackb(resource.data.read())

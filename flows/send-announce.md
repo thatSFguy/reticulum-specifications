@@ -89,7 +89,7 @@ Announce packets are NOT encrypted — `Packet.pack` (`RNS/Packet.py:188-191`) s
 
 ### 8. `Transport.outbound` broadcasts on every OUT interface
 
-Same broadcast branch as a path? request (`flows/path-discovery.md` step 2) — the dest_hash isn't in `path_table` (it's our own destination, not a remote one), so the broadcast branch at `RNS/Transport.py:1122+` fires, emitting on every interface where `interface.OUT == True`. Per §7.5 the announce is rate-limited by `ANNOUNCE_CAP = 2.0` (2% airtime) on each interface.
+Same broadcast branch as a path? request (`flows/path-discovery.md` step 2) — the dest_hash isn't in `path_table` (it's our own destination, not a remote one), so the broadcast branch at `RNS/Transport.py:1199+` fires, emitting on every interface where `interface.OUT == True`. Per §7.5 the announce is rate-limited by `ANNOUNCE_CAP = 2.0` (2% airtime) on each interface.
 
 ### 9. Periodic re-announce loop
 

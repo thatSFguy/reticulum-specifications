@@ -120,7 +120,7 @@ This spec is only as good as the upstream version it was checked against. **Befo
 Use these GitHub-flavored Markdown blockquote forms so they render distinctly:
 
 ```markdown
-> ⚠️ **UNVERIFIED:** This is plausible from reading `RNS/Transport.py:1485` but I have not run a test that demonstrates the behavior end-to-end. Specifically need to confirm that a HEADER_1 packet from a TCP client to a sibling TCP client is forwarded after the rnsd auto-fills `transport_id`.
+> ⚠️ **UNVERIFIED:** This is plausible from reading `RNS/Transport.py:1590` but I have not run a test that demonstrates the behavior end-to-end. Specifically need to confirm that a HEADER_1 packet from a TCP client to a sibling TCP client is forwarded after the rnsd auto-fills `transport_id`.
 
 > 🔮 **SPECULATION:** The path-request payload may include the requester's own transport_id when issued from a transport-enabled originator. The `RNS/Transport.py::request_path` source suggests this but I have not decoded a captured upstream emission to confirm.
 ```

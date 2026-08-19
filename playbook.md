@@ -229,7 +229,7 @@ Each entry: date, one-line symptom, spec section that governs it, one-line fix, 
 ### 2026-02 — Outbound DATA / LINKREQ to multi-hop destinations require HEADER_2
 
 - **Symptom:** Outbound DATA from a leaf client to a destination >1 hop away is dropped at the first transit relay. Direct destinations work fine.
-- **Spec section:** §2.3. Originator must convert HEADER_1 → HEADER_2 (insert next-hop transport_id at offset 2) when the path table reports the destination is multi-hop. Upstream `RNS/Transport.py:1497` only forwards inbound DATA that carries a transport_id.
+- **Spec section:** §2.3. Originator must convert HEADER_1 → HEADER_2 (insert next-hop transport_id at offset 2) when the path table reports the destination is multi-hop. Upstream `RNS/Transport.py:1602` only forwards inbound DATA that carries a transport_id.
 - **Fix:** `useHeader2 = dest.hopCount > 1 && dest.nextHop != null`. Build the packet with `headerType = HEADER_2` and `transportId = dest.nextHop`.
 - **Lesson:** "It works at one hop" is not "it works." Test multi-hop early.
 
