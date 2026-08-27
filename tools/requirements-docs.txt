@@ -1,0 +1,28 @@
+# Documentation-only pins. NOT installed by CI, and NOT imported by any
+# verifier — `tools/requirements.txt` is the verifier environment.
+#
+# Why this file is separate from tools/requirements.txt:
+#
+# agent.md §0 admits exactly three upstream sources for normative claims —
+# markqvist/Reticulum, markqvist/LXMF, and (narrowly) markqvist/Sideband.
+# NomadNet is not among them, and SPEC.md §11.6 is correspondingly marked
+# "informational, not normative". A pin sitting in the verifier requirements
+# file would imply NomadNet is a verifier dependency, and by extension a
+# source of truth the spec conforms to. It is not, and must not become one:
+# see the README "Spec corrections" entry for 2026-06-19, where a
+# third-party app shape documented in §5.9.8 was later used to argue the
+# spec should keep accommodating it.
+#
+# What this pin IS for: §11.6's line citations point into NomadNet's
+# Browser.py and Node.py. Before this pin they had no reproducible baseline
+# and had drifted badly — `Browser.py:67` was cited as DEFAULT_PATH when it
+# is a keypress handler. Pinning gives the next citation audit something
+# exact to re-anchor against, without granting NomadNet any authority.
+#
+#   pip install -r tools/requirements-docs.txt
+#
+# Bumping this is a docs-only change: re-anchor §11.6's citations against
+# the new version and update the version named in §11.6's preamble. No
+# verifier runs against it, so nothing here can fail CI.
+
+nomadnet==1.2.8
