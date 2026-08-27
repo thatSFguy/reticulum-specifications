@@ -19,7 +19,7 @@ The scripts read `RNS.__version__` at startup and print it in their output so a 
 
 ## Status
 
-Populated against RNS 1.3.5 / LXMF 1.0.1:
+Populated against RNS 1.5.0 / LXMF 1.1.1 (all 16 scripts re-run green at this pin):
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|
