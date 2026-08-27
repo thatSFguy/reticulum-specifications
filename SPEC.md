@@ -3251,10 +3251,10 @@ A micron link's `target` string (the second component of `[label`target]` or thi
 | Form | Meaning | Browser.py ref |
 |---|---|---|
 | `/path/to/page.mu` | Same-node nav: load `path` on the currently-selected destination. | implicit |
-| `<32hex>` (bare 16-byte truncated identity hash, hex-encoded) | Cross-node nav to `nomadnetwork.node` at that hash, default path `/page/index.mu`. | 255-259 |
-| `<32hex>:/page/x.mu` | Cross-node nav with explicit path. | 255-259 |
-| `nnn@<32hex>[:/path]` | Same as bare-hash form; `nnn` is a shorthand for `nomadnetwork.node`. | 184-189 |
-| `lxmf@<32hex>` / `lxmf.delivery@<32hex>` | Open a conversation in the LXMF (messaging) layer, NOT a page fetch. | 184-189, 266-322 |
+| `<32hex>` (bare 16-byte truncated identity hash, hex-encoded) | Cross-node nav to `nomadnetwork.node` at that hash, default path `/page/index.mu`. | 292-306 |
+| `<32hex>:/page/x.mu` | Cross-node nav with explicit path. | 292-306 |
+| `nnn@<32hex>[:/path]` | Same as bare-hash form; `nnn` is a shorthand for `nomadnetwork.node`. | 206-215, 285-287 |
+| `lxmf@<32hex>` / `lxmf.delivery@<32hex>` | Open a conversation in the LXMF (messaging) layer, NOT a page fetch. | 206-215, 308-310 |
 
 `expand_shorthands` (`Browser.py:206-215`):
 
