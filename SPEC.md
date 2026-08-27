@@ -543,7 +543,7 @@ Upstream `LXMF/LXMRouter.py::get_announce_app_data` produces a 3-element msgpack
 ```python
 # LXMF/LXMRouter.py:1034-1050 in LXMF 1.1.1
 supported_functionality = [SF_COMPRESSION]                          # LXMF/LXMF.py:142
-peer_data = [display_name, stamp_cost, supported_functionality]     # stamp_cost = None unless 1 ≤ N ≤ 254
+peer_data = [display_name, stamp_cost, supported_functionality]     # stamp_cost = None unless 1 ≤ N ≤ 254 (§5.7.4)
 return msgpack.packb(peer_data)
 ```
 
@@ -870,6 +870,46 @@ Format: `fields[FIELD_TICKET] = [expires_unix_seconds(int), ticket(bytes, 16)]`.
 #### 5.7.4 The full stamp-cost field inventory
 
 LXMF announces (§4.3) carry a `stamp_cost` integer in the `app_data` msgpack array's element [1]. A receiver tells potential senders "you must do this much PoW to message me" by setting their delivery destination's `stamp_cost` and re-announcing. Senders who get this announce store the cost in `RNS.Identity.known_destinations[dest_hash][3].app_data` and apply it to outbound messages via `LXMRouter.outbound_stamp_costs`.
+
+##### Valid range, and what an out-of-range value means
+
+`stamp_cost` is **`None`, or an integer in `1..254`**. There is no other
+valid value. The range is not derivable from the algorithm — a stamp cost is
+a leading-zero-bit target over a SHA-256 digest, so *arithmetically* anything
+in `0..256` is satisfiable — it comes from the only path by which a conformant
+peer arrives at the value it announces, `LXMRouter.set_inbound_stamp_cost`
+(`LXMF/LXMRouter.py:378-394`):
+
+```python
+if stamp_cost == None:
+    delivery_destination.stamp_cost = None
+    return True
+elif type(stamp_cost) == int:
+    if stamp_cost < 1:    delivery_destination.stamp_cost = None   # not an error
+    elif stamp_cost < 255: delivery_destination.stamp_cost = stamp_cost
+    else:                  return False                            # refused
+    return True
+```
+
+Three rules follow, and the first two are easy to get wrong:
+
+| Announced value | Meaning |
+|---|---|
+| `None`, or absent element [1] | No stamp required |
+| `< 1` (including `0` and negatives) | **No stamp required.** `< 1` is stored as `None`. It is an ordinary "off", **not** a malformed announce — do not reject the announce over it |
+| `1..254` | Required cost, in leading zero bits |
+| `>= 255` | **Refused by the setter**, which returns `False` and leaves the destination's previous cost in place. A conformant peer therefore never *announces* `>= 255` |
+
+> ⚠️ **The reading side does not re-validate.**
+> `stamp_cost_from_app_data` (`LXMF/LXMF.py:174-185`) returns element [1]
+> verbatim — no type check, no range check. A peer that ignores the setter,
+> or a hostile one, can put any msgpack value there, including `255`, a
+> huge integer, a float, or a string. A receiver that wants the bounds above
+> **MUST enforce them itself** on the parse side. Clamp or treat as `None`;
+> do not feed an unvalidated value into a PoW loop, where a large cost
+> becomes an unbounded work request against your own CPU.
+
+See §4.3 for where the field sits in the announce `app_data` array.
 
 When a receiver gets a message:
 
@@ -2602,7 +2642,11 @@ Given input data and an `RNS.Link` in `ACTIVE` state (`RNS/Resource.py:248-478`)
    - `expected_proof = SHA256(plaintext || hash)` (32 bytes) — what the receiver will eventually return in the RESOURCE_PRF packet.
 
    The 4-byte prefix from step 3 is **not** in any of these inputs. The receiver strips the prefix and bz2-decompresses *before* hashing (§10.8 steps 3-5), so the sender must hash the uncompressed, unprefixed `plaintext` for the two sides to agree. A receiver that includes the prefix, or hashes the compressed form, rejects every legitimate Resource as `CORRUPT`.
-6. **Part split.** The encrypted body is sliced into parts of size `SDU = link.mtu - HEADER_MAXSIZE - IFAC_MIN_SIZE`. Each part becomes a packed `RNS.Packet(link, part_data, context=RESOURCE)`; the packed wire bytes are stored in `parts[i]` for later sending.
+6. **Part split.** The encrypted body is sliced into parts of size `sdu = link.mtu - HEADER_MAXSIZE - IFAC_MIN_SIZE`. Each part becomes a packed `RNS.Packet(link, part_data, context=RESOURCE)`; the packed wire bytes are stored in `parts[i]` for later sending.
+
+   **`sdu` follows the link's negotiated MTU (§6.6) and therefore differs per link** (`RNS/Resource.py:335-336`). At the base `Reticulum.MTU` of 500 it is 464; on a link whose §6.6 handshake settled 1064 it is 1028. It is **not** the class constant `Resource.SDU` (`RNS/Resource.py:103`), which is fixed at 464 and used only as the fallback when a link reports no MTU at all.
+
+   This is load-bearing in both directions, because **each side computes the part count from its own `sdu`** — the sender as `hashmap_entries = ⌈size / sdu⌉` (`:428`) and the receiver as `total_parts = ⌈size / sdu⌉` (`:187`). Both derive it from the same negotiated `link.mtu`, so they agree. A receiver that substitutes the fixed 464 disagrees with a 1064-MTU sender about how many parts exist *and* rejects every oversized part it receives. Nothing surfaces as an error — a part that cannot be placed is simply dropped — so the transfer makes no progress and times out looking like an unresponsive peer. See §10.4 for the quantities that behave the opposite way.
 7. **Hashmap.** Each part is fingerprinted to `MAPHASH_LEN = 4 bytes`. The full hashmap is `b"".join(map_hashes)`. **Hash collisions within the COLLISION_GUARD_SIZE = 2 × WINDOW_MAX + HASHMAP_MAX_LEN window are detected at construction time** — if two parts hash to the same 4-byte map_hash within that window, the random hash is regenerated and the whole hashmap is recomputed. Without this guard, the receiver can't disambiguate which part it just received from a part-request that named a colliding map_hash.
 
 After preparation: `total_parts = ceil(size / SDU)`; `total_size` includes metadata; `total_segments = ceil(total_size / MAX_EFFICIENT_SIZE)` where `MAX_EFFICIENT_SIZE = 1 MiB - 1 = 1_048_575`.
@@ -2637,7 +2681,7 @@ The first packet in the transfer. Body is `umsgpack.packb(dict)` with these keys
 | `l` | int | **Total segments** |
 | `q` | bytes(?) or None | **Request id** if this Resource carries the response to a Link REQUEST |
 | `f` | int | **Flags byte** (see below) |
-| `m` | bytes | **Hashmap fragment** for THIS advertisement segment — up to `HASHMAP_MAX_LEN = ⌊(LINK_MDU - 134)/4⌋` 4-byte map_hashes |
+| `m` | bytes | **Hashmap fragment** for THIS advertisement segment — up to `HASHMAP_MAX_LEN = ⌊(Link.MDU - 134)/4⌋` = **74** 4-byte map_hashes. Fixed — see the callout below |
 
 The flags byte `f` packs six booleans (`Resource.py:1307, 1356-1361`):
 
@@ -2649,6 +2693,34 @@ bit 3 : u — is_request (this Resource is the body of a Link REQUEST)
 bit 4 : p — is_response (this Resource is the body of a Link RESPONSE)
 bit 5 : x — has_metadata
 ```
+
+> ⚠️ **Which Resource quantities follow the negotiated MTU, and which are
+> fixed.** §10 uses `link.mtu`, `Link.MDU` and `link.mdu` within a few
+> paragraphs of each other. Only the lowercase, instance-level ones move
+> with §6.6 negotiation. Getting this backwards fails silently in both
+> directions:
+>
+> | Quantity | Derived from | Per link? | At base MTU |
+> |---|---|---|---|
+> | `resource.sdu` — part size | `link.mtu` (instance) | **yes** | 464 |
+> | `link.mdu` — link payload | `link.mtu` (instance, `Link.update_mdu`) | **yes** | 431 |
+> | `Resource.SDU` — fallback only | `RNS.Packet.MDU` (class) | no | 464 |
+> | `Link.MDU` | `Reticulum.MTU` (class) | no | 431 |
+> | `HASHMAP_MAX_LEN` | `Link.MDU` (class) | no | 74 |
+> | `COLLISION_GUARD_SIZE` | `HASHMAP_MAX_LEN` (class) | no | 224 |
+>
+> `HASHMAP_MAX_LEN` and `COLLISION_GUARD_SIZE` are evaluated once at import
+> (`RNS/Resource.py:1245-1247`) from the **class-level** `RNS.Link.MDU`
+> (`RNS/Link.py:73`), which comes from `Reticulum.MTU` and never from any
+> link. They are identical on every link regardless of what was negotiated,
+> and implementations **MUST NOT** recompute them from a negotiated MTU.
+> §10.7 derives `segment_index = part_index // HASHMAP_MAX_LEN`, so two
+> peers using different values disagree about which segment an HMU carries
+> and multi-segment transfers stall.
+>
+> The casing is upstream's only signal for this — `Link.MDU` is the class
+> constant, `link.mdu` the negotiated instance value. This spec follows the
+> same convention.
 
 `HASHMAP_MAX_LEN` matters: the entire hashmap may not fit in one ADV. If `n > HASHMAP_MAX_LEN`, the receiver reconstructs subsequent map segments via RESOURCE_HMU packets after exhausting the first slice (§10.7).
 
@@ -2700,6 +2772,38 @@ The advertisement is sent once on `Resource.advertise()`; if no part requests ar
 > the ADV is dropped before any allocation. A legitimate per-segment
 > `t` never reaches this bound, because senders split anything larger
 > than `MAX_EFFICIENT_SIZE` into separately-advertised segments.
+>
+> **The advertisement caps are only half of it — bound what actually
+> arrives, too.** The caps above and §16.9's `n` cap both act at parse
+> time, on the sender's *claims*. Nothing in §10 checks the parts
+> against those claims afterwards, and upstream imposes no such check:
+> `Resource.receive_part` (`RNS/Resource.py:833-931`) locates the
+> hashmap slot and buffers whatever arrived — no per-part size check,
+> no running total. `assemble()` never compares the assembled length
+> to `t` either; its only bounds are the bz2 `max_length`
+> (`AUTO_COMPRESS_MAX_SIZE`, 64 MiB) and the final integrity-hash
+> comparison, both of which run **after** every part is already in
+> memory. A peer that advertises a modest `t` and then sends parts
+> totalling far more is not caught by anything upstream does.
+>
+> Two additions, for category-3 implementations that own their
+> allocation policy (§17):
+>
+> 1. **Bound cumulative received bytes against `t`, and abort the
+>    transfer on the part that would overrun it.** This is the cheap,
+>    airtight one: `t` is already capped at parse time by the callout
+>    above, so the bound cannot reject a conformant sender, and it
+>    converts "buffer everything, then reject" into "reject on the
+>    part that overruns". Prefer this over a per-part bound — it is
+>    what actually protects memory.
+> 2. **If you additionally bound per-part size, derive the bound from
+>    `resource.sdu` — the link's negotiated value — never from the
+>    fixed `Resource.SDU`.** This is the trap. The obvious constant is
+>    464, which silently breaks every transfer from a peer whose §6.6
+>    handshake settled a larger MTU (see the MTU callout in §10.4 and
+>    §10.2 step 6). A per-part bound is strictly redundant with (1)
+>    for memory purposes; its only value is as a conformance check,
+>    and it needs `link.mtu` to be one.
 
 ### 10.5 RESOURCE_REQ — receiver requests parts
 
@@ -3940,6 +4044,8 @@ A typical nRF52 / RAK4631 / Heltec_T114 client carrying ~64KB of usable RAM shou
 - Not run as a transport node (skips most of §16.1's largest structures: link_table, reverse_table, tunnels, large path_table). Leaf clients only populate `path_table` for destinations they personally need, dramatically smaller.
 - Cap `Identity.known_destinations` at a sane size (e.g. 50-200 entries) and drop older ones when full. Upstream's unbounded growth is fine on a desktop; embedded clients need explicit eviction. Loss of an entry just means re-discovering via §7.1 path? on next outbound to that destination.
 - Bound `Resource.hashmap` size — a 1 MiB resource has 1024 parts at SDU=1024, so a 4 KiB hashmap. Reject incoming Resources whose advertised `n` would exceed your memory budget; the receiver's `delivery_resource_advertised` callback can return False to reject (§5.8.3 / NomadNet pattern).
+- Track cumulative received part bytes and abort the transfer on the part that would push the total past the advertised `t`. The `n` cap above bounds the hashmap; this bounds the part buffer it indexes into. Upstream does neither check at receive time (§10.4), so on an embedded target it is yours to add — and it is the one that keeps a peer from spending your whole heap before `assemble()` gets a chance to reject the result.
+- If you also bound individual part size, take the bound from the link's negotiated `sdu`, **not** the fixed `Resource.SDU = 464` — see §10.2 step 6. A 64 KB device is exactly the one likely to be on a link whose peer negotiated a larger MTU, and the fixed constant silently rejects every part from it.
 - Stick to `WINDOW_MAX_SLOW = 10` rather than `WINDOW_MAX_FAST = 75` for any Resource transfer to bound part-buffer memory.
 - Avoid registering Channel message types with large `pack()` outputs.
 

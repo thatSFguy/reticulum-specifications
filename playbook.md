@@ -191,6 +191,13 @@ Spec-only repos with a "the source is the source of truth" attitude die slowly b
 
 Each entry: date, one-line symptom, spec section that governs it, one-line fix, one-sentence lesson. Append-only. New entries go at the top.
 
+### 2026-08-27 — Resource parts sized against the fixed SDU instead of the link's
+
+- **Symptom:** Large Resource transfers from some peers stall and time out; small ones from the same peers succeed. No error anywhere — the receiver logs nothing, the sender just never gets its parts acknowledged and gives up. Correlates with peer transport: TCP peers fail, LoRa/serial peers work.
+- **Spec section:** §10.2 step 6, and the MTU callout in §10.4. `resource.sdu = link.mtu - HEADER_MAXSIZE - IFAC_MIN_SIZE` follows the §6.6 negotiated MTU and differs per link — 464 at the base MTU of 500, 1028 on a link that settled 1064. The class constant `Resource.SDU` is fixed at 464 and is only a fallback for links reporting no MTU. A receiver measuring inbound parts against 464 rejects every part from a 1064-MTU peer, and also disagrees with that peer about `total_parts = ⌈size / sdu⌉`.
+- **Fix:** Derive the per-part bound from the link's negotiated MTU, not the constant. Found implementing a receive-time per-part bound in a clean-room Go implementation against a peer at MTU 1064 sending 1028-byte parts.
+- **Lesson:** A part the receiver cannot place is dropped, not rejected — so a sizing disagreement presents as an unresponsive peer, not as a size error. Whenever a symptom is "no progress, no error", suspect a quantity that one side computes and the other silently re-derives. The interface transport correlating with failure is the tell: it is standing in for `HW_MTU`, which is what actually varies. Upstream's only signal for which quantities move with negotiation is the casing — `Link.MDU` fixed, `link.mdu` negotiated — which is easy to read straight past.
+
 ### 2026-05-19 — fwdsvc dropped parts bundled into an exhausted RESOURCE_REQ
 
 - **Symptom:** Images relayed mobile→mobile through the Fwd service never arrive (whole LXMF message lost); mobile→Sideband through the same service works. Recipient logs hundreds of `RESOURCE chunk did not match any known hashmap slot`. Only triggers for resources large enough to need RESOURCE_HMU (>`HASHMAP_MAX_LEN` ≈ 74 parts).
