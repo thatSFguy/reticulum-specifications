@@ -2,7 +2,7 @@
 
 A byte-level reference for implementing Reticulum-compatible clients. This document focuses on what implementations need to interop with the canonical Python implementation ([`markqvist/Reticulum`](https://github.com/markqvist/Reticulum) and [`markqvist/LXMF`](https://github.com/markqvist/LXMF)) plus the existing client ecosystem (Sideband, Nomadnet, MeshChat, the various firmware projects).
 
-**Last verified against:** `RNS 1.5.0` / `LXMF 1.1.1` / `NomadNet 1.2.8` (the three pinned in [`tools/requirements.txt`](tools/requirements.txt)), plus these non-pip sources, checked at the commits named: `markqvist/RNode_Firmware@d39339f` (2026-04-24), `attermann/microReticulum@40fa628` (2026-07-20), `thatSFguy/reticulum-lora-repeater@4adb57b` (2026-06-24). Each section's source citations were re-checked against these versions; runtime verifiers in [`tools/`](tools/) lock the wire-format claims in against actually-running upstream code. When you upgrade past these, re-run every `tools/verify_*.py` and look for `FAIL`s.
+**Last verified against:** `RNS 1.5.0` / `LXMF 1.1.1` (pinned in [`tools/requirements.txt`](tools/requirements.txt), the verifier environment) and `NomadNet 1.2.8` (pinned separately in [`tools/requirements-docs.txt`](tools/requirements-docs.txt) — §11.6 is informational, and no verifier runs against it), plus these non-pip sources, checked at the commits named: `markqvist/RNode_Firmware@d39339f` (2026-04-24), `attermann/microReticulum@40fa628` (2026-07-20), `thatSFguy/reticulum-lora-repeater@4adb57b` (2026-06-24). Each section's source citations were re-checked against these versions; runtime verifiers in [`tools/`](tools/) lock the wire-format claims in against actually-running upstream code. When you upgrade past these, re-run every `tools/verify_*.py` and look for `FAIL`s.
 
 Source citations refer to the standard `pip install rns lxmf` install layout (`RNS/`, `LXMF/`).
 
@@ -3203,7 +3203,7 @@ Default timeout is `link.rtt × link.traffic_timeout_factor + Resource.RESPONSE_
 <details>
 <summary>Click to expand — NomadNet-layer conventions on top of §11 (form data env vars, link target syntax, micron page headers, <code>/file/</code> downloads, ALLOW_LIST, partials). Skip if you're not implementing a NomadNet client; the §11 wire form is the protocol layer.</summary>
 
-NomadNet pages are served over this protocol with these conventions. Line citations in this section are against **NomadNet 1.2.8** (pinned in [`tools/requirements.txt`](tools/requirements.txt) alongside RNS and LXMF). Source-of-truth for all of these is upstream `markqvist/NomadNet`: `nomadnet/Node.py` (server) and `nomadnet/ui/textui/Browser.py` (client).
+NomadNet pages are served over this protocol with these conventions. Line citations in this section are against **NomadNet 1.2.8**, pinned in [`tools/requirements-docs.txt`](tools/requirements-docs.txt). That pin is deliberately kept out of the verifier environment: per [`agent.md`](agent.md) §0 NomadNet is not an admissible source for a normative claim, which is why this section is informational and why no `tools/` verifier asserts anything in it. The pin exists so these line citations have a reproducible baseline to be re-anchored against, nothing more. Source-of-truth for all of these is upstream `markqvist/NomadNet`: `nomadnet/Node.py` (server) and `nomadnet/ui/textui/Browser.py` (client).
 
 #### 11.6.1 Paths and the `nomadnetwork.node` aspect
 

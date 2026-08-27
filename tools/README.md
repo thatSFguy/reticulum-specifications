@@ -12,8 +12,13 @@ Self-contained Python scripts that test claims in [`../SPEC.md`](../SPEC.md) aga
 ## Required environment
 
 ```
-pip install rns lxmf
+pip install -r requirements.txt
 ```
+
+`requirements-docs.txt` is a separate, **docs-only** pin (currently NomadNet)
+used to re-anchor the informational §11.6 citations. CI does not install it and
+no verifier imports it — see the comments in that file for why it is kept out of
+this environment.
 
 The scripts read `RNS.__version__` at startup and print it in their output so a future reader can tell which RNS version a verification ran against.
 
