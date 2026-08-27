@@ -19,7 +19,7 @@ The scripts read `RNS.__version__` at startup and print it in their output so a 
 
 ## Status
 
-Populated against RNS 1.5.0 / LXMF 1.1.1 (all 16 scripts re-run green at this pin):
+Populated against RNS 1.5.0 / LXMF 1.1.1 (all 17 scripts re-run green at this pin):
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|
@@ -38,6 +38,7 @@ Populated against RNS 1.5.0 / LXMF 1.1.1 (all 16 scripts re-run green at this pi
 | `verify_rnode_split.py` | §8.3 — RNode air-frame split-packet TX/RX state machines | ✅ |
 | `verify_msgpack_quirk.py` | §9.3 — encoding name as bytes vs str affects upstream parsing | ✅ |
 | `verify_stamps.py` | §5.7 — workblock determinism, PoW stamp search/validate, ticket shortcut | ✅ |
+| `verify_resource_sizing.py` | §10.2 step 6, §10.4, §5.7.4 — which Resource quantities follow the negotiated link MTU vs. which are fixed class constants; that upstream still imposes no receive-time part-size check; and the `stamp_cost` `1..254` range with its `< 1 → None` / `>= 255` refused rules | ✅ |
 | `verify_ratchet_dedup.py` | §7.3 / §4.5 step 6.3 — confirms replay defence is keyed on `random_blob`, NOT on `(dest_hash, ratchet_pub)` | ✅ |
 | `regen_identities.py` | regenerates `test-vectors/identities.json` | ✅ |
 | `regen_announces.py` | regenerates `test-vectors/announces.json` (deterministic announce wire bytes, with and without ratchet) | ✅ |

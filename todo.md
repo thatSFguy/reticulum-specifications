@@ -85,6 +85,16 @@ to remove their markers:
 - [x] **`tools/verify_rnode_split.py` locks in §8.3.** Done.
 - [x] **`tools/verify_link_handshake.py` locks in §6.2 / §6.3.** Done.
 
+- [x] **A verifier for the Resource MTU-sizing quantities and the `stamp_cost` range.**
+      Done — `tools/verify_resource_sizing.py`, closing issues #31, #32 and #33. Asserts the
+      §10.4 fixed constants (`Resource.SDU`, `Link.MDU`, `HASHMAP_MAX_LEN`,
+      `COLLISION_GUARD_SIZE`) and that `Link.MDU` still derives from `Reticulum.MTU` rather
+      than any link; that `Resource.__init__` still derives the part `sdu` from
+      `link.mtu`; that upstream still imposes no receive-time part-size check (which is
+      what lets §10.4 tell implementations to add their own); and the §5.7.4 `stamp_cost`
+      rules over eight cases, plus that the parse side still returns element [1]
+      unvalidated. Mutation-tested — breaking each upstream behaviour fails the verifier.
+
 - [x] **A verifier for the `LXMPeer` / `LXMRouter` request-path and error constants.**
       Done — `tools/verify_lxmf_peer_constants.py`. Asserts the eight `LXMPeer.ERROR_*`
       response bytes, the documented `0xf2` gap, and the five request-path strings across
