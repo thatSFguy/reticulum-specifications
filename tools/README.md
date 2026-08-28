@@ -66,7 +66,7 @@ error, so the list can't rot.
 
 ## Status
 
-Populated against RNS 1.5.0 / LXMF 1.1.1 (all 19 scripts re-run green at this pin):
+Populated against RNS 1.5.0 / LXMF 1.1.1 (all 20 scripts re-run green at this pin):
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|
@@ -76,6 +76,7 @@ Populated against RNS 1.5.0 / LXMF 1.1.1 (all 19 scripts re-run green at this pi
 | `verify_announce_app_data.py` | §4.3 — LXMF announce app_data 2-element form, parser tolerance | ✅ |
 | `verify_announce_roundtrip.py` | §4.1, §4.2, §4.5 — announce body layout, signature, dest_hash recompute, tamper rejection | ✅ |
 | `verify_lxmf_opportunistic.py` | §5.1, §5.2, §5.5, §5.6 — full identity → encrypt → decrypt → parse round-trip | ✅ |
+| `verify_canonical_msgpack.py` | §5.6, §5.6.1 — canonical msgpack is a MUST for stamped messages and a SHOULD otherwise; round-trips a non-canonical integer envelope through upstream both ways and reads its verdict, including the unstamped control case | ✅ |
 | `verify_lxmf_fields.py` | §5.9 — every `FIELD_*` / `AM_*` / `RENDERER_*` / `PN_META_*` / `SF_*` / reaction-comment-continuation dict-index constant matches upstream, plus an audit that fails if upstream adds an un-enumerated constant | ✅ |
 | `verify_lxmf_peer_constants.py` | §5.8.1, §5.8.2 — propagation-node request-path strings across both destinations and the eight `LXMPeer.ERROR_*` response bytes (incl. the unallocated `0xf2`), plus an audit that fails if upstream adds an un-enumerated `ERROR_*` or `*_PATH` constant | ✅ |
 | `verify_proof_packet.py` | §6.5 — implicit (64B) and explicit (96B) proof body forms, validator length-dispatch | ✅ |

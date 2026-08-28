@@ -111,6 +111,17 @@ to remove their markers:
       rebroadcast gate as one three-term boolean when upstream nests the
       rate-limit check inside it (`RNS/Transport.py:2267-2271`).
 
+- [x] **A verifier for canonical msgpack encoding of signing inputs.**
+      Done — `tools/verify_canonical_msgpack.py`. Hands upstream a stamped message
+      whose `fields` key is encoded `0xd0 0x06` (int8) instead of `0x06` (positive
+      fixint) and asserts `signature_validated == False` with
+      `unverified_reason == SIGNATURE_INVALID`, plus the control that the *same*
+      non-canonical encoding verifies fine when the message is unstamped. That
+      control is what justifies §5.6.1 splitting MUST from SHOULD on stamp
+      presence rather than requiring canonical encoding everywhere.
+      Mutation-tested: removing upstream's re-encode at `LXMF/LXMessage.py:758`,
+      or making `_pack_integer` emit the wide envelope, each turns it red.
+
 - [x] **A verifier for the propagation `/get` retrieval round.**
       Done — `tools/verify_propagation_get.py`, closing issue #38. Drives upstream
       `LXMRouter.lxmf_propagation` and `LXMRouter.message_get_request` directly and asserts

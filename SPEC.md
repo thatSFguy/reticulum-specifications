@@ -780,9 +780,72 @@ Different msgpack encoders produce subtly different byte sequences for the same 
 
 If either matches, the signature is valid. Strict raw-only verification fails interop with anything that's been through a msgpack re-encode somewhere in the chain.
 
+> ⚠️ **Upstream does not try both — it selects one, on stamp presence.**
+> `unpack_from_bytes` re-encodes only inside the `len(unpacked_payload) > 4`
+> branch (`LXMF/LXMessage.py:755` → `if len(unpacked_payload) > 4:`, with the
+> re-encode at `:758` → `packed_payload = msgpack.packb(unpacked_payload)`).
+> A **stamped** message is therefore verified against variant 2 *only*. An
+> **unstamped** one is verified against variant 1 *only*, because
+> `packed_payload` keeps the raw wire bytes read at `:751`.
+>
+> Trying both, as described above, is strictly more tolerant than upstream and
+> remains the right thing for a receiver to do. But a **sender** must not
+> infer from it that variant 1 is available as a safety net: for a stamped
+> message there is no raw-bytes path to fall back to. See §5.6.1.
+
 #### 5.6.1 Canonical encoder for senders
 
-RNS bundles `umsgpack` (`RNS/vendor/umsgpack.py`) and uses it for every signing input on the upstream Python side. Senders SHOULD produce signing-input bytes that match `umsgpack`'s output for the LXMF payload types so receivers' path-1 (raw) verification succeeds and the path-2 (decode + re-encode) fallback stays defensive rather than load-bearing:
+RNS bundles `umsgpack` (`RNS/vendor/umsgpack.py`) and uses it for every signing input on the upstream Python side.
+
+> ⚠️ **MUST when the message carries a stamp; SHOULD otherwise.**
+> A sender **MUST** produce signing-input bytes byte-identical to
+> `umsgpack`'s output whenever the message carries a §5.7 stamp. Without a
+> stamp the requirement is a **SHOULD** — worth meeting, but a non-canonical
+> encoder still interoperates. (verified by `tools/verify_canonical_msgpack.py`,
+> which round-trips both forms through upstream and reads its verdict.)
+>
+> The asymmetry is structural, not a matter of emphasis. The signature covers
+> the **4-element** payload (`LXMF/LXMessage.py:367` →
+> `hashed_part += msgpack.packb(self.payload)`); the stamp is appended
+> *afterwards* (`:373` → `if self.stamp != None: self.payload.append(self.stamp)`),
+> so the **5-element** array is what reaches the wire (`:381` →
+> `packed_payload = msgpack.packb(self.payload)`). For a stamped message the
+> signed bytes are therefore *never* the wire bytes, and the receiver has to
+> rebuild them.
+>
+> That rebuild is an equality between two independently produced encodings —
+> the sender's `:367` output and the receiver's `:758` output. Upstream Python
+> satisfies it trivially because the same encoder runs on both sides, which is
+> precisely why the requirement is invisible from the Python side and has to
+> be stated normatively here. Any divergence — an integer one envelope wider,
+> a `str` where `bin` belongs, a `float32` — yields
+> `signature_validated = False` with
+> `unverified_reason = SIGNATURE_INVALID (0x02)` (`:809-813` →
+> `message.unverified_reason = LXMessage.SIGNATURE_INVALID`), and the message
+> is dropped by any receiver that enforces signatures.
+>
+> **`message_id` fails with it.** It derives from the same rebuilt bytes
+> (`:763` → `message_hash = RNS.Identity.full_hash(hashed_part)`), so a
+> non-canonical sender also produces a `message_id` the receiver does not
+> agree with. Stamp validation (§5.7.2) is keyed on `message_id`, so it fails
+> alongside the signature — one root cause presenting as two independent
+> bugs.
+
+> **Why this is unusually hard to diagnose.** Four properties each point
+> away from the encoder:
+>
+> - **Unstamped messages work at every size.** The bug tracks stamp presence,
+>   not payload size, but stamps correlate with the senders that set a
+>   `stamp_cost` — so it presents as a peer-specific or size-specific fault.
+> - **Python ↔ Python is unaffected**, because upstream's re-encode reproduces
+>   its own bytes. The reference implementation cannot reproduce the failure.
+> - **It fails after the Resource transfer completes and is proved** (§10.8),
+>   so it reads as a large-payload or transport problem rather than a parse
+>   one.
+> - **A self-round-trip passes**, because both ends agree on the same
+>   non-canonical bytes. Only a round-trip against upstream exposes it.
+
+Senders producing canonical output must match `umsgpack`'s choices for the LXMF payload types:
 
 | Logical type | umsgpack canonical form |
 |---|---|
@@ -793,6 +856,8 @@ RNS bundles `umsgpack` (`RNS/vendor/umsgpack.py`) and uses it for every signing 
 | Map | sorted-by-insertion-order — umsgpack preserves input order, does NOT lex-sort keys |
 
 Mismatches most often originate from integer width (a timestamp encoded as `uint32` by one library and `float64` by another round-trips the same logical value but produces different bytes) and from JS encoders that prefer `str` for byte strings or `float32` for non-integer numbers. Implementing `umsgpack`'s "minimum width that fits" rule for ints and "always float64" rule for floats is sufficient for byte-identical signature inputs against upstream Python LXMF.
+
+The **integer row is the one that bites in practice.** A decoder that selects an envelope from a value's static type rather than its magnitude will re-emit a small `fields` key such as `6` as `0xd0 0x06` (`int8`) instead of `0x06` (positive fixint). It is valid msgpack, decodes to the same integer, and is one byte longer than `_pack_integer` emits (`RNS/vendor/umsgpack.py:288` → `def _pack_integer(obj, fp, options)`) — which is enough to void the signature on every stamped message while leaving unstamped ones working.
 
 ### 5.7 LXMF stamps and tickets (anti-spam)
 
