@@ -4,28 +4,28 @@ What `LXMRouter.process_outbound` actually does on each tick — the layer that 
 
 The three send-* flows describe what happens for *one* attempt of each method. This doc describes how attempts are scheduled, how the per-message state advances, and when a message moves from retry-eligible to terminally `FAILED`. It is the missing piece for any client that wants delivery semantics matching upstream Sideband.
 
-Pinned against **RNS 1.2.4 / LXMF 0.9.7**. Line numbers below are from those versions.
+Pinned against **RNS 1.5.0 / LXMF 1.1.1**. Line numbers below are from those versions.
 
 ---
 
 ## Cadence: how often process_outbound runs
 
-`LXMRouter.jobloop` (`LXMF/LXMRouter.py:889-899`) is a daemon thread that wakes every `PROCESSING_INTERVAL` seconds and calls `LXMRouter.jobs`, which dispatches to `process_outbound` whenever its tick counter is divisible by `JOB_OUTBOUND_INTERVAL`:
+`LXMRouter.jobloop` (`LXMF/LXMRouter.py:912-921` → `def jobloop(self)`) is a daemon thread that wakes every `PROCESSING_INTERVAL` seconds and calls `LXMRouter.jobs`, which dispatches to `process_outbound` whenever its tick counter is divisible by `JOB_OUTBOUND_INTERVAL`:
 
 | Constant | Value | File:line |
 |---|---|---|
 | `PROCESSING_INTERVAL` | `4` (seconds) | `LXMF/LXMRouter.py:31` |
-| `JOB_OUTBOUND_INTERVAL` | `1` | `LXMF/LXMRouter.py:871` |
+| `JOB_OUTBOUND_INTERVAL` | `1` | `LXMF/LXMRouter.py:871` → `JOB_OUTBOUND_INTERVAL  = 1` |
 
 So the **effective outbound tick is every 4 seconds.** Any per-message timer (path-request defer, retry backoff, link-establish timeout) is sampled at this granularity — a 10-second backoff isn't actually 10 seconds, it's "first tick at or after `now + 10s`."
 
-`handle_outbound` also kicks `process_outbound` directly on a fresh thread when a new message is queued (`LXMF/LXMRouter.py:1793`), so the first attempt doesn't wait for the next jobloop tick.
+`handle_outbound` also kicks `process_outbound` directly on a fresh thread when a new message is queued (`LXMF/LXMRouter.py:1793` → `threading.Thread(target=self.process_outbound, daemon=True).start()`), so the first attempt doesn't wait for the next jobloop tick.
 
 ---
 
 ## Constants that drive retry behavior
 
-All on `LXMRouter`, all module-cited (`LXMF/LXMRouter.py:30-38`):
+All on `LXMRouter`, all module-cited (`LXMF/LXMRouter.py:30-38` → `MAX_DELIVERY_ATTEMPTS = 5`):
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -62,7 +62,7 @@ The valid-method enum is `LXMessage.OPPORTUNISTIC = 0x01`, `DIRECT = 0x02`, `PRO
 
 ## Per-tick decision tree
 
-`process_outbound` (`LXMF/LXMRouter.py:2682`) holds `outbound_processing_lock` across the whole tick (line 2514-2515) and walks `pending_outbound` once. For each message, the top-of-loop branches on terminal state first:
+`process_outbound` (`LXMF/LXMRouter.py:2682`) holds `outbound_processing_lock` across the whole tick (`:2683-2684` → `with self.outbound_processing_lock`) and walks `pending_outbound` once. For each message, the top-of-loop branches on terminal state first:
 
 | Branch | File:line | Effect |
 |---|---|---|
@@ -74,7 +74,7 @@ The valid-method enum is `LXMessage.OPPORTUNISTIC = 0x01`, `DIRECT = 0x02`, `PRO
 
 The non-terminal branch in turn switches on `lxmessage.method`:
 
-### OPPORTUNISTIC branch (`LXMF/LXMRouter.py:2566-2592`)
+### OPPORTUNISTIC branch (`LXMF/LXMRouter.py:2735-2764` → `if lxmessage.method == LXMessage.OPPORTUNISTIC`)
 
 ```python
 if lxmessage.method == LXMessage.OPPORTUNISTIC:
@@ -107,7 +107,7 @@ Key behaviors:
 - **The `else` branch is the actual retransmit:** increment attempts, schedule `+ DELIVERY_RETRY_WAIT (=10s)`, fire `lxmessage.send()`.
 - **`fail_message` runs only after `delivery_attempts > MAX_DELIVERY_ATTEMPTS`** — i.e. attempts 1..5 are tried, attempt 6 trips `fail_message`.
 
-### DIRECT branch (`LXMF/LXMRouter.py:2596-2673`)
+### DIRECT branch (`LXMF/LXMRouter.py:2765-2845` → `elif lxmessage.method == LXMessage.DIRECT`)
 
 Two sub-paths, decided by whether a usable link already exists in `direct_links` or `backchannel_links`:
 
@@ -141,12 +141,12 @@ The `set_link_established_callback(self.process_outbound)` re-entry is what lets
 
 `fail_message` runs at line 2671-2673 once `delivery_attempts > MAX_DELIVERY_ATTEMPTS`.
 
-### PROPAGATED branch (`LXMF/LXMRouter.py:2677-2730`)
+### PROPAGATED branch (`LXMF/LXMRouter.py:2846-2899` → `elif lxmessage.method == LXMessage.PROPAGATED`)
 
 Structurally mirrors DIRECT but against `outbound_propagation_link` / `outbound_propagation_node` instead of per-recipient direct links. Two early failures:
 
-- `outbound_propagation_node == None` → immediate `fail_message` (line 2680-2682). LXMF will not attempt PROPAGATED without an explicitly configured node — there is **no automatic fallback** from DIRECT/OPPORTUNISTIC to PROPAGATED. Sideband configures one via `LXMRouter.set_outbound_propagation_node` at startup; a clean-room client must do the same before the user picks PROPAGATED.
-- All `MAX_DELIVERY_ATTEMPTS` exhausted → `fail_message` (line 2728-2730).
+- `outbound_propagation_node == None` → immediate `fail_message` (`:2849-2851` → `if self.outbound_propagation_node == None`). LXMF will not attempt PROPAGATED without an explicitly configured node — there is **no automatic fallback** from DIRECT/OPPORTUNISTIC to PROPAGATED. Sideband configures one via `LXMRouter.set_outbound_propagation_node` at startup; a clean-room client must do the same before the user picks PROPAGATED.
+- All `MAX_DELIVERY_ATTEMPTS` exhausted → `fail_message` (`:2884-2899`).
 
 Otherwise the link-state branching is identical to DIRECT: ACTIVE → send / CLOSED → drop and retry / no-link → establish-or-path-request.
 
@@ -154,7 +154,7 @@ Otherwise the link-state branching is identical to DIRECT: ACTIVE → send / CLO
 
 ## The terminal transition: `fail_message`
 
-`LXMF/LXMRouter.py:2395-2402`:
+`LXMF/LXMRouter.py:2564-2578` → `def fail_message(self, lxmessage)`:
 
 ```python
 def fail_message(self, lxmessage):
@@ -192,17 +192,17 @@ These are common assumptions that don't match upstream behavior. Listed here so 
 
 | Concern | File | Function / line |
 |---|---|---|
-| Class constants | `LXMF/LXMRouter.py` | 30-83 |
-| Job interval table | `LXMF/LXMRouter.py` | 852-859 |
-| `jobs` dispatcher | `LXMF/LXMRouter.py` | 860-887 |
-| `jobloop` daemon | `LXMF/LXMRouter.py` | 889-899 |
-| Pre-emptive path request on submit | `LXMF/LXMRouter.py` | 1675-1679 |
-| `handle_outbound` thread kick | `LXMF/LXMRouter.py` | 1691 |
-| `process_outbound` entry + lock | `LXMF/LXMRouter.py` | 2513-2515 |
-| Terminal-state branches (DELIVERED / SENT-PROPAGATED / CANCELLED / REJECTED) | `LXMF/LXMRouter.py` | 2517-2558 |
-| OPPORTUNISTIC retry branch | `LXMF/LXMRouter.py` | 2566-2592 |
-| DIRECT retry branch | `LXMF/LXMRouter.py` | 2596-2673 |
-| PROPAGATED retry branch | `LXMF/LXMRouter.py` | 2677-2730 |
-| `fail_message` | `LXMF/LXMRouter.py` | 2395-2402 |
+| Class constants | `LXMF/LXMRouter.py` | 30-45 |
+| Job interval table | `LXMF/LXMRouter.py` | 871-879 |
+| `jobs` dispatcher | `LXMF/LXMRouter.py` | 880-910 |
+| `jobloop` daemon | `LXMF/LXMRouter.py` | 912-921 |
+| Pre-emptive path request on submit | `LXMF/LXMRouter.py` | 1777-1781 |
+| `handle_outbound` thread kick | `LXMF/LXMRouter.py` | 1793 |
+| `process_outbound` entry + lock | `LXMF/LXMRouter.py` | 2682-2684 |
+| Terminal-state branches (DELIVERED / SENT-PROPAGATED / CANCELLED / REJECTED) | `LXMF/LXMRouter.py` | 2700-2734 |
+| OPPORTUNISTIC retry branch | `LXMF/LXMRouter.py` | 2735-2764 |
+| DIRECT retry branch | `LXMF/LXMRouter.py` | 2765-2845 |
+| PROPAGATED retry branch | `LXMF/LXMRouter.py` | 2846-2899 |
+| `fail_message` | `LXMF/LXMRouter.py` | 2564-2578 |
 | Message states | `LXMF/LXMessage.py` | 13-22 |
 | Delivery methods | `LXMF/LXMessage.py` | 29-33 |

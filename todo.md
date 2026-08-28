@@ -102,15 +102,14 @@ to remove their markers:
       which is the check that would have caught the missing `ERROR_INVALID_STAMP` and the
       wrong `ERROR_THROTTLED` / `ERROR_NOT_FOUND` values (see the README errata).
 
-- [ ] **Re-anchor the 12 flow docs still declaring the pre-1.5.0 pin.**
-      `tools/check_citations.py` gates pin declarations against
-      `tools/requirements.txt`; the 12 documents in `tools/citations-exempt.txt`
-      are grandfathered and each needs a pass: re-read against the pinned
-      install, correct the line citations (anchor the load-bearing ones per
-      `agent.md` §1), update the header, delete its line from the exempt file.
-      `flows/receive-propagated-lxmf.md` was done as part of the issue #38 fix
-      and is the worked example. The exempt list errors on entries that are no
-      longer stale, so it drains rather than rots.
+- [x] **Re-anchor the 12 flow docs still declaring the pre-1.5.0 pin.**
+      Done — all 12 re-read against `rns==1.5.0` / `lxmf==1.1.1`, every line
+      citation corrected, the load-bearing ones anchored per `agent.md` §1, and
+      `tools/citations-exempt.txt` drained to empty. `flows/` went from 0 to 111
+      anchored citations. Substantive corrections beyond line drift are noted in
+      the commit; the largest is `forward-announce.md` §2, which presented the
+      rebroadcast gate as one three-term boolean when upstream nests the
+      rate-limit check inside it (`RNS/Transport.py:2267-2271`).
 
 - [x] **A verifier for the propagation `/get` retrieval round.**
       Done — `tools/verify_propagation_get.py`, closing issue #38. Drives upstream

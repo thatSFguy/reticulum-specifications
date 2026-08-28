@@ -1,29 +1,19 @@
 # Documents allowed to declare a stale pin, with a reason and an owner action.
 #
 # check_citations.py fails when a document's "Pinned against **RNS x / LXMF y**"
-# header disagrees with tools/requirements.txt. Everything listed here is
-# grandfathered: the doc predates the 1.5.0 / 1.1.1 bump and has not been
-# re-anchored yet.
+# header disagrees with tools/requirements.txt. Anything listed here is
+# grandfathered instead.
 #
 # This list is a countdown, not a parking lot. An entry whose pin declaration
 # is CURRENT is itself an error — the checker tells you to delete the line —
 # so the list cannot rot in the way the citations it covers already have.
 #
 # To clear an entry: re-read the flow against the pinned install, correct its
-# line citations (anchor the load-bearing ones), update the header, delete the
-# line here. See todo.md.
+# line citations (anchor the load-bearing ones per agent.md §1), update the
+# header, delete the line here.
 #
 # format:  <path>: <reason>
 
-flows/forward-announce.md: pin predates the 1.5.0 bump; not yet re-anchored
-flows/lxmf-outbound-retry.md: pin predates the 1.5.0 / 1.1.1 bump; not yet re-anchored
-flows/path-discovery.md: pin predates the 1.5.0 bump; not yet re-anchored
-flows/receive-announce.md: pin predates the 1.5.0 bump; not yet re-anchored
-flows/receive-link-lxmf.md: pin predates the 1.5.0 / 1.1.1 bump; not yet re-anchored
-flows/receive-opportunistic-lxmf.md: pin predates the 1.5.0 / 1.1.1 bump; not yet re-anchored
-flows/receive-resource.md: pin predates the 1.5.0 bump; not yet re-anchored
-flows/send-announce.md: pin predates the 1.5.0 bump; not yet re-anchored
-flows/send-link-lxmf.md: pin predates the 1.5.0 / 1.1.1 bump; not yet re-anchored
-flows/send-opportunistic-lxmf.md: pin predates the 1.5.0 / 1.1.1 bump; not yet re-anchored
-flows/send-propagated-lxmf.md: pin predates the 1.5.0 / 1.1.1 bump; not yet re-anchored
-flows/send-resource.md: pin predates the 1.5.0 bump; not yet re-anchored
+# EMPTY. All 12 flow documents were re-anchored to rns==1.5.0 / lxmf==1.1.1.
+# Add an entry here only as a deliberate, time-boxed exception — not as a way
+# to land a document that cites a version the repo does not pin.

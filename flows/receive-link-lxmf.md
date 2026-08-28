@@ -1,6 +1,6 @@
 # Flow: receive an LXMF message over a Reticulum Link
 
-The inverse of [`send-link-lxmf.md`](send-link-lxmf.md), covering both halves of the responder side: accepting the inbound LINKREQUEST, sending the LRPROOF, then handling LXMF DATA on the established link. Pinned against **RNS 1.2.4 / LXMF 0.9.7**; cross-references [`../SPEC.md`](../SPEC.md) §6 (Link), §6.5 (PROOF), §6.6 (signalling), §6.7 (KEEPALIVE/teardown), §10 (Resource).
+The inverse of [`send-link-lxmf.md`](send-link-lxmf.md), covering both halves of the responder side: accepting the inbound LINKREQUEST, sending the LRPROOF, then handling LXMF DATA on the established link. Pinned against **RNS 1.5.0 / LXMF 1.1.1**; cross-references [`../SPEC.md`](../SPEC.md) §6 (Link), §6.5 (PROOF), §6.6 (signalling), §6.7 (KEEPALIVE/teardown), §10 (Resource).
 
 ---
 
@@ -14,7 +14,7 @@ A Reticulum DATA packet with `packet_type = LINKREQUEST (2)`, addressed to the r
 initiator_X25519_pub(32) || initiator_Ed25519_pub(32) || [signalling(3)]
 ```
 
-`Transport.inbound` (`RNS/Transport.py:2030-2060`) recognizes `packet_type == LINKREQUEST + destination_type == SINGLE`, looks up the destination in `destinations_map`, and calls `Destination.receive(packet)` which routes to `Destination.incoming_link_request(data, packet)` per `RNS/Destination.py:403-450` (`receive` at 403, dispatches to `incoming_link_request` at 420):
+`Transport.inbound` (`RNS/Transport.py:2456` → `elif packet.packet_type == RNS.Packet.LINKREQUEST and not link_request_handled:`) recognizes `packet_type == LINKREQUEST + destination_type == SINGLE`, looks up the destination in `destinations_map`, and calls `Destination.receive(packet)` which routes to `Destination.incoming_link_request(data, packet)` per `RNS/Destination.py:414-435` (`receive` at 414 → `if packet.packet_type == RNS.Packet.LINKREQUEST:`, dispatching to `incoming_link_request` at `:431`):
 
 ```python
 def receive(self, packet):
@@ -24,7 +24,7 @@ def receive(self, packet):
 
 ### 2. Responder builds Link state via `Link.validate_request`
 
-`RNS/Link.py:186-230`. Length-checks the body (`ECPUBSIZE` or `ECPUBSIZE + LINK_MTU_SIZE`), rejects otherwise. On success:
+`RNS/Link.py:186-227` → `def validate_request(owner, data, packet)`. Length-checks the body (`ECPUBSIZE` or `ECPUBSIZE + LINK_MTU_SIZE`), rejects otherwise. On success:
 
 1. Build a `Link` object with `peer_pub_bytes = data[:32]` and `peer_sig_pub_bytes = data[32:64]`.
 2. `set_link_id(packet)` per §6.3 — the link_id derives from `Packet.get_hashable_part`, invariant under HEADER_1↔HEADER_2 conversion.
@@ -35,7 +35,7 @@ def receive(self, packet):
 
 ### 3. Responder emits LRPROOF
 
-`RNS/Link.py:371-381`. Body per §6.2:
+`RNS/Link.py:366-375` → `def prove(self)`. Body per §6.2:
 
 ```
 proof_data = signature(64) || responder_X25519_pub(32) || [signalling(3)]
@@ -47,7 +47,7 @@ where `signature = sign(link_id || responder_X25519_pub || responder_long_term_E
 
 After the initiator validates the LRPROOF and sends `Link.LRRTT (0xFE)` carrying its measured RTT, the responder receives it at `Link.receive` line 1056-1059 and calls `rtt_packet`. The responder's RTT cache updates and `Link.STATUS = ACTIVE` triggers the `link_established_callback` registered via `Destination.set_link_established_callback`.
 
-For LXMF, that callback is `LXMRouter.delivery_link_established` (`LXMF/LXMRouter.py:1956-1962`):
+For LXMF, that callback is `LXMRouter.delivery_link_established` (`LXMF/LXMRouter.py:1956-1963` → `def delivery_link_established(self, link)`):
 
 ```python
 link.track_phy_stats(True)
@@ -63,7 +63,7 @@ This is what makes inbound DATA on this link route into LXMF processing.
 
 ### 5. Inbound LXMF DATA — single-packet (PACKET representation)
 
-A regular DATA packet on the link (`context = NONE`, Token-encrypted with link session key per §3.1). `Link.receive` decrypts and passes the plaintext to `delivery_packet(data, packet)` (`LXMF/LXMRouter.py:1822-1850`) — the same handler used by opportunistic delivery. Differences:
+A regular DATA packet on the link (`context = NONE`, Token-encrypted with link session key per §3.1). `Link.receive` decrypts and passes the plaintext to `delivery_packet(data, packet)` (`LXMF/LXMRouter.py:1926-1954` → `def delivery_packet(self, data, packet)`) — the same handler used by opportunistic delivery. Differences:
 
 - `packet.destination_type == LINK` so `method = DIRECT`.
 - The LXMF body arrives **with** the recipient's dest_hash (§5.2), so no re-prepend like the opportunistic path does at step 9 of `receive-opportunistic-lxmf.md`.
@@ -72,7 +72,7 @@ The handler calls `packet.prove()` immediately (mandatory PROOF receipt per §6.
 
 ### 6. Inbound LXMF DATA — Resource representation
 
-A larger LXMF body arrives as a Resource transfer per `flows/receive-resource.md`. The Link's `resource_strategy = ACCEPT_APP` triggers `delivery_resource_advertised(resource)` (`LXMF/LXMRouter.py:1977-1984`):
+A larger LXMF body arrives as a Resource transfer per `flows/receive-resource.md`. The Link's `resource_strategy = ACCEPT_APP` triggers `delivery_resource_advertised(resource)` (`LXMF/LXMRouter.py:1977-1984` → `def delivery_resource_advertised(self, resource)`):
 
 ```python
 def delivery_resource_advertised(self, resource):
@@ -98,14 +98,14 @@ After a successful inbound LXMF delivery, the LXMRouter on the **initiator** sid
 
 | Step | File | Function / line |
 |---|---|---|
-| 1 | `RNS/Transport.py` | LINKREQUEST dispatch, line 2027 |
-| 1 | `RNS/Destination.py` | `receive` LINKREQUEST branch, line 403 |
-| 2 | `RNS/Link.py` | `validate_request`, line 186 |
-| 2 | `RNS/Link.py` | `handshake`, line 353 |
-| 3 | `RNS/Link.py` | `prove` (LRPROOF emission), line 371 |
-| 4 | `RNS/Link.py` | `rtt_packet`, line 534 |
-| 4 | `LXMF/LXMRouter.py` | `delivery_link_established`, line 1849 |
-| 5 | `LXMF/LXMRouter.py` | `delivery_packet`, line 1819 |
-| 6 | `LXMF/LXMRouter.py` | `delivery_resource_advertised` / `_concluded`, lines 1864-1900 |
-| 7 | `RNS/Link.py` | KEEPALIVE handling, line 1149 |
-| 8 | `LXMF/LXMRouter.py` | `delivery_remote_identified`, line 1849+ |
+| 1 | `RNS/Transport.py` | LINKREQUEST dispatch, line 2456 |
+| 1 | `RNS/Destination.py` | `receive` LINKREQUEST branch, line 414-429 |
+| 2 | `RNS/Link.py` | `validate_request`, line 186-227 |
+| 2 | `RNS/Link.py` | `handshake`, line 348-363 |
+| 3 | `RNS/Link.py` | `prove` (LRPROOF emission), line 366-375 |
+| 4 | `RNS/Link.py` | `rtt_packet`, line 516-538 |
+| 4 | `LXMF/LXMRouter.py` | `delivery_link_established`, line 1956-1963 |
+| 5 | `LXMF/LXMRouter.py` | `delivery_packet`, line 1926-1954 |
+| 6 | `LXMF/LXMRouter.py` | `delivery_resource_advertised`, line 1977-1984 |
+| 7 | `RNS/Link.py` | KEEPALIVE handling, line 1130 |
+| 8 | `LXMF/LXMRouter.py` | `delivery_remote_identified`, line 1995-1998 |
