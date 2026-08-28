@@ -2,7 +2,7 @@
 
 What happens chronologically when an LXMF DIRECT message, NomadNet page, or `rncp` file transfer too big to fit in one Link DATA packet is sent as an `RNS.Resource`. Builds on top of an established Reticulum Link — a Link must already be `ACTIVE` before this flow starts (see [`send-link-lxmf.md`](send-link-lxmf.md) steps 3-4 for how the Link gets there).
 
-Pinned against **RNS 1.2.4**. Wire-level details are in [`../SPEC.md`](../SPEC.md) §10; this document covers chronology and step ordering.
+Pinned against **RNS 1.5.0**. Wire-level details are in [`../SPEC.md`](../SPEC.md) §10; this document covers chronology and step ordering.
 
 Out of scope: the receive side (`receive-resource.md` — TODO), Resource cancellation paths beyond a brief mention in step 9, and the watchdog / RTT estimation machinery (implementation-private).
 
@@ -20,7 +20,7 @@ Out of scope: the receive side (`receive-resource.md` — TODO), Resource cancel
 
 ### 1. Caller constructs the `RNS.Resource`
 
-For LXMF DIRECT/RESOURCE, this happens in `LXMessage.__as_resource` (`LXMF/LXMessage.py:654`):
+For LXMF DIRECT/RESOURCE, this happens in `LXMessage.__as_resource` (`LXMF/LXMessage.py:654` → `RNS.Resource(self.packed, self.__delivery_destination`):
 
 ```python
 RNS.Resource(self.packed, self.__delivery_destination,
@@ -33,7 +33,7 @@ For other callers (NomadNet page server, `rncp`) the call site differs but the c
 
 ### 2. `Resource.__init__` runs the preparation pipeline
 
-`RNS/Resource.py:248-478`. In order:
+`RNS/Resource.py:248-476` → `def __init__(self, data, link, metadata=None`. In order:
 
 1. **Metadata prefix** if `metadata=` was given: prepend `length(3 bytes BE uint24) || msgpack(metadata)` to the body. Sets `has_metadata = True`, `x` flag in the advertisement.
 2. **Choose data backing.** If `data` is `bytes` and `len(data) + metadata_size > MAX_EFFICIENT_SIZE = 1 MiB - 1`, the constructor spools it to a `tempfile.TemporaryFile()` and switches to file-backed mode. Bytes-backed mode is single-segment; file-backed mode may be multi-segment per [`../SPEC.md`](../SPEC.md) §10.11.
@@ -52,7 +52,7 @@ After step 9, `total_parts = len(parts)`, `total_segments = ceil((data_size + me
 
 ### 3. `Resource.advertise()` sends RESOURCE_ADV
 
-`RNS/Resource.py:508-541`. Runs in a daemon thread because the build above can take a noticeable time on a large resource.
+`RNS/Resource.py:508-550` → `def advertise(self)`. Runs in a daemon thread because the build above can take a noticeable time on a large resource.
 
 ```python
 adv_packet = RNS.Packet(self.link,
@@ -69,7 +69,7 @@ The advertisement packet is sent as a regular Link DATA packet (so it is Token-e
 
 ### 4. Watchdog: retry advertisement up to MAX_ADV_RETRIES
 
-`RNS/Resource.py:573-590`. While `status == ADVERTISED` and no RESOURCE_REQ has arrived, the watchdog retransmits the advertisement up to `MAX_ADV_RETRIES = 4` times. After the 4th retry without a request, the resource is cancelled with status `FAILED` and a callback to the caller.
+`RNS/Resource.py:576-589` → `if self.status == Resource.ADVERTISED:`. While `status == ADVERTISED` and no RESOURCE_REQ has arrived, the watchdog retransmits the advertisement up to `MAX_ADV_RETRIES = 4` times. After the 4th retry without a request, the resource is cancelled with status `FAILED` and a callback to the caller.
 
 Reasons the advertisement might not solicit a response:
 - The receiver's app rejected it via `Resource.reject(adv_packet)` (returns `RESOURCE_RCL`).
@@ -78,7 +78,7 @@ Reasons the advertisement might not solicit a response:
 
 ### 5. First RESOURCE_REQ arrives → fulfillment loop
 
-`RNS/Resource.py:985-1064`. The receiver has parsed the advertisement, accepted it, and now requests an initial window's worth of parts via a RESOURCE_REQ packet:
+`RNS/Resource.py:985-1079` → `def request(self, request_data)`. The receiver has parsed the advertisement, accepted it, and now requests an initial window's worth of parts via a RESOURCE_REQ packet:
 
 ```
 body = hashmap_exhausted_flag(1) [|| last_map_hash(4) if exhausted]
@@ -104,7 +104,7 @@ After the receiver has placed all the requested parts into its `parts[]` array, 
 
 If the resource has more parts than fit in the original advertisement's `m` field (`n > HASHMAP_MAX_LEN`), the receiver eventually exhausts the known hashmap. It then sends a RESOURCE_REQ with `exhausted = 0xFF` and `last_map_hash = ` the last known map_hash.
 
-The initiator's `request()` handler at `RNS/Resource.py:1030-1064`:
+The initiator's `request()` handler at `RNS/Resource.py:1030-1079` → `if wants_more_hashmap:`:
 
 1. Locate the `last_map_hash` in `self.hashmap`. The position must land on a `HASHMAP_MAX_LEN` boundary; if not, treat it as a sequencing error and cancel the resource.
 2. Compute `segment = part_index // HASHMAP_MAX_LEN`.
@@ -125,7 +125,7 @@ body = resource_hash(32) || full_proof(32)
 
 as `RNS.Packet(link, proof_data, packet_type=PROOF, context=RESOURCE_PRF)` — a PROOF-type packet, not DATA.
 
-The initiator's `validate_proof(proof_data)` (`RNS/Resource.py:782-826`):
+The initiator's `validate_proof(proof_data)` (`RNS/Resource.py:787-830` → `def validate_proof(self, proof_data)`):
 
 1. Checks `len(proof_data) == 64` and `proof_data[32:] == self.expected_proof`.
 2. On match, transitions `status = COMPLETE` and fires the resource callback.
@@ -144,7 +144,7 @@ Both transition `status = FAILED` and notify `link.resource_concluded(self)` so 
 
 ### 10. Watchdog and recovery
 
-`RNS/Resource.py:564-670`. The Resource owns a watchdog thread that runs through the lifecycle and adjusts timeouts based on observed link RTT. Key points for interop:
+`RNS/Resource.py:564-674` → `def watchdog_job(self)`. The Resource owns a watchdog thread that runs through the lifecycle and adjusts timeouts based on observed link RTT. Key points for interop:
 
 - **Per-part timeout:** `PART_TIMEOUT_FACTOR = 4` × (link RTT) before any part has arrived; drops to `PART_TIMEOUT_FACTOR_AFTER_RTT = 2` once RTT is calibrated.
 - **Proof timeout:** `PROOF_TIMEOUT_FACTOR = 3` × link RTT after all parts have been sent.

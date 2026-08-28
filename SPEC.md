@@ -800,7 +800,7 @@ Mismatches most often originate from integer width (a timestamp encoded as `uint
 
 #### 5.7.1 Stamp wire format
 
-`LXMessage.STAMP_SIZE = HASHLENGTH//8 = 32 bytes` (`LXMF/LXStamper.py`). The stamp is appended to the payload msgpack array as the 5th element only if the receiver requires one or the sender has an outbound ticket. Wire form is just 32 raw bytes inside a `bin8/bin16` msgpack envelope.
+`LXMessage.STAMP_SIZE = HASHLENGTH//8 = 32 bytes` (`LXMF/LXStamper.py:15` → `STAMP_SIZE = RNS.Identity.HASHLENGTH//8`). The stamp is appended to the payload msgpack array as the 5th element only if the receiver requires one or the sender has an outbound ticket. Wire form is just 32 raw bytes inside a `bin8/bin16` msgpack envelope — **for a proof-of-work stamp**. A *ticket* stamp (§5.7.3) is **16** bytes, so element [4] is not fixed-width and a `len(stamp) == STAMP_SIZE` guard on the parse side rejects every legitimate ticket stamp.
 
 When stripping the stamp during signature verification (§5.6), the receiver removes element [4] from the unpacked array and re-encodes the first 4 elements as `packed_payload` for hash computation. This is what lets a sender add or remove a stamp without invalidating the Ed25519 signature.
 
@@ -839,20 +839,44 @@ The default `WORKBLOCK_EXPAND_ROUNDS = 3000` (regular stamps), `WORKBLOCK_EXPAND
 A **ticket** is a 16-byte (`TICKET_LENGTH = TRUNCATED_HASHLENGTH//8`) shared secret a recipient hands to a known sender, letting them skip the PoW step. With a ticket, the "stamp" becomes:
 
 ```python
-stamp = SHA256(ticket || message_id)[:32]      # truncated to STAMP_SIZE
+# LXMF/LXMessage.py:300, in get_stamp
+stamp = RNS.Identity.truncated_hash(ticket || message_id)    # = SHA-256(...)[:16]
 ```
 
-(`LXMessage.py::get_stamp` line 297). The recipient validates by trying every ticket they've issued the sender against the inbound stamp:
+> ⚠️ **A ticket stamp is 16 bytes — not `STAMP_SIZE`.**
+> `RNS.Identity.truncated_hash` truncates to
+> `TRUNCATED_HASHLENGTH = 128` bits (`RNS/Identity.py:362-369` →
+> `full_hash(data)[:(Identity.TRUNCATED_HASHLENGTH//8)]`), **half**
+> the 32-byte proof-of-work stamp of §5.7.2. Payload element [4] is
+> therefore not fixed-width: 32 bytes in the PoW form, 16 in the ticket
+> form. Both failure modes are silent.
+>
+> - A sender that emits a 32-byte ticket stamp is compared against
+>   upstream's 16-byte derivation (`LXMF/LXMessage.py:277` →
+>   `self.stamp == RNS.Identity.truncated_hash(ticket+self.message_id)`),
+>   misses the
+>   ticket branch, falls through to the PoW branch, fails that too, and
+>   is dropped by any receiver with `_enforce_stamps` set. In the other
+>   direction, a receiver that expects 32 bytes rejects every genuine
+>   ticket stamp upstream sends. Nothing logs a length error — the
+>   message just reads as unstamped.
+> - A guard of `len(stamp) == STAMP_SIZE` before splicing element [4]
+>   refuses to emit the ticket form at all. Dispatch on `16` vs `32`,
+>   or don't length-check.
+>
+> Verified by `tools/verify_stamps.py`.
+
+The recipient validates by trying every ticket they've issued the sender against the inbound stamp:
 
 ```python
-# LXMessage.py::validate_stamp line 273-283
+# LXMF/LXMessage.py:273-283, in validate_stamp
 for ticket in tickets:
     if self.stamp == RNS.Identity.truncated_hash(ticket + self.message_id):
         self.stamp_value = LXMessage.COST_TICKET
         return True
 ```
 
-`COST_TICKET` is a sentinel value (not a real cost) that just marks "valid by ticket".
+`COST_TICKET = 0x100` = **256** (`LXMF/LXMessage.py:53` → `COST_TICKET = 0x100`) is a sentinel, not a real cost — it only marks "valid by ticket". It is reported to the application on `message.stamp_value`, the same field a PoW stamp reports its leading-zero count on, so an implementation that surfaces `stamp_value` must special-case it rather than rendering "256 bits of work". The value is unambiguous: a real announced cost is capped at 254 (§5.7.4), and a PoW `stamp_value` in the hundreds is not reachable.
 
 Tickets are exchanged via the **`FIELD_TICKET = 0x0C`** key in the `fields` dict of an inbound message:
 
@@ -929,9 +953,12 @@ For interop coverage today, "implement PoW for outbound; tolerate-but-don't-vali
 | File | What |
 |---|---|
 | `LXMF/LXStamper.py:49-77` | `stamp_workblock`, `stamp_value`, `stamp_valid` |
+| `LXMF/LXStamper.py:15` | `STAMP_SIZE = 32` (PoW stamp length) |
 | `LXMF/LXMessage.py:42` | `TICKET_LENGTH = 16` |
-| `LXMF/LXMessage.py:273-294` | `validate_stamp` (ticket-then-PoW dispatch) |
-| `LXMF/LXMessage.py:296-328` | `get_stamp` (ticket-or-PoW emission) |
+| `LXMF/LXMessage.py:53` | `COST_TICKET = 0x100` (256) — sentinel `stamp_value` for ticket-validated stamps |
+| `LXMF/LXMessage.py:273-294` | `validate_stamp` (ticket-then-PoW dispatch); `:277` is the 16-byte ticket comparison |
+| `LXMF/LXMessage.py:296-328` | `get_stamp` (ticket-or-PoW emission); `:300` → `truncated_hash(self.outbound_ticket+self.message_id)` derives the 16-byte ticket stamp |
+| `RNS/Identity.py:362-369` | `truncated_hash` — `full_hash(x)[:TRUNCATED_HASHLENGTH//8]` = 16 bytes |
 | `LXMF/LXMRouter.py:1837-1910` | inbound dispatch — ticket cache + stamp validation + drop logic |
 | `LXMF/LXMF.py:19` | `FIELD_TICKET = 0x0C` constant |
 
@@ -1031,13 +1058,59 @@ data = [wanted_ids, have_ids, optional_transfer_limit_kb]
 Where:
 
 - **`wanted_ids = None`** AND **`have_ids = None`** triggers a **listing query**: the propagation node returns `[transient_id_1, transient_id_2, ...]` of every message it holds for the requesting identity, sorted by size ascending.
-- **`wanted_ids`** is a list of transient_ids the client wants delivered. Propagation node responds with a Resource (or single packet if small enough) carrying `msgpack.packb([time.time(), [lxmf_data_1, ...]])`.
+- **`wanted_ids`** is a list of transient_ids the client wants delivered. The propagation node responds with a **flat list of message bodies** — `[lxmf_data_1, lxmf_data_2, ...]` — carried as a §11 RESPONSE (one Link DATA packet, or a Resource if it exceeds the MDU). See the two callouts below: this is *not* the `[timestamp, [bodies]]` envelope of the upload direction, and the bodies have been stripped of their propagation stamp.
 - **`have_ids`** is a list of transient_ids the client confirms it has stored locally. Propagation node deletes those from its store. (Equivalent to "ack and purge".)
 - **`optional_transfer_limit_kb`** lets the client cap the transfer size — propagation node skips messages that would exceed the cap.
 
 Common usage: client first sends `/get` with `[None, None]` to get the list, picks which ones it wants based on size, then sends `/get` with `[wanted_subset, prior_subset_to_purge]` to fetch the new ones and acknowledge previously-fetched ones.
 
 The propagation node only returns messages whose `propagation_entries[tid][0] == requester's destination_hash` (`LXMRouter.py:1510, 1535`) — each message is keyed to its intended recipient and the propagation node is structurally unable to deliver it to the wrong address. The LXMF body is still encrypted to the recipient's public key as a defence-in-depth.
+
+> ⚠️ **The `/get` response is a flat list of bodies, not the upload envelope.**
+> `message_get_request` builds `response_messages = []`
+> (`LXMF/LXMRouter.py:1523` → `response_messages = []`), appends one body
+> per served message (`:1549` → `lxmf_data[:-LXStamper.STAMP_SIZE]`), and
+> returns that list directly (`:1555-1556` → `return response_messages`). The client
+> iterates `request_receipt.response` as bodies with nothing to unwrap
+> (`:1624-1627` → `haves.append(RNS.Identity.full_hash(lxmf_data))`). The `msgpack.packb([time.time(), [lxmf_data, ...]])`
+> envelope in §5.8.2 is the **upload** direction only — what a sender or a
+> peering node submits to a node.
+>
+> An implementer who reuses the upload shape for retrieval decodes body #1
+> as a timestamp and body #2 as the message list. It fails on the first
+> non-empty mailbox — the first time the code runs for real — and the
+> symptom is either "every message dropped" or "the first two messages are
+> mangled", not a decode error you can chase.
+>
+> The §11 RESPONSE framing (`[request_id, response]`, `RNS/Link.py:848`,
+> `:908-911`) is still there and is still stripped by the Link layer before
+> the callback fires; `response` is the flat list. See §11.2.
+>
+> Verified by `tools/verify_propagation_get.py`.
+
+> **Retrieved bodies have had the propagation stamp stripped.**
+> The node stores `lxmf_data || stamp` — the §5.7 propagation stamp is
+> `STAMP_SIZE = 32` bytes and is appended at ingest
+> (`LXMRouter.py:2512`) — but it serves
+> `lxmf_data[:-LXStamper.STAMP_SIZE]` (`:1549`). A body delivered over
+> `/get` is therefore the **pre-stamp** propagated form,
+> `dest_hash(16) || ciphertext`, and decrypts exactly like an
+> opportunistic body (§5.5). Do not slice 32 bytes off it a second time:
+> the stamp is already gone, the cut lands in the ciphertext tail, and
+> decryption fails with nothing to indicate why.
+>
+> This is also what makes the acknowledge-and-purge round of §5.8.3 close.
+> The node keys its store on
+> `transient_id = RNS.Identity.full_hash(lxmf_data)` computed **before**
+> the stamp is appended (`:2494` →
+> `transient_id = RNS.Identity.full_hash(lxmf_data)`, then `:2512` →
+> `stamped_data = lxmf_data+stamp_data`), so the client's
+> `full_hash(body_as_received)` (`:1627`) reproduces exactly that id and
+> can be handed straight back in the `have_ids` slot. It is not obvious
+> that hashing what you received yields the id the node filed it under —
+> it holds only because the two strips are the same 32 bytes.
+>
+> Verified by `tools/verify_propagation_get.py`.
 
 #### 5.8.4 Peering keys (PoW for peer-to-peer auth)
 
@@ -1088,7 +1161,9 @@ Receivers parse this via `pn_announce_data_is_valid` (`LXMF/LXMF.py:224-250`), w
 | `LXMF/LXMRouter.py:190` | propagation_destination construction |
 | `LXMF/LXMRouter.py:324-336` | propagation announce app_data shape |
 | `LXMF/LXMRouter.py:669-670` | `/offer` and `/get` handler registration |
-| `LXMF/LXMRouter.py:1482-1561` | `message_get_request` handler (client `/get`) |
+| `LXMF/LXMRouter.py:1482-1561` | `message_get_request` handler (client `/get`); `:1523`, `:1549`, `:1555-1556` are the flat-list response and the stamp strip |
+| `LXMF/LXMRouter.py:1607-1644` | `message_get_response` — client side; `:1624-1627` iterates bodies and rehashes them for the purge round |
+| `LXMF/LXMRouter.py:2487-2540` | `lxmf_propagation` — ingest; `:2494` derives `transient_id` pre-stamp, `:2512` appends the stamp for storage |
 | `LXMF/LXMRouter.py:2266-2335` | `offer_request` handler (peer `/offer`) |
 | `LXMF/LXMPeer.py:14-31` | request-path, peer-state and error-response constants |
 | `LXMF/LXMPeer.py:267-494` | initiator-side `/offer` flow (`sync` → `offer_response`) |
@@ -2993,6 +3068,70 @@ The sender doesn't pre-prepare every segment up front — it builds segment N+1 
 
 The 3-byte big-endian uint24 metadata length encoding (§10.2 step 1) is what limits per-resource metadata to `METADATA_MAX_SIZE = 16 MiB - 1`.
 
+#### 10.11.1 Receiver-side reassembly, keying, and retention
+
+The rules above specify the **sender** completely. The receiver's half — what it holds between segments, how that store is keyed, in what order segments are concatenated, and how long a partial assembly survives — is not derivable from the wire format, and each part has a concrete answer upstream. Two of them will bite a clean-room implementation that guesses. Claims 1-3 below are verified by `tools/verify_resource_segment_store.py`, which drives upstream's own `Resource.accept` and `Resource.assemble`.
+
+**1. Reassembly is file-backed, and keyed on `o` alone.** `Resource.accept` derives the storage path directly from the advertised original hash:
+
+```python
+# RNS/Resource.py:199-200
+resource.storagepath      = RNS.Reticulum.resourcepath+"/"+resource.original_hash.hex()
+resource.meta_storagepath = resource.storagepath+".meta"
+```
+
+The partial transfer lives at `{configdir}/storage/resources/{o.hex()}` (`RNS/Reticulum.py:251` → `Reticulum.resourcepath  = Reticulum.configdir+"/storage/resources"`, `:329`). The key is the advertised `o` and nothing else — **the correlation domain is the node, not the link the segments arrive on**. Nothing binds `o` to the link, to the peer, or to the first segment's own `h`; `accept` copies it out of the advertisement unchecked (`:179`).
+
+Two inbound transfers that present the same `o` on different links therefore share one assembly file, in append mode. Each segment still has to clear its own integrity check before its bytes are written — `assemble` compares `SHA256(plaintext || r)` against `h` and only opens the file on a match (`Resource.py:698-713`) — so an injector can only contribute bytes it legitimately hashed, but those bytes land in someone else's assembly and the victim's completed body is corrupt. The exposure is bounded in practice because `o` travels inside link encryption and is a 32-byte hash of data the attacker does not have, so it must be learned rather than guessed. An implementation is free to scope the key per-link, which is strictly safer and interoperates identically; **implementations SHOULD do so**, since nothing on the wire depends on the key being global.
+
+**2. Segments are appended, never indexed — in-order arrival is load-bearing.** The assembler opens the file in append mode and writes:
+
+```python
+# RNS/Resource.py:712-714
+self.file = open(self.storagepath, "ab")
+self.file.write(data)
+self.file.close()
+```
+
+No seek, and no use of `i` for placement. `i` is read at `Resource.py:201` and thereafter used **only** to decide whether this is the final segment (`:700` for the metadata prefix, `:729` and `:793` for conclusion) — never to order the data.
+
+Upstream's reassembly is correct only because the sequential-send rule above happens to guarantee ordering. §10.11 states that rule as a sender-side memory measure; the receiver **depends** on it. The failure mode is silent: out-of-order segments each pass their own `h` check, the body assembles in the wrong order, and nothing detects it — the per-segment hash is the only integrity check there is, and there is no hash over the reassembled whole. Indexing by `i` is strictly more tolerant and diverges from upstream in a way that never shows up on a conformant link.
+
+**3. Retention is an idle deadline, not a transfer deadline.** Reclamation is a periodic sweep of the resource directory:
+
+```python
+# RNS/Reticulum.py:157, 1236-1242
+RESOURCE_CACHE = 24*60*60
+...
+mtime = os.path.getmtime(filepath)
+age   = now - mtime
+if age > Reticulum.RESOURCE_CACHE: os.unlink(filepath)
+```
+
+The sweep runs every `CLEAN_INTERVAL = 15*60` seconds (`Reticulum.py:159` → `CLEAN_INTERVAL   = 15*60`, `:390-392`). Two details a naive reading misses:
+
+- `mtime` is refreshed by every segment append, so the 24 h is time **since the last segment**, not a budget for the whole transfer.
+- There is no absolute ceiling at all. A peer dripping one segment per day keeps a partial assembly alive indefinitely.
+
+> **Do not measure the deadline from the first segment.** Upstream imposes
+> no wall-clock bound on a single segment: the watchdog is per-round, and a
+> segment retries up to `MAX_RETRIES = 16` times with a timeout derived from
+> the link RTT and the outstanding window (`Resource.py:126-135`,
+> `:564-674`). One `MAX_EFFICIENT_SIZE` segment on a slow link can legitimately
+> take many minutes. A receiver that sets a single deadline measured from the
+> first segment — the obvious design — makes it **unmeetable**: any value
+> short enough to bound the transfer expires mid-flight on a legitimate
+> segment, and the symptom is a transfer that dies partway with no error on
+> either side. If you impose a deadline, it must be idle-based like upstream's,
+> and any absolute ceiling must exceed the worst-case **single-segment**
+> transfer time, not the whole transfer's.
+
+The `.meta` sidecar written for a metadata-carrying first segment (`Resource.py:704-706`) is unlinked when the final segment concludes (`:737`), but it is **not** swept: `__clean_caches` only considers filenames of exactly `(HASHLENGTH//8)*2 = 64` characters (`Reticulum.py:1238`), and `{o.hex()}.meta` is 69. An abandoned multi-segment transfer leaves its metadata file behind permanently.
+
+**4. `l` is unbounded on the wire, and so is the number of concurrent assemblies.** Nothing in `Resource.accept` (`Resource.py:167-246`) bounds `l`, and nothing bounds how many distinct `o` values one link may have open. Upstream is unbothered because it spends **disk**, not RAM, and the 24 h sweep eventually reclaims it.
+
+An implementation that buffers segments in memory inherits none of that. The exposure is `l × MAX_EFFICIENT_SIZE` per transfer, times concurrent transfers, times links, all held for a peer that is **unauthenticated** — a Link is established long before the optional §6.7.6 LINKIDENTIFY. §10.4's allocation-bomb callout caps `t` and `d` for one segment; multiply that by `l` and by the retention window and it is the same attack with a longer fuse. Cap the number of concurrent partial assemblies per link, cap `l`, and cap total retained bytes.
+
 ### 10.12 Compression and encryption layering
 
 Encryption layering is **outermost** — the wire bytes look like:
@@ -3027,6 +3166,9 @@ This also means swapping in a new link session key mid-transfer would break decr
 | `RNS/Resource.py:1081-1114` | `cancel` — ICL/RCL emission on abort |
 | `RNS/Resource.py:1244-1364` | `ResourceAdvertisement` — pack/unpack of the ADV msgpack dict |
 | `RNS/Packet.py:72-79` | RESOURCE_* context constants |
+| `RNS/Reticulum.py:157-159` | `RESOURCE_CACHE = 24 h`, `JOB_INTERVAL`, `CLEAN_INTERVAL = 15 min` |
+| `RNS/Reticulum.py:251, 329` | `resourcepath = {configdir}/storage/resources` |
+| `RNS/Reticulum.py:1231-1247` | `__clean_caches` — mtime-based sweep of partial resource assemblies |
 
 ---
 
@@ -3190,7 +3332,7 @@ Registered via `Destination.register_request_handler(path, response_generator, a
 
 ### 11.5 RequestReceipt — initiator-side state machine
 
-`RNS/Link.py:1311-1506`. When `Link.request()` returns a `RequestReceipt`, the initiator can attach:
+`RNS/Link.py:1311-1498` → `class RequestReceipt():`. When `Link.request()` returns a `RequestReceipt`, the initiator can attach:
 
 - `response_callback(receipt)` — fires when the response has fully arrived (single packet OR resource concluded).
 - `failed_callback(receipt)` — fires on timeout or link teardown.
@@ -3347,7 +3489,7 @@ None of these are wire-spec — they're caller conventions layered on top of §1
 | `RNS/Link.py:473-511` | `Link.request()` — initiator-side packing and dispatch by size |
 | `RNS/Link.py:804-856` | `Link.handle_request()` — server-side path lookup + auth + response dispatch |
 | `RNS/Link.py:857-884` | `Link.handle_response()` — initiator-side response correlation |
-| `RNS/Link.py:1311-1506` | `RequestReceipt` — callback machinery |
+| `RNS/Link.py:1311-1498` → `class RequestReceipt():` | `RequestReceipt` — callback machinery |
 | `RNS/Destination.py::register_request_handler` | Server-side handler registration |
 | `RNS/Destination.py:74-76` | `ALLOW_NONE/ALLOW_LIST/ALLOW_ALL` constants |
 | `RNS/Packet.py:81-82` | `REQUEST = 0x09`, `RESPONSE = 0x0A` context constants |

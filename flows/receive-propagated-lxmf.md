@@ -1,6 +1,6 @@
 # Flow: receive a propagated LXMF message (recipient pulls via `/get`)
 
-The closing half of [`send-propagated-lxmf.md`](send-propagated-lxmf.md): how a recipient client retrieves messages that were store-and-forwarded for it by a propagation node. Pinned against **RNS 1.2.4 / LXMF 0.9.7**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §11 (REQUEST/RESPONSE).
+The closing half of [`send-propagated-lxmf.md`](send-propagated-lxmf.md): how a recipient client retrieves messages that were store-and-forwarded for it by a propagation node. Pinned against **RNS 1.5.0 / LXMF 1.1.1**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §11 (REQUEST/RESPONSE).
 
 This is the inverse-side flow that turns "the message was queued at a propagation node" (`send-propagated-lxmf.md` step 9) into "the message arrives in the recipient's inbox".
 
@@ -17,7 +17,7 @@ This is the inverse-side flow that turns "the message was queued at a propagatio
 
 ### 1. Recipient initiates retrieval
 
-`LXMRouter.request_messages_from_propagation_node(identity, max_messages)` (`LXMF/LXMRouter.py:484+`). Triggered by:
+`LXMRouter.request_messages_from_propagation_node(identity, max_messages)` (`LXMF/LXMRouter.py:502+`). Triggered by:
 
 - Manual user action (Sideband "Refresh inbox" button).
 - Periodic background poll (every few minutes by default in long-running clients).
@@ -34,7 +34,7 @@ self.outbound_propagation_link = RNS.Link(
 )
 ```
 
-(`LXMF/LXMRouter.py:513`). Standard Link establishment per `flows/send-link-lxmf.md` steps 3-4.
+(`LXMF/LXMRouter.py:532`). Standard Link establishment per `flows/send-link-lxmf.md` steps 3-4.
 
 ### 3. Identify on the link
 
@@ -47,7 +47,7 @@ data = [None, None]                                              # [wanted, have
 link.request("/get", data, response_callback=on_message_list)
 ```
 
-The propagation node's `message_get_request` handler at `LXMF/LXMRouter.py:1482-1506` walks `propagation_entries` for messages keyed to the requester's destination_hash and returns:
+The propagation node's `message_get_request` handler at `LXMF/LXMRouter.py:1482-1504` walks `propagation_entries` for messages keyed to the requester's destination_hash and returns:
 
 ```python
 [ [transient_id_1(16), size_1(int)],
@@ -74,29 +74,37 @@ link.request("/get", data, response_callback=on_message_batch)
 - `have_ids` — list of 16-byte transient_ids the recipient already has stored locally; the propagation node deletes these from its store as a side effect (§5.8.3 "ack and purge").
 - `transfer_limit_kb` — optional cap on total bytes the recipient is willing to receive in one batch.
 
-### 6. Propagation node returns a message bundle
+### 6. Propagation node returns a flat list of message bodies
 
-`message_get_request` builds `response_messages = []` of the matching LXMF bodies, packs them as:
-
-```python
-data = msgpack.packb([time.time(), [lxmf_data_1, lxmf_data_2, ...]])
-```
-
-Returns this as a §11 RESPONSE. If the bundle fits in `link.mdu` it's a single Link DATA packet; otherwise it's a Resource (per `flows/send-resource.md`).
-
-### 7. Recipient unpacks the bundle and processes each message
-
-The recipient's `propagation_resource_concluded` handler (or its single-packet equivalent) at `LXMF/LXMRouter.py:2339+` walks the bundle:
+`message_get_request` builds `response_messages = []` (`LXMF/LXMRouter.py:1523`), appends one LXMF body per served message, and returns **that list directly** (`:1555-1556`):
 
 ```python
-data = msgpack.unpackb(resource.data.read())
-remote_timebase = data[0]
-messages        = data[1]
-for lxmf_data in messages:
-    self.lxmf_delivery(lxmf_data, destination_type=SINGLE)
+response_messages.append(lxmf_data[:-LXStamper.STAMP_SIZE])   # :1549
+...
+return response_messages                                      # :1556
 ```
 
-`lxmf_delivery` is the same path used for opportunistic and direct receive (`flows/receive-opportunistic-lxmf.md` step 11+) — it calls `LXMessage.unpack_from_bytes`, validates the signature against the sender's known identity, runs ticket / stamp / dedup checks, and fires the application's delivery callback. **The LXMF body bytes are identical regardless of how they arrived** — opportunistic, direct over a Link, or propagated. The propagation node never touched the encrypted body.
+Two things to get right here, both of which fail silently:
+
+- **There is no `[timestamp, [bodies]]` envelope.** That shape belongs to the *upload* direction only (`flows/send-propagated-lxmf.md` step 2). The retrieval response is a bare list.
+- **The propagation stamp is stripped before serving** (`:1549`). Each served body is the pre-stamp propagated form, `dest_hash(16) || ciphertext` — do not slice `STAMP_SIZE` off it again.
+
+Returned as a §11 RESPONSE. If the bundle fits in `link.mdu` it's a single Link DATA packet; otherwise it's a Resource (per `flows/send-resource.md`). Either way the Link layer strips the `[request_id, response]` framing before the callback fires.
+
+### 7. Recipient processes each body and rehashes it for the purge round
+
+The recipient's `message_get_response` callback (`LXMF/LXMRouter.py:1607-1644`) iterates the response as bodies, with nothing to unwrap:
+
+```python
+# LXMF/LXMRouter.py:1624-1627
+for lxmf_data in request_receipt.response:
+    result = self.lxmf_propagation(lxmf_data, signal_duplicate=LXMRouter.DUPLICATE_SIGNAL)
+    haves.append(RNS.Identity.full_hash(lxmf_data))
+```
+
+`haves` is the `have_ids` list for step 8. It works because the node keyed its store on `transient_id = RNS.Identity.full_hash(lxmf_data)` computed **before** the stamp was appended (`:2494`, then `:2512`), and step 6 stripped exactly those bytes back off — so `full_hash(body_as_received)` reproduces the node's own store key.
+
+`lxmf_propagation` routes the body into `lxmf_delivery`, the same path used for opportunistic and direct receive (`flows/receive-opportunistic-lxmf.md` step 11+) — it calls `LXMessage.unpack_from_bytes`, validates the signature against the sender's known identity, runs ticket / stamp / dedup checks, and fires the application's delivery callback. **The LXMF body bytes are identical regardless of how they arrived** — opportunistic, direct over a Link, or propagated. The propagation node never touched the encrypted body.
 
 ### 8. (Optional) Acknowledge and purge
 
@@ -114,11 +122,12 @@ After the bundle is processed, the recipient either tears down the link (`link.t
 
 | Step | File | Function / line |
 |---|---|---|
-| 1 | `LXMF/LXMRouter.py` | `request_messages_from_propagation_node`, line 485 |
-| 2 | `LXMF/LXMRouter.py` | outbound link establishment, line 505-520 |
-| 3 | `RNS/Link.py` | `Link.identify`, line ~1010 |
-| 4-6 | `LXMF/LXMRouter.py` | `message_get_request` handler, line 1427-1500 |
-| 7 | `LXMF/LXMRouter.py` | `propagation_resource_concluded`, line 2194+ |
-| 7 | `LXMF/LXMRouter.py` | `lxmf_delivery`, line 1732 |
-| 8 | `LXMF/LXMRouter.py` | purge via `/get` `have_ids` slot, line 1453-1465 |
-| 9 | `RNS/Link.py` | `teardown`, line 699 |
+| 1 | `LXMF/LXMRouter.py` | `request_messages_from_propagation_node`, line 502 |
+| 2 | `LXMF/LXMRouter.py` | outbound link establishment, line 522-532 |
+| 3 | `RNS/Link.py` | `Link.identify`, line 454 |
+| 4-6 | `LXMF/LXMRouter.py` | `message_get_request` handler, line 1482-1561 |
+| 7 | `LXMF/LXMRouter.py` | `message_get_response`, line 1607-1644 |
+| 7 | `LXMF/LXMRouter.py` | `lxmf_propagation`, line 2487-2540 (`transient_id` at `:2494`, stamp appended at `:2512`) |
+| 7 | `LXMF/LXMRouter.py` | `lxmf_delivery`, line 1837 |
+| 8 | `LXMF/LXMRouter.py` | purge via `/get` `have_ids` slot, line 1508-1519 |
+| 9 | `RNS/Link.py` | `teardown`, line 662 |

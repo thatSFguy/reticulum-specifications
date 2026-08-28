@@ -1,0 +1,19 @@
+# Documents allowed to declare a stale pin, with a reason and an owner action.
+#
+# check_citations.py fails when a document's "Pinned against **RNS x / LXMF y**"
+# header disagrees with tools/requirements.txt. Anything listed here is
+# grandfathered instead.
+#
+# This list is a countdown, not a parking lot. An entry whose pin declaration
+# is CURRENT is itself an error — the checker tells you to delete the line —
+# so the list cannot rot in the way the citations it covers already have.
+#
+# To clear an entry: re-read the flow against the pinned install, correct its
+# line citations (anchor the load-bearing ones per agent.md §1), update the
+# header, delete the line here.
+#
+# format:  <path>: <reason>
+
+# EMPTY. All 12 flow documents were re-anchored to rns==1.5.0 / lxmf==1.1.1.
+# Add an entry here only as a deliberate, time-boxed exception — not as a way
+# to land a document that cites a version the repo does not pin.

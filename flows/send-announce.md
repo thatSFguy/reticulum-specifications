@@ -1,6 +1,6 @@
 # Flow: send an announce
 
-What happens chronologically when a node emits an announce — the periodic broadcast that lets the rest of the mesh discover or refresh a path to this destination. Pinned against **RNS 1.2.4**.
+What happens chronologically when a node emits an announce — the periodic broadcast that lets the rest of the mesh discover or refresh a path to this destination. Pinned against **RNS 1.5.0**.
 
 Out of scope: the relay-side rebroadcast (`forward-announce.md` — see [`../SPEC.md`](../SPEC.md) §12.3) and path-response announces (already covered in [`path-discovery.md`](path-discovery.md)).
 
@@ -10,7 +10,7 @@ Out of scope: the relay-side rebroadcast (`forward-announce.md` — see [`../SPE
 
 ### 1. Caller invokes `Destination.announce(app_data=...)`
 
-`RNS/Destination.py:243-318`. Triggers:
+`RNS/Destination.py:244-318` → `def announce(self`. Triggers:
 
 - Periodic re-announce loop (every 5-15 minutes per §7.5; LXMF runs this from `LXMRouter.jobs`).
 - Application-explicit announce (e.g. user clicks "announce now" in Sideband).
@@ -26,7 +26,7 @@ random_hash = RNS.Identity.get_random_hash()[:5] + int(time.time()).to_bytes(5, 
 
 ### 3. Optional ratchet rotation
 
-If the destination has ratchets enabled (`destination.ratchets != None`), `rotate_ratchets()` runs (`Destination.py:227-235`):
+If the destination has ratchets enabled (`destination.ratchets != None`), `rotate_ratchets()` runs (`Destination.py:228-242` → `new_ratchet = RNS.Identity._generate_ratchet()`):
 
 ```python
 if now > self.latest_ratchet_time + self.ratchet_interval:
@@ -64,7 +64,7 @@ The `dest_hash` is **not** in `announce_data` even though it's in `signed_data` 
 
 ### 6. Cache the body for path-response replay
 
-`Destination.py:303-309`: store `self.path_responses[tag] = [time.time(), announce_data]` if a `tag` was supplied (path-response branch). The cache TTL is `PR_TAG_WINDOW = 30s` per §7.2.4 — same wire bytes served to multiple racing relays for dedup convergence.
+`Destination.py:306` → `self.path_responses[tag] = [time.time(), announce_data]`: stored if a `tag` was supplied (path-response branch). The cache TTL is `PR_TAG_WINDOW = 30s` per §7.2.4 — same wire bytes served to multiple racing relays for dedup convergence.
 
 ### 7. Construct and emit the Reticulum ANNOUNCE packet
 
@@ -85,11 +85,11 @@ Wire form per §4.1:
 - `context = NONE (0x00)` for periodic re-announces, `PATH_RESPONSE (0x0B)` for path-response announces
 - `context_flag = 1` if ratchet present (signals the optional ratchet_pub slot in the body)
 
-Announce packets are NOT encrypted — `Packet.pack` (`RNS/Packet.py:188-191`) special-cases ANNOUNCE to skip encryption. The body is signed but plaintext, so anyone in earshot can validate the signature and decode the public key.
+Announce packets are NOT encrypted — `Packet.pack` (`RNS/Packet.py:191-193` → `# Announce packets are not encrypted`) special-cases ANNOUNCE to skip encryption. The body is signed but plaintext, so anyone in earshot can validate the signature and decode the public key.
 
 ### 8. `Transport.outbound` broadcasts on every OUT interface
 
-Same broadcast branch as a path? request (`flows/path-discovery.md` step 2) — the dest_hash isn't in `path_table` (it's our own destination, not a remote one), so the broadcast branch at `RNS/Transport.py:1199+` fires, emitting on every interface where `interface.OUT == True`. Per §7.5 the announce is rate-limited by `ANNOUNCE_CAP = 2.0` (2% airtime) on each interface.
+Same broadcast branch as a path? request (`flows/path-discovery.md` step 2) — the dest_hash isn't in `path_table` (it's our own destination, not a remote one), so the broadcast branch at `RNS/Transport.py:1388-1404` → `# If we don't have a known path for the destination, we'll` fires, emitting on every interface where `interface.OUT == True`. Per §7.5 the announce is rate-limited by `ANNOUNCE_CAP = 2.0` (2% airtime) on each interface.
 
 ### 9. Periodic re-announce loop
 
@@ -118,13 +118,13 @@ LXMF runs this via `LXMRouter.jobs` calling `LXMRouter.announce_propagation_node
 
 | Step | File | Function / line |
 |---|---|---|
-| 1 | `RNS/Destination.py` | `announce`, line 243 |
-| 2 | `RNS/Destination.py` | random_hash construction, line 282 |
-| 3 | `RNS/Destination.py` | `rotate_ratchets`, line 227 |
-| 4 | `RNS/Destination.py` | signed_data assembly, line 297 |
-| 5 | `RNS/Destination.py` | sign + pack, line 300-303 |
-| 6 | `RNS/Destination.py` | path_responses cache, line 305 |
-| 7 | `RNS/Destination.py` | Packet construction, line 313 |
-| 7 | `RNS/Packet.py` | ANNOUNCE-skips-encryption, line 189-191 |
-| 8 | `RNS/Transport.py` | outbound broadcast branch, line 1119 |
+| 1 | `RNS/Destination.py` | `announce`, line 244-318 |
+| 2 | `RNS/Destination.py` | random_hash construction, line 283 |
+| 3 | `RNS/Destination.py` | `rotate_ratchets`, line 228-242 |
+| 4 | `RNS/Destination.py` | signed_data assembly, line 298-299 |
+| 5 | `RNS/Destination.py` | sign + pack, line 301-304 |
+| 6 | `RNS/Destination.py` | path_responses cache, line 306 |
+| 7 | `RNS/Destination.py` | Packet construction, line 314-315 |
+| 7 | `RNS/Packet.py` | ANNOUNCE-skips-encryption, line 191-193 |
+| 8 | `RNS/Transport.py` | `_outbound` broadcast branch, line 1388-1404 |
 | 9 | `LXMF/LXMRouter.py` | jobs / re-announce cadence |
