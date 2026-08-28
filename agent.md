@@ -57,6 +57,38 @@ In rough order of strength:
 2. **Direct upstream source citation.** File path and line number in the standard `pip install rns lxmf` install layout (`RNS/`, `LXMF/`). Acceptable for behaviors that are hard to test (e.g. multi-hop forwarding rules).
 3. **Wire capture with byte-level diff.** Capturing actual upstream emission (e.g. tcpdump on `rnsd`) and showing it matches the spec.
 
+### Citation form — the line number is generated, never typed
+
+A `file:line` citation rots on every upstream release, and a rotted citation is
+worse than none: it still *looks* authoritative. So a citation that carries a
+normative claim MUST anchor itself to a verbatim upstream snippet, and
+`tools/check_citations.py` (run by CI) resolves it against the pinned install:
+
+```markdown
+(`LXMF/LXMessage.py:277` → `self.stamp == RNS.Identity.truncated_hash(ticket+self.message_id)`)
+```
+
+The snippet is the anchor; the line number is derived from it. Three
+consequences, and they are the point:
+
+1. **A paraphrase can't masquerade as a citation.** If you write the formula in
+   your own notation and it isn't what upstream says, the anchor doesn't
+   resolve and CI fails. §5.7.3 once gave the ticket stamp as
+   `SHA256(ticket || message_id)[:32]` when upstream computes a 16-byte
+   `truncated_hash`; that text cannot be committed under this rule (see the
+   `--selftest` case of the same name).
+2. **A version bump stops being an audit.** Run
+   `python tools/check_citations.py --fix` — it rewrites every drifted line
+   number. What it refuses to fix is a snippet that no longer exists upstream,
+   which is precisely the set of claims a human needs to re-read.
+3. **Coverage is measurable.** The checker reports what fraction of citations
+   are anchored. Bare `file:line` citations are still accepted — the migration
+   is incremental — but anchor anything you touch.
+
+Pick the shortest distinctive snippet, not the whole line. See
+[`tools/README.md`](tools/README.md) for the full grammar, the continuation and
+symbol forms, and `tools/citations-exempt.txt`.
+
 What does **NOT** count as verification:
 
 - "It worked on my Sideband install" without a script anyone can re-run
@@ -111,7 +143,21 @@ This spec is only as good as the upstream version it was checked against. **Befo
 
 3. **Prefer the latest *signed* version.** If PyPI is ahead of the newest release carrying a `.rsg`, install the signed one and note the gap — do not silently install an unverifiable newer version.
 
-4. **After a version bump**, re-run every `tools/verify_*.py`, re-check the source-cited line numbers in any section you touch, and only advance SPEC.md's `**Last verified against:**` line once the whole document has been re-checked against the new version.
+4. **After a version bump**, in this order:
+   1. `python tools/check_citations.py` — every citation is resolved against the
+      new pin. Then `--fix` to rewrite drifted line numbers, and re-run to
+      confirm. Whatever still fails is a snippet that no longer exists upstream:
+      read that code, and correct the claim or the citation by hand. Do not
+      "fix" it by deleting the anchor.
+   2. Re-run every `tools/verify_*.py`.
+   3. Update the `Pinned against` / `**Last verified against:**` headers — the
+      checker fails on a document whose declared pin disagrees with
+      `tools/requirements.txt`, so this is enforced rather than remembered.
+   4. Only then advance SPEC.md's `**Last verified against:**` line.
+
+   The manual "re-read every citation" pass this used to require is what the
+   checker replaces; a single audit of that kind found 39 wrong citations
+   (`6d9d442`), which is the measured error rate of doing it by hand.
 
 ---
 
@@ -172,6 +218,7 @@ Initial confidence assessment (subjective, not authoritative — re-do this audi
 
 For any PR touching `SPEC.md`:
 
+- `python tools/check_citations.py` passes. Any citation the PR adds or moves is anchored to a verbatim upstream snippet, not a bare line number.
 - Every new claim has a verification marker OR is unmarked because it has a `(verified by tools/...)` reference.
 - Every removed marker has a corresponding new tools/ script in the same PR.
 - No "I tested this manually and it worked" — capture the test as a runnable script.

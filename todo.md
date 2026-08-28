@@ -102,6 +102,34 @@ to remove their markers:
       which is the check that would have caught the missing `ERROR_INVALID_STAMP` and the
       wrong `ERROR_THROTTLED` / `ERROR_NOT_FOUND` values (see the README errata).
 
+- [ ] **Re-anchor the 12 flow docs still declaring the pre-1.5.0 pin.**
+      `tools/check_citations.py` gates pin declarations against
+      `tools/requirements.txt`; the 12 documents in `tools/citations-exempt.txt`
+      are grandfathered and each needs a pass: re-read against the pinned
+      install, correct the line citations (anchor the load-bearing ones per
+      `agent.md` §1), update the header, delete its line from the exempt file.
+      `flows/receive-propagated-lxmf.md` was done as part of the issue #38 fix
+      and is the worked example. The exempt list errors on entries that are no
+      longer stale, so it drains rather than rots.
+
+- [x] **A verifier for the propagation `/get` retrieval round.**
+      Done — `tools/verify_propagation_get.py`, closing issue #38. Drives upstream
+      `LXMRouter.lxmf_propagation` and `LXMRouter.message_get_request` directly and asserts
+      that the retrieval response is a flat list of bodies (not the `[timestamp, [bodies]]`
+      upload envelope), that each served body has had the §5.7 propagation stamp stripped,
+      and that `full_hash(body_as_received)` reproduces the node's `transient_id` so the
+      `have_ids` purge round closes. The purge is exercised too.
+
+- [x] **A verifier for the receiver-side multi-segment resource store.**
+      Done — `tools/verify_resource_segment_store.py`, closing issue #40. Drives upstream
+      `Resource.accept` / `Resource.assemble` behind a stub link and asserts that
+      `storagepath` is keyed on the advertised `o` alone (so the same `o` on two different
+      links resolves to one file), that segments are concatenated in **arrival** order
+      rather than placed by `i` — with an out-of-order segment still passing its own
+      integrity check, which is what makes the failure silent — and the retention
+      constants (`RESOURCE_CACHE` = 24 h idle, `CLEAN_INTERVAL` = 15 min, 64-character
+      filename filter that leaves the `.meta` sidecar unreclaimed). Backs §10.11.1.
+
 - [x] **§5.8.1 omitted the `/unpeer` request handler and the control-destination split.**
       Done. The section previously said the propagation destination "registers four
       request handlers" on one destination. Upstream registers five across two: `/offer`

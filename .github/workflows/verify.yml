@@ -1,7 +1,14 @@
-# Runs every tools/verify_*.py against the pinned upstream rns/lxmf on each PR.
+# Runs tools/check_citations.py and every tools/verify_*.py against the pinned
+# upstream rns/lxmf on each PR.
+#
 # When Dependabot (see .github/dependabot.yml) opens a version-bump PR, this
 # workflow re-verifies the spec's wire-format claims against the new upstream
 # and reports per-script pass/fail — the "prompt to review" for upstream drift.
+# check_citations.py is the first gate: it resolves every source citation
+# against the new pin, so a bump that moves upstream code fails here with the
+# exact list of citations to re-anchor, rather than silently leaving the spec
+# pointing at the wrong lines. `python tools/check_citations.py --fix` rewrites
+# the drifted line numbers for review.
 name: verify
 
 on:
@@ -20,6 +27,11 @@ jobs:
 
       - name: Install pinned upstream
         run: pip install -r tools/requirements.txt
+
+      - name: Check citations
+        run: |
+          python tools/check_citations.py --selftest
+          python tools/check_citations.py
 
       - name: Run verifiers
         run: |
