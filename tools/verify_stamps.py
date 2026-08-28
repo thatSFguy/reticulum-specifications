@@ -18,7 +18,14 @@ exercising upstream LXMF.LXMStamper directly:
 
   5. End-to-end LXMessage.validate_stamp(target_cost, tickets=[...])
      accepts a stamp built via the ticket shortcut
-     SHA256(ticket || message_id) and rejects with a wrong ticket.
+     truncated_hash(ticket || message_id) and rejects with a wrong
+     ticket.
+
+  6. S5.7.3 lengths: a ticket stamp is TRUNCATED_HASHLENGTH//8 = 16
+     bytes — half of LXStamper.STAMP_SIZE — so payload element [4] is
+     not fixed-width, and LXMessage.get_stamp() emits exactly that
+     16-byte form when an outbound ticket is set, reporting
+     COST_TICKET = 0x100 = 256 as the stamp value.
 
 We use a low target_cost (4 bits) so PoW is fast — typical solve time
 is <1s on a normal laptop. Real interop uses higher costs (8-16 bits).
@@ -188,6 +195,52 @@ def verify_ticket_shortcut(target_cost=4):
         fail("S5.7.3 ticket shortcut fired for a ticket that does not derive the stamp")
     print("PASS S5.7.3 validate_stamp rejects ticket-shortcut stamp under wrong ticket")
 
+    return lxm, ticket
+
+
+def verify_ticket_stamp_length(lxm, ticket):
+    """S5.7.3: a ticket stamp is 16 bytes, NOT STAMP_SIZE, and
+    get_stamp() emits exactly that form when an outbound ticket is set.
+
+    SPEC.md used to give this as SHA256(ticket || message_id)[:32].
+    Upstream truncates to TRUNCATED_HASHLENGTH = 128 bits."""
+    truncated_len = RNS.Identity.TRUNCATED_HASHLENGTH // 8
+    if truncated_len != 16:
+        fail(f"S5.7.3 TRUNCATED_HASHLENGTH//8 = {truncated_len}, want 16")
+    if LXStamper.STAMP_SIZE != 32:
+        fail(f"S5.7.3 STAMP_SIZE = {LXStamper.STAMP_SIZE}, want 32")
+    if truncated_len == LXStamper.STAMP_SIZE:
+        fail("S5.7.3 ticket stamps and PoW stamps are the same length — "
+             "the spec claim that element [4] is not fixed-width is wrong")
+
+    derived = RNS.Identity.truncated_hash(ticket + lxm.message_id)
+    if len(derived) != 16:
+        fail(f"S5.7.3 truncated_hash(ticket || message_id) is {len(derived)} "
+             f"bytes, want 16")
+    print(f"PASS S5.7.3 ticket stamp is {len(derived)} bytes "
+          f"(STAMP_SIZE = {LXStamper.STAMP_SIZE}; element [4] is not fixed-width)")
+
+    # get_stamp() emission side: with an outbound ticket set, the
+    # emitted stamp must be the 16-byte ticket derivation, not a
+    # 32-byte PoW stamp.
+    lxm.outbound_ticket = ticket
+    lxm.stamp_value     = None
+    emitted = lxm.get_stamp()
+    if emitted != derived:
+        fail(f"S5.7.3 get_stamp() emitted {emitted!r}, want the ticket "
+             f"derivation {derived!r}")
+    if len(emitted) != 16:
+        fail(f"S5.7.3 get_stamp() emitted {len(emitted)} bytes, want 16")
+    print("PASS S5.7.3 get_stamp() emits the 16-byte ticket stamp")
+
+    if LXMessage.COST_TICKET != 0x100:
+        fail(f"S5.7.3 COST_TICKET = {LXMessage.COST_TICKET}, want 0x100 (256)")
+    if lxm.stamp_value != LXMessage.COST_TICKET:
+        fail(f"S5.7.3 get_stamp() set stamp_value = {lxm.stamp_value}, "
+             f"want COST_TICKET")
+    print(f"PASS S5.7.3 COST_TICKET = {LXMessage.COST_TICKET} (0x100) reported "
+          f"as stamp_value")
+
 
 def main():
     print(f"verify_stamps.py against RNS {RNS.__version__} / LXMF {LXMF.__version__}")
@@ -197,7 +250,8 @@ def main():
         verify_workblock_deterministic()
         message_id, stamp = verify_stamp_search_and_validate(target_cost=4)
         verify_lxmessage_validate_stamp(message_id, stamp, target_cost=4)
-        verify_ticket_shortcut(target_cost=4)
+        ticket_lxm, ticket = verify_ticket_shortcut(target_cost=4)
+        verify_ticket_stamp_length(ticket_lxm, ticket)
     finally:
         try: RNS.Reticulum.exit_handler()
         except Exception: pass
