@@ -102,6 +102,37 @@ to remove their markers:
       which is the check that would have caught the missing `ERROR_INVALID_STAMP` and the
       wrong `ERROR_THROTTLED` / `ERROR_NOT_FOUND` values (see the README errata).
 
+- [x] **Migrate line-only citations to the anchored form.**
+      Done — `tools/anchor_citations.py` (#46) took anchored coverage from 126
+      citations (23%) to 429 (78%); line-only 343 → 76, continuation 55 → 19.
+      Each anchor is the shortest snippet unique in the pinned file, taken from
+      the **first** cited line, because `check_anchored` derives its drift delta
+      from `cited[0]` and applies it across the range — anchoring mid-range would
+      skew every future repair. Prompted by the RNS 1.5.2 bump (#45), which left
+      215 line references pointing at moved code with CI green: `MAX_RANDOM_BLOBS`
+      cited at `RNS/Transport.py:159`, which is `MAX_RECEIPTS = 1024`.
+
+- [ ] **Convert the remaining 87 line-only citations to `path::symbol`.**
+      85 of the 87 sit inside a named symbol, so they can drop their line number
+      entirely rather than merely becoming repairable — `ast` already resolves
+      which symbol each line falls in (`SourceIndex.symbols`). The residue
+      `tools/anchor_citations.py` refuses to guess at is 40 blank/structural
+      lines, 31 whose text repeats in the file, 8 with no unique snippet under
+      the length cap, and 3 except-clauses. Several of the blank-line ones point
+      at nothing meaningful and want re-pointing, not anchoring. Once this is
+      done, `check_citations.py --strict` can become the CI gate so the
+      line-only count can only go down.
+
+- [ ] **Audit the 429 anchors for semantic correctness.**
+      Anchoring cements, it does not verify: anchors were generated from the
+      line numbers as they stood, so a citation already pointing at the wrong
+      place now has a matching anchor for the wrong place. #46 found three that
+      way — #45 had shifted `Transport.py:1791`, `:1804` and `Packet.py:239`,
+      which were already at 1.5.2 coordinates, and the resulting anchors were
+      absurd on their face (the announce-bound row cited an `except` clause).
+      A citation whose anchor is a bare `RNS.log(...)` or a comment is the
+      signal to look for; there are 8 such today.
+
 - [x] **Re-anchor the 12 flow docs still declaring the pre-1.5.0 pin.**
       Done — all 12 re-read against `rns==1.5.0` / `lxmf==1.1.1`, every line
       citation corrected, the load-bearing ones anchored per `agent.md` §1, and

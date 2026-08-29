@@ -82,7 +82,22 @@ Errata that may invalidate code built against an earlier revision of `SPEC.md`. 
 
 Where a finding cites upstream Python code, the path is relative to a standard `pip install rns lxmf` installation, e.g. `RNS/Transport.py`, `LXMF/LXMF.py`. Where the bundled `umsgpack` is referenced, the path is `RNS/vendor/umsgpack.py`.
 
-When upstream code changes such that a citation no longer matches, file an issue or PR — the goal is to track the de-facto wire spec as it actually behaves, not as it was at any single snapshot.
+Citations come in three forms, in descending order of durability:
+
+| form | example | drifts when upstream moves? |
+|---|---|---|
+| symbol | `RNS/Packet.py::prove` | no — carries no line number |
+| anchored | `RNS/Transport.py:162` → `MAX_RANDOM_BLOBS = 64` | yes, but repaired mechanically |
+| line-only | `RNS/Transport.py:162` | yes, and **silently** — legacy form |
+
+The rule is that **a line number is generated output, never input.** An anchored citation carries the upstream text it points at, so [`tools/check_citations.py`](tools/check_citations.py) can find where that text actually lives and repair the line number. A line-only citation cannot be checked that way: when upstream moves, it keeps resolving — to whatever code now occupies that line. Use [`tools/anchor_citations.py`](tools/anchor_citations.py) to migrate one to the anchored form.
+
+That distinction is what lets a pin bump separate the two cases a bare line number collapses into one:
+
+- upstream **moved** the code → `--fix` re-anchors it, and [`.github/workflows/resync-citations.yml`](.github/workflows/resync-citations.yml) commits that back to the bump PR before anyone reads it
+- upstream **changed** the code → hard error, `--fix` refuses to touch it, and a person looks
+
+So a citation that merely drifted is usually repaired before you ever see it. What survives to review is the spec asserting something upstream no longer says — that is worth an issue or PR. The goal is to track the de-facto wire spec as it actually behaves, not as it was at any single snapshot.
 
 ## Contributing
 
