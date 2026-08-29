@@ -99,6 +99,7 @@ class Finding:
     doc: str
     doc_line: int
     message: str
+    fixable: bool = False   # True when a matching Fix was recorded
 
 
 @dataclass
@@ -281,8 +282,8 @@ class Checker:
         self.counts = {"anchored": 0, "symbol": 0, "line": 0,
                        "continuation": 0, "skipped": 0}
 
-    def err(self, doc, n, msg):
-        self.findings.append(Finding("error", doc, n, msg))
+    def err(self, doc, n, msg, fixable=False):
+        self.findings.append(Finding("error", doc, n, msg, fixable=fixable))
 
     def warn(self, doc, n, msg):
         kind = "error" if self.strict else "warn"
@@ -352,7 +353,8 @@ class Checker:
         )
         new_display = display.replace(lines_spec, new_spec, 1)
         self.err(doc, n, f"{display} — drifted; the anchor is at line {target}. "
-                         f"Should be {new_display} (--fix rewrites this)")
+                         f"Should be {new_display} (--fix rewrites this)",
+                 fixable=True)
         self.fixes.append(Fix(doc, n, display, new_display))
 
     def check_symbol(self, doc, n, path, symbol):
@@ -509,8 +511,11 @@ def check_pins(checker: Checker, relpath, pins, exempt):
             m = rx.search(raw)
             if not m:
                 continue
-            for pkg, ver in RE_PIN_TOKEN.findall(m.group("body")):
+            for tm in RE_PIN_TOKEN.finditer(m.group("body")):
+                pkg, ver = tm.group(1), tm.group(2)
+                tok = tm.group(0)
                 pinned = pins.get(pkg.lower())
+                new_tok = tok.replace(ver, pinned) if pinned else tok
                 if pinned and ver != pinned:
                     mismatched = True
                     msg = (f"pin declaration says {pkg} {ver}, but "
@@ -520,7 +525,9 @@ def check_pins(checker: Checker, relpath, pins, exempt):
                             Finding("info", relpath, n,
                                     f"{msg} — exempt: {exempt[relpath]}"))
                     else:
-                        checker.err(relpath, n, msg)
+                        checker.err(relpath, n,
+                                    f"{msg} (--fix rewrites this)", fixable=True)
+                        checker.fixes.append(Fix(relpath, n, tok, new_tok))
     if relpath in exempt and not mismatched:
         checker.err(relpath, 1,
                     "listed in tools/citations-exempt.txt but its pin "
@@ -649,7 +656,7 @@ def main():
         # Drift is fixable; a snippet that is nowhere in the pinned source is
         # not, and must not be masked by a successful --fix run.
         unfixable = [f for f in checker.findings
-                     if f.kind == "error" and "drifted" not in f.message]
+                     if f.kind == "error" and not f.fixable]
         for f in unfixable:
             print(f"  ERROR {f.doc}:{f.doc_line}: {f.message}")
         if unfixable:
