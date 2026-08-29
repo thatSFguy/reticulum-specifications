@@ -1,6 +1,6 @@
 # Flow: forward an announce (transport-node rebroadcast)
 
-What a transport-mode node does when it receives an inbound announce destined for a non-local destination. This is the flow that makes the mesh actually mesh — without it, announces never propagate beyond direct radio range. Pinned against **RNS 1.5.0**; cross-references [`../SPEC.md`](../SPEC.md) §4.5 (validation), §12.3 (rebroadcast rules), §12.4 (path table).
+What a transport-mode node does when it receives an inbound announce destined for a non-local destination. This is the flow that makes the mesh actually mesh — without it, announces never propagate beyond direct radio range. Pinned against **RNS 1.5.2**; cross-references [`../SPEC.md`](../SPEC.md) §4.5 (validation), §12.3 (rebroadcast rules), §12.4 (path table).
 
 This flow only runs on a node with `enable_transport = Yes` per §12.1. Leaf clients can ignore it entirely.
 
@@ -14,7 +14,7 @@ The receive-announce flow ([`receive-announce.md`](receive-announce.md)) runs fi
 
 ### 2. Eligibility checks
 
-`RNS/Transport.py:2267-2271` → `if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.context != RNS.Packet.PATH_RESPONSE:`. Three conditions all must hold, but they are **not** one boolean — the rate check is nested inside the gate:
+`RNS/Transport.py:2351-2355` → `if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.context != RNS.Packet.PATH_RESPONSE:`. Three conditions all must hold, but they are **not** one boolean — the rate check is nested inside the gate:
 
 ```python
 if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.context != RNS.Packet.PATH_RESPONSE:
@@ -31,7 +31,7 @@ if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.contex
 
 ### 3. Insert into `announce_table`
 
-`Transport.py:2278-2289` → `Transport.announce_table[packet.destination_hash] = [`. The relay adds an entry:
+`Transport.py:2363-2374` → `Transport.announce_table[packet.destination_hash] = [`. The relay adds an entry:
 
 ```python
 Transport.announce_table[packet.destination_hash] = [
@@ -90,11 +90,11 @@ The `wait_time` is what enforces the cap: on a 5kbps LoRa channel, a 200-byte an
 
 ### 6. Rebroadcast emission with hop increment
 
-When the queue actually emits, the wire bytes are the original announce's `packet.raw` with the `hops` byte already incremented (`Transport.inbound` did this at `RNS/Transport.py:1709` → `packet.hops += 1` on receive). No re-signing — the signature in the announce body covers the original hop=0 emission, and signature validation ignores the outer hops byte (it's not in `signed_data`). What's wire-visible is the same body, the same dest_hash, the same random_hash, and a hops byte that's now (hops_received + 1).
+When the queue actually emits, the wire bytes are the original announce's `packet.raw` with the `hops` byte already incremented (`Transport.inbound` did this at `RNS/Transport.py:1800` → `packet.hops += 1` on receive). No re-signing — the signature in the announce body covers the original hop=0 emission, and signature validation ignores the outer hops byte (it's not in `signed_data`). What's wire-visible is the same body, the same dest_hash, the same random_hash, and a hops byte that's now (hops_received + 1).
 
 ### 7. Local-rebroadcast counter cleanup
 
-If the relay later **hears its own rebroadcast** (a peer further along in the chain re-emitted it), `Transport.inbound` at `RNS/Transport.py:2099-2109` → `announce_entry[IDX_AT_LCL_RBRD] += 1` increments `entry[IDX_AT_LCL_RBRD]`. Once `local_rebroadcasts >= LOCAL_REBROADCASTS_MAX`, the entry is removed from `announce_table`:
+If the relay later **hears its own rebroadcast** (a peer further along in the chain re-emitted it), `Transport.inbound` at `RNS/Transport.py:2188-2198` → `announce_entry[IDX_AT_LCL_RBRD] += 1` increments `entry[IDX_AT_LCL_RBRD]`. Once `local_rebroadcasts >= LOCAL_REBROADCASTS_MAX`, the entry is removed from `announce_table`:
 
 ```python
 if announce_entry[IDX_AT_LCL_RBRD] >= LOCAL_REBROADCASTS_MAX:

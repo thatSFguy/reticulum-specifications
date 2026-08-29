@@ -1,6 +1,6 @@
 # Flow: send an announce
 
-What happens chronologically when a node emits an announce — the periodic broadcast that lets the rest of the mesh discover or refresh a path to this destination. Pinned against **RNS 1.5.0**.
+What happens chronologically when a node emits an announce — the periodic broadcast that lets the rest of the mesh discover or refresh a path to this destination. Pinned against **RNS 1.5.2**.
 
 Out of scope: the relay-side rebroadcast (`forward-announce.md` — see [`../SPEC.md`](../SPEC.md) §12.3) and path-response announces (already covered in [`path-discovery.md`](path-discovery.md)).
 
@@ -85,11 +85,11 @@ Wire form per §4.1:
 - `context = NONE (0x00)` for periodic re-announces, `PATH_RESPONSE (0x0B)` for path-response announces
 - `context_flag = 1` if ratchet present (signals the optional ratchet_pub slot in the body)
 
-Announce packets are NOT encrypted — `Packet.pack` (`RNS/Packet.py:191-193` → `# Announce packets are not encrypted`) special-cases ANNOUNCE to skip encryption. The body is signed but plaintext, so anyone in earshot can validate the signature and decode the public key.
+Announce packets are NOT encrypted — `Packet.pack` (`RNS/Packet.py:194-196` → `# Announce packets are not encrypted`) special-cases ANNOUNCE to skip encryption. The body is signed but plaintext, so anyone in earshot can validate the signature and decode the public key.
 
 ### 8. `Transport.outbound` broadcasts on every OUT interface
 
-Same broadcast branch as a path? request (`flows/path-discovery.md` step 2) — the dest_hash isn't in `path_table` (it's our own destination, not a remote one), so the broadcast branch at `RNS/Transport.py:1388-1404` → `# If we don't have a known path for the destination, we'll` fires, emitting on every interface where `interface.OUT == True`. Per §7.5 the announce is rate-limited by `ANNOUNCE_CAP = 2.0` (2% airtime) on each interface.
+Same broadcast branch as a path? request (`flows/path-discovery.md` step 2) — the dest_hash isn't in `path_table` (it's our own destination, not a remote one), so the broadcast branch at `RNS/Transport.py:1439-1455` → `# If we don't have a known path for the destination, we'll` fires, emitting on every interface where `interface.OUT == True`. Per §7.5 the announce is rate-limited by `ANNOUNCE_CAP = 2.0` (2% airtime) on each interface.
 
 ### 9. Periodic re-announce loop
 

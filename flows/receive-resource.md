@@ -1,6 +1,6 @@
 # Flow: receive a Resource (large body) over a Link
 
-The inverse of [`send-resource.md`](send-resource.md). What happens chronologically on the receiver when an inbound Resource transfer arrives. Pinned against **RNS 1.5.0**; see [`../SPEC.md`](../SPEC.md) §10 for the wire bytes.
+The inverse of [`send-resource.md`](send-resource.md). What happens chronologically on the receiver when an inbound Resource transfer arrives. Pinned against **RNS 1.5.2**; see [`../SPEC.md`](../SPEC.md) §10 for the wire bytes.
 
 ---
 

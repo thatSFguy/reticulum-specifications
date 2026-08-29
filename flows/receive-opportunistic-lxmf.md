@@ -2,7 +2,7 @@
 
 The inverse of [`send-opportunistic-lxmf.md`](send-opportunistic-lxmf.md). What happens chronologically on the recipient when wire bytes for an opportunistic LXMF DATA packet arrive at one of its interfaces.
 
-Pinned against **RNS 1.5.0 / LXMF 1.1.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.5.2 / LXMF 1.1.1**. Line numbers below are from those versions.
 
 Out of scope: receiving a packet over an established Reticulum Link (DIRECT method), receiving propagated messages from a propagation node, and receiving an announce / path-request / link-request. Each gets its own flow document.
 
@@ -25,17 +25,17 @@ For RNode KISS specifically, `CMD_STAT_RSSI = 0x23` and `CMD_STAT_SNR = 0x24` si
 
 ### 2. `Transport.inbound(raw, interface)` entry point
 
-`RNS/Transport.py:1629-1633` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` (`:1636-1804`). The single entry point for any inbound packet on any interface. The function is gated by `Transport.ready` — packets arriving before transport startup are dropped with a warning.
+`RNS/Transport.py:1682-1686` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` (`:1636-1804`). The single entry point for any inbound packet on any interface. The function is gated by `Transport.ready` — packets arriving before transport startup are dropped with a warning.
 
 ### 3. IFAC unmask (Interface Authentication Codes)
 
-`RNS/Transport.py:1648-1696` → `if not ifac_handled`. If the interface has an `ifac_identity` configured, the high bit of `raw[0]` must be set; the IFAC bytes at `raw[2:2+ifac_size]` are then used to derive an HKDF mask, the rest of the packet is unmasked in place, and the IFAC is verified against `ifac_identity.sign(unmasked_raw)[-ifac_size:]`. Mismatch drops the packet silently.
+`RNS/Transport.py:1766-1814` → `if not ifac_handled`. If the interface has an `ifac_identity` configured, the high bit of `raw[0]` must be set; the IFAC bytes at `raw[2:2+ifac_size]` are then used to derive an HKDF mask, the rest of the packet is unmasked in place, and the IFAC is verified against `ifac_identity.sign(unmasked_raw)[-ifac_size:]`. Mismatch drops the packet silently.
 
 If the interface has no IFAC and the high bit IS set, the packet is dropped (an unexpected IFAC).
 
 ### 4. Packet parse and physical-layer stats
 
-`RNS/Transport.py:1703-1709` → `packet = RNS.Packet(None, raw)`:
+`RNS/Transport.py:1793-1799` → `packet = RNS.Packet(None, raw)`:
 
 ```python
 packet = RNS.Packet(None, raw)
@@ -50,16 +50,16 @@ RSSI / SNR / Q link-quality stats are attached to `packet` if the interface expo
 
 ### 5. Hop fix-up for shared-instance and local-client interfaces
 
-`RNS/Transport.py:1698-1701` → `if Transport.identity == None: return`. If the receiving interface is to a local shared instance or a local-client TCP socket, the +1 increment from step 4 is undone — the shared-instance path doesn't count as a real network hop.
+`RNS/Transport.py:1788-1791` → `if Transport.identity == None: return`. If the receiving interface is to a local shared instance or a local-client TCP socket, the +1 increment from step 4 is undone — the shared-instance path doesn't count as a real network hop.
 
 ### 6. Dedup, then dispatch by packet_type / destination_type
 
-`RNS/Transport.py:1705` → `if not Transport.packet_filter(packet): return interface.packet_filter_hit()`. `Transport.packet_filter` checks `packet.packet_hash` against `Transport.packet_hashlist` to drop replays. Hashes are added to the dedup list except for two cases that must be deferred:
+`RNS/Transport.py:1795` → `if not Transport.packet_filter(packet): return interface.packet_filter_hit()`. `Transport.packet_filter` checks `packet.packet_hash` against `Transport.packet_hashlist` to drop replays. Hashes are added to the dedup list except for two cases that must be deferred:
 
 - packet whose `destination_hash` is in `Transport.link_table` — the dedup decision is left to the link itself,
 - LRPROOF packets — these may legitimately arrive on multiple interfaces during routing-fork chaos and the dedup list is updated only after the LRPROOF is validated.
 
-Then the function fans out by `(packet_type, destination_type)`. For an opportunistic LXMF DATA packet — `packet_type == DATA`, `destination_type == SINGLE` — control reaches `RNS/Transport.py:2517-2531` → `destination = Transport.destinations_map[packet.destination_hash]`:
+Then the function fans out by `(packet_type, destination_type)`. For an opportunistic LXMF DATA packet — `packet_type == DATA`, `destination_type == SINGLE` — control reaches `RNS/Transport.py:1465-1479` → `destination = Transport.destinations_map[packet.destination_hash]`:
 
 ```python
 destination = Transport.destinations_map.get(packet.destination_hash)

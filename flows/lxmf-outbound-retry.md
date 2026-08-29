@@ -4,7 +4,7 @@ What `LXMRouter.process_outbound` actually does on each tick — the layer that 
 
 The three send-* flows describe what happens for *one* attempt of each method. This doc describes how attempts are scheduled, how the per-message state advances, and when a message moves from retry-eligible to terminally `FAILED`. It is the missing piece for any client that wants delivery semantics matching upstream Sideband.
 
-Pinned against **RNS 1.5.0 / LXMF 1.1.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.5.2 / LXMF 1.1.1**. Line numbers below are from those versions.
 
 ---
 

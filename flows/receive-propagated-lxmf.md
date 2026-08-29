@@ -1,6 +1,6 @@
 # Flow: receive a propagated LXMF message (recipient pulls via `/get`)
 
-The closing half of [`send-propagated-lxmf.md`](send-propagated-lxmf.md): how a recipient client retrieves messages that were store-and-forwarded for it by a propagation node. Pinned against **RNS 1.5.0 / LXMF 1.1.1**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §11 (REQUEST/RESPONSE).
+The closing half of [`send-propagated-lxmf.md`](send-propagated-lxmf.md): how a recipient client retrieves messages that were store-and-forwarded for it by a propagation node. Pinned against **RNS 1.5.2 / LXMF 1.1.1**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §11 (REQUEST/RESPONSE).
 
 This is the inverse-side flow that turns "the message was queued at a propagation node" (`send-propagated-lxmf.md` step 9) into "the message arrives in the recipient's inbox".
 

@@ -2,7 +2,7 @@
 
 What happens chronologically when an app calls `LXMRouter.handle_outbound(lxm)` for an `LXMessage` whose `desired_method == OPPORTUNISTIC` and whose payload fits in a single Reticulum packet.
 
-Pinned against **RNS 1.5.0 / LXMF 1.1.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.5.2 / LXMF 1.1.1**. Line numbers below are from those versions.
 
 Out of scope: messages that need a Reticulum Link (`DIRECT` method, larger payloads), propagation-node delivery (`PROPAGATED`), and paper messages (`PAPER`). Each gets its own flow document.
 
@@ -148,7 +148,7 @@ The receive flow is its own document; see `receive-opportunistic-lxmf.md` (TODO)
 
 ### 12. PROOF receipt returns
 
-`RNS/Transport.py:1307-1324` → `generate_receipt = True`. Because the packet is `DATA` for a non-PLAIN, non-LINK destination with `create_receipt == True`, `Transport.outbound` registered a `PacketReceipt` on the sender side. When the recipient calls `Packet.prove`, a PROOF packet flies back containing `SHA256(packet.hashable_part)`; the sender's `PacketReceipt` matches it, fires the delivery callback registered at step 5, and the LXMessage state advances `SENT → DELIVERED`.
+`RNS/Transport.py:1369-1386` → `generate_receipt = True`. Because the packet is `DATA` for a non-PLAIN, non-LINK destination with `create_receipt == True`, `Transport.outbound` registered a `PacketReceipt` on the sender side. When the recipient calls `Packet.prove`, a PROOF packet flies back containing `SHA256(packet.hashable_part)`; the sender's `PacketReceipt` matches it, fires the delivery callback registered at step 5, and the LXMessage state advances `SENT → DELIVERED`.
 
 If no proof arrives within the receipt timeout, `__link_packet_timed_out` runs on the receipt's timeout callback and the LXMessage state can drive a retry (see `LXMRouter.py::process_outbound` retry logic at `:2571+`, which may itself trigger a fresh `request_path` after `MAX_PATHLESS_TRIES`).
 

@@ -2,7 +2,7 @@
 
 What happens chronologically when an app calls `LXMRouter.handle_outbound(lxm)` for an `LXMessage` whose `desired_method == DIRECT` (or whose payload exceeds the opportunistic single-packet content limit and is downgraded from `OPPORTUNISTIC` to `DIRECT` at pack time). The `DIRECT` method runs the LXMF body over an established Reticulum Link rather than a single Reticulum DATA packet.
 
-Pinned against **RNS 1.5.0 / LXMF 1.1.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.5.2 / LXMF 1.1.1**. Line numbers below are from those versions.
 
 Out of scope: opportunistic delivery (see [`send-opportunistic-lxmf.md`](send-opportunistic-lxmf.md)), propagation-node delivery (`PROPAGATED`), and paper messages (`PAPER`).
 

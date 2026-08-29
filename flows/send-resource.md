@@ -2,7 +2,7 @@
 
 What happens chronologically when an LXMF DIRECT message, NomadNet page, or `rncp` file transfer too big to fit in one Link DATA packet is sent as an `RNS.Resource`. Builds on top of an established Reticulum Link — a Link must already be `ACTIVE` before this flow starts (see [`send-link-lxmf.md`](send-link-lxmf.md) steps 3-4 for how the Link gets there).
 
-Pinned against **RNS 1.5.0**. Wire-level details are in [`../SPEC.md`](../SPEC.md) §10; this document covers chronology and step ordering.
+Pinned against **RNS 1.5.2**. Wire-level details are in [`../SPEC.md`](../SPEC.md) §10; this document covers chronology and step ordering.
 
 Out of scope: the receive side (`receive-resource.md` — TODO), Resource cancellation paths beyond a brief mention in step 9, and the watchdog / RTT estimation machinery (implementation-private).
 

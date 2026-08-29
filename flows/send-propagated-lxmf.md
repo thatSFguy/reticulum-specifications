@@ -1,6 +1,6 @@
 # Flow: send a PROPAGATED LXMF message via a propagation node
 
-What happens when an LXMF client submits a message to a propagation node for store-and-forward delivery — the path used when the recipient is offline, intermittent, or simply somewhere the sender can't reach directly. Pinned against **RNS 1.5.0 / LXMF 1.1.1**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §6 (Link), §10 (Resource), §11 (REQUEST/RESPONSE).
+What happens when an LXMF client submits a message to a propagation node for store-and-forward delivery — the path used when the recipient is offline, intermittent, or simply somewhere the sender can't reach directly. Pinned against **RNS 1.5.2 / LXMF 1.1.1**; cross-references [`../SPEC.md`](../SPEC.md) §5.8 (propagation protocol), §6 (Link), §10 (Resource), §11 (REQUEST/RESPONSE).
 
 ---
 
