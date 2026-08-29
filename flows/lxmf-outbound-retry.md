@@ -14,7 +14,7 @@ Pinned against **RNS 1.5.2 / LXMF 1.1.1**. Line numbers below are from those ver
 
 | Constant | Value | File:line |
 |---|---|---|
-| `PROCESSING_INTERVAL` | `4` (seconds) | `LXMF/LXMRouter.py:31` |
+| `PROCESSING_INTERVAL` | `4` (seconds) | `LXMF/LXMRouter.py:31` → `PROCESSING_INTERVAL =` |
 | `JOB_OUTBOUND_INTERVAL` | `1` | `LXMF/LXMRouter.py:871` → `JOB_OUTBOUND_INTERVAL  = 1` |
 
 So the **effective outbound tick is every 4 seconds.** Any per-message timer (path-request defer, retry backoff, link-establish timeout) is sampled at this granularity — a 10-second backoff isn't actually 10 seconds, it's "first tick at or after `now + 10s`."
@@ -62,7 +62,7 @@ The valid-method enum is `LXMessage.OPPORTUNISTIC = 0x01`, `DIRECT = 0x02`, `PRO
 
 ## Per-tick decision tree
 
-`process_outbound` (`LXMF/LXMRouter.py:2682`) holds `outbound_processing_lock` across the whole tick (`:2683-2684` → `with self.outbound_processing_lock`) and walks `pending_outbound` once. For each message, the top-of-loop branches on terminal state first:
+`process_outbound` (`LXMF/LXMRouter.py:2682` → `def process_outbound(self,`) holds `outbound_processing_lock` across the whole tick (`:2683-2684` → `with self.outbound_processing_lock`) and walks `pending_outbound` once. For each message, the top-of-loop branches on terminal state first:
 
 | Branch | File:line | Effect |
 |---|---|---|
@@ -101,7 +101,7 @@ if lxmessage.method == LXMessage.OPPORTUNISTIC:
 ```
 
 Key behaviors:
-- **First attempt is "pathless-tolerant":** if `delivery_attempts < MAX_PATHLESS_TRIES (=1)` and there's no path, the message still tries a send (relying on `handle_outbound`'s pre-emptive `path?` at `LXMF/LXMRouter.py:1777-1781`).
+- **First attempt is "pathless-tolerant":** if `delivery_attempts < MAX_PATHLESS_TRIES (=1)` and there's no path, the message still tries a send (relying on `handle_outbound`'s pre-emptive `path?` at `LXMF/LXMRouter.py:1777-1781` → `if not RNS.Transport.has_path(destination_hash)`).
 - **After the pathless tries are exhausted,** an explicit `path?` is fired and the message defers `PATH_REQUEST_WAIT (=7s)`.
 - **The `MAX_PATHLESS_TRIES + 1` case** is the "I have a stale path that didn't deliver" recovery: `Reticulum.drop_path` evicts the bad path table entry, then a fresh `path?` is requested.
 - **The `else` branch is the actual retransmit:** increment attempts, schedule `+ DELIVERY_RETRY_WAIT (=10s)`, fire `lxmessage.send()`.
@@ -184,7 +184,7 @@ These are common assumptions that don't match upstream behavior. Listed here so 
 - **No persistence of `pending_outbound` to disk by default** — pending outbound messages live in process memory. A LXMRouter restart drops them. (Sideband persists messages at the *app* level, not via LXMRouter.)
 - **`MESSAGE_EXPIRY` is not a per-message send timeout.** It governs the propagation-node *store* (how long the node retains a message for offline pickup); it does not bound how long a single sender will keep retrying. The retry loop bounds itself via `MAX_DELIVERY_ATTEMPTS`, which at ~10s per attempt is ~50 seconds, not 30 days.
 - **`SENT` is not `DELIVERED`.** PROPAGATED reaches `SENT` after the propagation node accepts the message; the recipient may pick it up minutes, hours, or days later. There is no end-to-end delivery proof for PROPAGATED messages until the recipient comes online and emits it (see [`send-propagated-lxmf.md`](send-propagated-lxmf.md) §6).
-- **Path-request preamble is OPPORTUNISTIC-only at submit time.** `handle_outbound` only fires the pre-emptive `path?` when `lxmessage.method == OPPORTUNISTIC` (`LXMF/LXMRouter.py:1777`). DIRECT and PROPAGATED rely on `process_outbound`'s no-link branch to discover the path on the first tick.
+- **Path-request preamble is OPPORTUNISTIC-only at submit time.** `handle_outbound` only fires the pre-emptive `path?` when `lxmessage.method == OPPORTUNISTIC` (`LXMF/LXMRouter.py:1777` → `if not RNS.Transport.has_path(destination_hash)`). DIRECT and PROPAGATED rely on `process_outbound`'s no-link branch to discover the path on the first tick.
 
 ---
 

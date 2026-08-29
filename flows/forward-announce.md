@@ -27,7 +27,7 @@ if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.contex
 
 - `transport_enabled OR is_from_local_client` — leaf clients only forward announces that came from a local-client interface (the rare "client behind shared rnsd" case).
 - `packet.context != PATH_RESPONSE` — path-response announces are NOT rebroadcast (they go on a single specific interface back to the requester per [`path-discovery.md`](path-discovery.md) step 7).
-- `not rate_blocked` — per-interface announce-rate limits aren't tripped for this destination. A rate-blocked announce still passes the outer gate; it is logged and simply never inserted into `announce_table`, which is what suppresses the rebroadcast. `rate_blocked` is computed at `:2302-2330` against `interface.announce_rate_target`.
+- `not rate_blocked` — per-interface announce-rate limits aren't tripped for this destination. A rate-blocked announce still passes the outer gate; it is logged and simply never inserted into `announce_table`, which is what suppresses the rebroadcast. `rate_blocked` is computed at `:2302-2330` → `rate_blocked = False` against `interface.announce_rate_target`.
 
 ### 3. Insert into `announce_table`
 
@@ -70,7 +70,7 @@ for dest_hash, entry in announce_table.items():
     entry[RETRIES] -= 1
 ```
 
-The actual code is in `Transport.py:736-800` (the `jobs` drain) and `:2090-2290` (the inbound announce path); the structure above is a simplification for the spec.
+The actual code is in `Transport.py:736-800` (the `jobs` drain) and `:2090-2290` → `link_entry = [ now,` (the inbound announce path); the structure above is a simplification for the spec.
 
 ### 5. Per-interface `announce_queue` drain
 

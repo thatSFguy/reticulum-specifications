@@ -212,7 +212,7 @@ Common pre-computed `name_hash` values:
 prv_bytes_blob  =  X25519_priv(32) || Ed25519_priv(32)         // 64 bytes total
 ```
 
-`Identity.get_private_key()` at `RNS/Identity.py:724-729` returns this exact concatenation:
+`Identity.get_private_key()` at `RNS/Identity.py:724-729` → `def get_private_key(self):` returns this exact concatenation:
 
 ```python
 def get_private_key(self):
@@ -257,7 +257,7 @@ Most Reticulum traffic — including all LXMF — uses `SINGLE` destinations wit
 
 #### 1.4.1 Key generation
 
-`Destination.create_keys()` for `GROUP` calls `Token.generate_key()` (`RNS/Cryptography/Token.py:53-56`):
+`Destination.create_keys()` for `GROUP` calls `Token.generate_key()` (`RNS/Cryptography/Token.py:53-56` → `def generate_key(mode=AES_256_CBC):`):
 
 ```python
 @staticmethod
@@ -283,7 +283,7 @@ GROUP destinations encrypt and decrypt via `Token.encrypt` / `Token.decrypt` —
 wire_body  =  iv(16) || aes_ciphertext || hmac_sha256(32)
 ```
 
-There is **no ephemeral_pub prefix** because there is no ECDH — every participant already shares the same `(signing_key, encryption_key)` pair. The format is identical to a Link DATA payload after the link is established (§6.4). Reticulum's `Token` class is shared across both code paths; see `RNS/Destination.py:612-615` and `:656-659` for GROUP encrypt/decrypt, and `RNS/Cryptography/Token.py:87-114` for the underlying primitive.
+There is **no ephemeral_pub prefix** because there is no ECDH — every participant already shares the same `(signing_key, encryption_key)` pair. The format is identical to a Link DATA payload after the link is established (§6.4). Reticulum's `Token` class is shared across both code paths; see `RNS/Destination.py:612-615` and `:656-659` for GROUP encrypt/decrypt, and `RNS/Cryptography/Token.py:87-114` → `def encrypt(self,` for the underlying primitive.
 
 #### 1.4.3 Destination hash for GROUP
 
@@ -328,7 +328,7 @@ bit 3-2 : destination_type (0 = SINGLE, 1 = GROUP, 2 = PLAIN, 3 = LINK)
 bit 1-0 : packet_type      (0 = DATA, 1 = ANNOUNCE, 2 = LINKREQUEST, 3 = PROOF)
 ```
 
-Each subfield is **1 bit** (or 2 for `destination_type` / `packet_type`). Upstream's parser extracts them with these masks (`RNS/Packet.py:253-257` in RNS 1.5.2):
+Each subfield is **1 bit** (or 2 for `destination_type` / `packet_type`). Upstream's parser extracts them with these masks (`RNS/Packet.py:253-257` → `self.header_type = (self.flags` in RNS 1.5.2):
 
 ```python
 self.header_type      = (self.flags & 0b01000000) >> 6     # bit 6 only
@@ -338,7 +338,7 @@ self.destination_type = (self.flags & 0b00001100) >> 2
 self.packet_type      = (self.flags & 0b00000011)
 ```
 
-Bit 7 (`ifac_flag`) is set immediately before transmission when the egress interface has an IFAC identity attached. In RNS 1.5.2 `Transport.transmit` (`RNS/Transport.py:1324-1331`) delegates this to `Transport.handle_outgoing_ifac` (`RNS/Transport.py:1272-1290`); through RNS 1.5.0 the same code was inline in `transmit` itself. The setter is unambiguous:
+Bit 7 (`ifac_flag`) is set immediately before transmission when the egress interface has an IFAC identity attached. In RNS 1.5.2 `Transport.transmit` (`RNS/Transport.py:1324-1331` → `def transmit(interface,`) delegates this to `Transport.handle_outgoing_ifac` (`RNS/Transport.py:1272-1290` → `def handle_outgoing_ifac(interface,`); through RNS 1.5.0 the same code was inline in `transmit` itself. The setter is unambiguous:
 
 ```python
 # RNS/Transport.py:1282, 1289
@@ -348,11 +348,11 @@ new_raw = bytes([raw[0] | 0x80, raw[1]]) + ifac + raw[2:]   # 0x80 = bit 7; IFAC
 x |= 1 << (8 * n - 1)                                       # bit 7 re-asserted after masking
 ```
 
-`Transport.handle_outgoing_ifac_legacy` (`RNS/Transport.py:1293-1321`) retains the
+`Transport.handle_outgoing_ifac_legacy` (`RNS/Transport.py:1293-1321` → `def handle_outgoing_ifac_legacy(interface,`) retains the
 pre-1.5.2 byte-at-a-time form of the same transform. The two produce identical
 bytes on the wire; only the masking arithmetic differs.
 
-When `ifac_flag = 1`, an `ifac_size`-byte IFAC field appears immediately after byte 2 of the header — i.e. between the `hops` byte and the start of `ADDRESSES`. `ifac_size` is interface-configured and ranges from `IFAC_MIN_SIZE = 1` byte (`RNS/Reticulum.py:151-155`) up to 64 bytes (full Ed25519 signature). The receiving side strips the IFAC after verification and rebuilds the un-IFACed packet for upstream processing — `Transport.handle_ifac` (`RNS/Transport.py:1689-1716`), with the pre-1.5.2 form retained as `Transport.handle_ifac_legacy` (`RNS/Transport.py:1719-1750`).
+When `ifac_flag = 1`, an `ifac_size`-byte IFAC field appears immediately after byte 2 of the header — i.e. between the `hops` byte and the start of `ADDRESSES`. `ifac_size` is interface-configured and ranges from `IFAC_MIN_SIZE = 1` byte (`RNS/Reticulum.py:151-155` → `HEADER_MAXSIZE =`) up to 64 bytes (full Ed25519 signature). The receiving side strips the IFAC after verification and rebuilds the un-IFACed packet for upstream processing — `Transport.handle_ifac` (`RNS/Transport.py:1689-1716` → `def handle_ifac(raw,`), with the pre-1.5.2 form retained as `Transport.handle_ifac_legacy` (`RNS/Transport.py:1719-1750` → `def handle_ifac_legacy(raw,`).
 
 > ⚠️ **Spec correction.** Earlier revisions of this section (through commit [`8c4d550`](https://github.com/thatSFguy/reticulum-specifications/commit/8c4d550)) treated `header_type` as a 2-bit field occupying bits 7-6, with bit 7 reserved. That was wrong: bit 7 has always been the IFAC flag (`Transport.handle_outgoing_ifac` line 1282 in RNS 1.5.2; `Transport.transmit` line 1255 in RNS 1.5.0), and `header_type` is 1 bit at position 6. The official manual §4.6.3 documents the correct layout. Implementations that followed the prior wording will mis-parse IFAC-protected packets as `header_type = 2 or 3` and reject them. Surfaced by the reporter on [issue #4](https://github.com/thatSFguy/reticulum-specifications/issues/4) item #1.
 
@@ -365,7 +365,7 @@ HEADER_2: flags(1) hops(1) transport_id(16) dest_hash(16) context(1) data(...)  
 
 `HEADER_2` carries a `transport_id` (the next-hop transport node's identity hash) before the final destination hash. A relay converts a HEADER_1 packet to HEADER_2 by setting bit 6 of flags, inserting its own identity at offset 2, and re-transmitting.
 
-Since RNS 1.5.0 the parser **length-checks the address fields** rather than accepting a short slice: `Packet.unpack` raises if the `destination_hash` slice is not exactly 16 bytes, and for `HEADER_2` if the `transport_id` slice is not exactly 16 bytes either (`RNS/Packet.py:266-267`, `:273`). Before 1.5.0 a truncated frame produced a short `destination_hash` that silently failed to match any local destination; now it is rejected as malformed at unpack time and (when the packet arrived on an interface) counted as a protocol violation against that interface. Implementations SHOULD reject frames shorter than the minimums above rather than routing on a truncated address.
+Since RNS 1.5.0 the parser **length-checks the address fields** rather than accepting a short slice: `Packet.unpack` raises if the `destination_hash` slice is not exactly 16 bytes, and for `HEADER_2` if the `transport_id` slice is not exactly 16 bytes either (`RNS/Packet.py:266-267` → `if len(self.transport_id)`, `:273`). Before 1.5.0 a truncated frame produced a short `destination_hash` that silently failed to match any local destination; now it is rejected as malformed at unpack time and (when the packet arrived on an interface) counted as a protocol violation against that interface. Implementations SHOULD reject frames shorter than the minimums above rather than routing on a truncated address.
 
 Since RNS 1.5.2 the parser also **rejects an empty data field**: `Packet.unpack` raises when the data slice is zero-length (`RNS/Packet.py:275` → `raise ValueError("Zero-length data field")`). The minimums above are therefore strict — the shortest conformant frame is 20 bytes (HEADER_1) or 36 (HEADER_2). Through RNS 1.5.0 a zero-data frame parsed successfully and was dispatched on its context byte.
 
@@ -387,31 +387,31 @@ if path_entry[IDX_PT_HOPS] > 1:
 
 Since RNS 1.3.7 the "hops byte unchanged" line carries a conditional: when the node has the `local_hops_delta` privacy option enabled, the emitted hops byte is the node's random delta instead of the packet's own value (`RNS/Transport.py:1401` in RNS 1.5.2) — see §2.4.
 
-For destinations 0 or 1 hops away, the originator may stay HEADER_1 — the receiving rnsd auto-fills the transport_id when the destination matches a local client (`for_local_client` branch at `RNS/Transport.py:1968` in RNS 1.5.2). Implementations that always emit HEADER_1 will silently fail to deliver to multi-hop destinations even with a known path.
+For destinations 0 or 1 hops away, the originator may stay HEADER_1 — the receiving rnsd auto-fills the transport_id when the destination matches a local client (`for_local_client` branch at `RNS/Transport.py:1968` → `for_local_client = (packet.packet_type` in RNS 1.5.2). Implementations that always emit HEADER_1 will silently fail to deliver to multi-hop destinations even with a known path.
 
 ### 2.4 Hop count
 
-Byte 1 is `hops`, an 8-bit counter that each transit relay increments by 1. `0` for a packet still on the originator (but see the hops-delta callout below). Valid wire values are `0`–`127`: since RNS 1.3.8, `Packet.unpack` raises on `hops >= Transport.PATHFINDER_M` (= 128, the maximum path length — `RNS/Transport.py:118` in RNS 1.5.2), so a packet arriving with `hops ≥ 128` is dropped as malformed (`RNS/Packet.py:250-251`; verified by `tools/verify_packet_header.py`). Implementations SHOULD enforce the same bound on receive.
+Byte 1 is `hops`, an 8-bit counter that each transit relay increments by 1. `0` for a packet still on the originator (but see the hops-delta callout below). Valid wire values are `0`–`127`: since RNS 1.3.8, `Packet.unpack` raises on `hops >= Transport.PATHFINDER_M` (= 128, the maximum path length — `RNS/Transport.py:118` → `PATHFINDER_M = 128` in RNS 1.5.2), so a packet arriving with `hops ≥ 128` is dropped as malformed (`RNS/Packet.py:250-251`; verified by `tools/verify_packet_header.py`). Implementations SHOULD enforce the same bound on receive.
 
-Since RNS 1.5.0 the same bound is also enforced on **emit**: `Packet.send()` returns `False` without packing when `hops >= PATHFINDER_M` (`RNS/Packet.py:292`), and `Transport._outbound` rejects any packet with `hops > PATHFINDER_M-1` before interface selection (`RNS/Transport.py:1356`). A relay that has already bumped a packet to 128 hops therefore drops it instead of transmitting it. Implementations SHOULD enforce the bound on both send and receive.
+Since RNS 1.5.0 the same bound is also enforced on **emit**: `Packet.send()` returns `False` without packing when `hops >= PATHFINDER_M` (`RNS/Packet.py:292` → `if self.hops >= RNS.Transport.PATHFINDER_M: return`), and `Transport._outbound` rejects any packet with `hops > PATHFINDER_M-1` before interface selection (`RNS/Transport.py:1356` → `if packet.hops > Transport.PATHFINDER_M-1:`). A relay that has already bumped a packet to 128 hops therefore drops it instead of transmitting it. Implementations SHOULD enforce the bound on both send and receive.
 
 > **Hops on the wire are not a trustworthy origin/distance signal —
 > the `local_hops_delta` originator-privacy option (RNS ≥ 1.3.7).**
 > When a node enables the `[reticulum]` config option
-> `local_hops_delta` (default off — `RNS/Reticulum.py:257`, `:515-517`
+> `local_hops_delta` (default off — `RNS/Reticulum.py:257` → `Reticulum.__local_hops_delta = False`, `:515-517` → `if option == "local_hops_delta":`
 > in RNS 1.5.2), it picks a random delta in `[2, 7]` once at startup
-> (`(random_byte % 6) + 2`, `RNS/Transport.py:337`) and emits packets
+> (`(random_byte % 6) + 2`, `RNS/Transport.py:337` → `if RNS.Reticulum.local_hops_delta():`) and emits packets
 > it originates with the hops byte set to that delta instead of `0`.
 > The delta applies when `packet.hops == 0`, the destination type is
 > not PLAIN or GROUP, and the outbound interface is not a
 > shared-instance / local-client interface (`should_apply_delta`,
-> `RNS/Transport.py:1608-1611`; apply sites `:1401`, `:1421`,
-> `:1434-1435`, `:1594-1597`, plus the shared-instance local-client
-> emission sites `:2111`, `:2159`, `:2659`, `:2739`). A HEADER_1
+> `RNS/Transport.py:1608-1611` → `def should_apply_delta(packet,`; apply sites `:1401`, `:1421`,
+> `:1434-1435` → `if not Transport.should_apply_delta(packet, outbound_interface):`, `:1594-1597` → `if not Transport.should_apply_delta(packet, interface):`, plus the shared-instance local-client
+> emission sites `:2111` → `if Transport.local_hops_delta`, `:2159`, `:2659`, `:2739`). A HEADER_1
 > ANNOUNCE is additionally rewritten to HEADER_2 with the transport
 > bit set and the node's own transport identity hash inserted as
 > `transport_id` (`mangle_hops(…, transport_insert=True)`,
-> `RNS/Transport.py:1614-1616`), making a mangled announce
+> `RNS/Transport.py:1614-1616` → `def mangle_hops(raw,`), making a mangled announce
 > indistinguishable from one relayed on behalf of a remote originator.
 > Receivers MUST NOT infer "sender is the originator" from
 > `hops == 0`/`1`, and MUST NOT treat announce hop counts as exact
@@ -423,7 +423,7 @@ Since RNS 1.5.0 the same bound is also enforced on **emit**: `Packet.send()` ret
 
 Single byte after the destination hash (offset 18 for HEADER_1, offset 34 for HEADER_2). Common values:
 
-Full context inventory from `RNS/Packet.py:72-92` (RNS 1.5.2):
+Full context inventory from `RNS/Packet.py:72-92` → `NONE = 0x00 # Generic` (RNS 1.5.2):
 
 | Hex | Name | Used for |
 |---|---|---|
@@ -509,7 +509,7 @@ The 64-byte `public_key` is the X25519 || Ed25519 concat described in section 1.
 random_hash = RNS.Identity.get_random_hash()[0:5] + int(time.time()).to_bytes(5, "big")
 ```
 
-Transit relays read the timestamp portion via `Transport.timebase_from_random_blob(random_blob) = int.from_bytes(random_blob[5:10], "big")` (`RNS/Transport.py:3725-3726`) to make ordering decisions when an inbound announce carries a higher hop count than the cached path: only newer-emitted announces can refresh the path table (see §4.5). 5 bytes of seconds covers ~34,000 years, so wraparound is not a near-term concern. Implementations MUST emit this exact format, including a clock value that's monotonically non-decreasing across announces from the same destination — clockless sender devices (per §9.6) may end up locked out of long-range path table updates.
+Transit relays read the timestamp portion via `Transport.timebase_from_random_blob(random_blob) = int.from_bytes(random_blob[5:10], "big")` (`RNS/Transport.py:3725-3726` → `def timebase_from_random_blob(random_blob):`) to make ordering decisions when an inbound announce carries a higher hop count than the cached path: only newer-emitted announces can refresh the path table (see §4.5). 5 bytes of seconds covers ~34,000 years, so wraparound is not a near-term concern. Implementations MUST emit this exact format, including a clock value that's monotonically non-decreasing across announces from the same destination — clockless sender devices (per §9.6) may end up locked out of long-range path table updates.
 
 > ✅ **Resolved upstream (verified 2026-08-27).** Earlier revisions of this
 > section carried an UNVERIFIED callout stating that
@@ -569,9 +569,9 @@ c0         # nil (stamp_cost)
 
 Encoding the display name as msgpack `bin` (`0xc4 NN`) is required for upstream interop — see section 9.3 below. The stamp_cost field can be `int 0` (`0x00`) or `nil` (`0xc0`); upstream's `stamp_cost_from_app_data` doesn't strict-type-check.
 
-**The third element `[capability_flags]`** (a list; the only flag currently defined is `SF_COMPRESSION = 0x00` at `LXMF/LXMF.py:142`) **is emitted by the LXMF 1.0.x+ producer** — `LXMRouter.py:1047-1048` (LXMF 1.1.1) computes `supported_functionality = [SF_COMPRESSION]` and appends it to `peer_data`. Note this changed: the LXMF 0.9.7 producer computed the list but never appended it, so announces from `≤ 0.9.x` carry only 2 elements. The parser reads the element via `compression_support_from_app_data` (`LXMF/LXMF.py:187-199`): a missing third element, or a non-list third element, is treated as "compression supported"; otherwise support is `SF_COMPRESSION in peer_data[2]`. Receivers MUST therefore accept the 2-element form (older deployments) and the 3-element form (LXMF 1.0.x+) interchangeably.
+**The third element `[capability_flags]`** (a list; the only flag currently defined is `SF_COMPRESSION = 0x00` at `LXMF/LXMF.py:142` → `SF_COMPRESSION =`) **is emitted by the LXMF 1.0.x+ producer** — `LXMRouter.py:1047-1048` → `supported_functionality =` (LXMF 1.1.1) computes `supported_functionality = [SF_COMPRESSION]` and appends it to `peer_data`. Note this changed: the LXMF 0.9.7 producer computed the list but never appended it, so announces from `≤ 0.9.x` carry only 2 elements. The parser reads the element via `compression_support_from_app_data` (`LXMF/LXMF.py:187-199` → `def compression_support_from_app_data(app_data=None):`): a missing third element, or a non-list third element, is treated as "compression supported"; otherwise support is `SF_COMPRESSION in peer_data[2]`. Receivers MUST therefore accept the 2-element form (older deployments) and the 3-element form (LXMF 1.0.x+) interchangeably.
 
-The parser also tolerates a 1-element msgpack array (just the name) and a raw UTF-8 string ("original announce format" branch at `LXMF/LXMF.py:151-153`) — see `LXMF/LXMF.py::display_name_from_app_data` for all four accepted shapes.
+The parser also tolerates a 1-element msgpack array (just the name) and a raw UTF-8 string ("original announce format" branch at `LXMF/LXMF.py:151-153` → `def display_name_from_app_data(app_data=None):`) — see `LXMF/LXMF.py::display_name_from_app_data` for all four accepted shapes.
 
 ### 4.4 Announce filtering by `name_hash`
 
@@ -649,10 +649,10 @@ This rule means: **first-announcer-wins for any given destination_hash** within 
 
 #### 5. Blackhole list check
 
-Before everything else, check `RNS.Transport.blackholed_identities`. An identity_hash on the blackhole list is dropped silently regardless of signature validity (`RNS/Identity.py:553-557`). This is operator-controlled state, not a wire feature.
+Before everything else, check `RNS.Transport.blackholed_identities`. An identity_hash on the blackhole list is dropped silently regardless of signature validity (`RNS/Identity.py:553-557` → `if len(RNS.Transport.blackholed_identities)`). This is operator-controlled state, not a wire feature.
 
 Since RNS 1.5.0 `Identity.validate_announce` takes a third parameter,
-`signal_blackholed=False` (`RNS/Identity.py:511`). With it set, a blackholed
+`signal_blackholed=False` (`RNS/Identity.py:511` → `def validate_announce(packet,`). With it set, a blackholed
 announce returns the string `"blackholed"` instead of `False`, letting a
 caller distinguish an operator drop from a genuine validation failure. The
 default is unchanged and the wire behaviour is identical either way — the
@@ -668,38 +668,38 @@ On a fully validated announce, the receiver MUST update its caches in this order
 1. **`known_destinations[destination_hash]`** ← `[recv_time, packet_hash, public_key, app_data, last_used]` — populates the table that `RNS.Identity.recall(dest_hash)` reads when constructing outbound destinations (`RNS/Identity.py::remember`, line 101-113). Without this, every subsequent outbound message to this peer fails because no public key is available for Token encryption.
 2. **`known_ratchets[destination_hash]`** ← `ratchet_pub` (only if `context_flag == 1` and `ratchet_pub != b""`) — `Identity._remember_ratchet`, line 410-443. The ratchet is also persisted to disk under `{storagepath}/ratchets/{hexhash}` for use across restarts.
 3. **`path_table`** entry update or insertion (see §4.6 — TBD when the relay rebroadcast spec lands), gated by:
-   - `random_blob` (= `random_hash`) not in the cached `random_blobs` history for this destination — cheap replay defence (`RNS/Transport.py:2238, 2271, 2282`).
+   - `random_blob` (= `random_hash`) not in the cached `random_blobs` history for this destination — cheap replay defence (`RNS/Transport.py:2238, 2271, 2282` → `if not random_blob in random_blobs and`).
    - Hop count comparison against any existing entry: equal-or-fewer hops always win; more hops win only if the cached path has expired or the new announce's emission timestamp (from `random_hash[5:10]`) is more recent than every cached blob's timestamp (`RNS/Transport.py:2252-2288`).
 
 #### 7. `PATH_RESPONSE` distinction
 
 An announce whose outer packet `context == PATH_RESPONSE (0x0B)` is the responder's reply to a recent `path?` request, not a periodic re-announce. Validation is identical (rules 1-6 above), but listener dispatch differs:
 
-- The default behavior of `Transport.announce_handlers` registered via `RNS.Transport.register_announce_handler` is to **skip** path-response announces unless the handler sets `receive_path_responses = True` on itself (`RNS/Transport.py:2501-2504`).
+- The default behavior of `Transport.announce_handlers` registered via `RNS.Transport.register_announce_handler` is to **skip** path-response announces unless the handler sets `receive_path_responses = True` on itself (`RNS/Transport.py:2501-2504` → `# handler wants to`).
 - The path table population path is the same either way — both regular and path-response announces refresh the path entry — so a leaf client that ignores PATH_RESPONSE entirely at the application layer still benefits from the path-table side effect.
 
 #### 8. Implementation-private behavior (SHOULD)
 
 These are not wire-spec MUST rules but most working clients implement them; without them the implementation will misbehave in busy meshes:
 
-- **Per-interface ingress rate limiting.** When the inbound announce rate on an interface exceeds `IC_BURST_FREQ_NEW = 6 Hz` (interfaces less than 2 hours old) or `IC_BURST_FREQ = 35 Hz` (older), and the announced destination is **not** in `path_table` and **not** in `path_requests`, the announce is held in the interface's `held_announces` dict for later release rather than processed immediately. Released later in lowest-hop-count-first order. (`RNS/Interfaces/Interface.py:60-245`.) Without this, a flood of unknown-destination announces can drown out everything else.
-- **`random_blob` history cap.** The cached `random_blobs` list per destination is bounded by `Transport.MAX_RANDOM_BLOBS` (= 64 in RNS 1.5.2 at `RNS/Transport.py:162`) to keep the path table from growing without bound under a long-lived destination's announce stream (`RNS/Transport.py:2349`).
+- **Per-interface ingress rate limiting.** When the inbound announce rate on an interface exceeds `IC_BURST_FREQ_NEW = 6 Hz` (interfaces less than 2 hours old) or `IC_BURST_FREQ = 35 Hz` (older), and the announced destination is **not** in `path_table` and **not** in `path_requests`, the announce is held in the interface's `held_announces` dict for later release rather than processed immediately. Released later in lowest-hop-count-first order. (`RNS/Interfaces/Interface.py:60-245` → `IA_FREQ_SAMPLES =`.) Without this, a flood of unknown-destination announces can drown out everything else.
+- **`random_blob` history cap.** The cached `random_blobs` list per destination is bounded by `Transport.MAX_RANDOM_BLOBS` (= 64 in RNS 1.5.2 at `RNS/Transport.py:162` → `MAX_RANDOM_BLOBS =`) to keep the path table from growing without bound under a long-lived destination's announce stream (`RNS/Transport.py:2349` → `random_blobs = random_blobs[-Transport.MAX_RANDOM_BLOBS:]`).
 - **Self-announce filter.** §9.5 — drop announces where `destination_hash` matches one of the receiver's own destinations to avoid populating its own contact list with itself.
 
 #### 9. Source map for §4.5
 
 | File | What it pins down |
 |---|---|
-| `RNS/Identity.py:511-614` | `validate_announce` — body parse, signed_data, sig verify, dest_hash recompute, collision check |
-| `RNS/Identity.py:101-113` | `Identity.remember` — `known_destinations` update |
-| `RNS/Identity.py:410-443` | `_remember_ratchet` — ratchet persistence |
+| `RNS/Identity.py:511-614` → `def validate_announce(packet,` | `validate_announce` — body parse, signed_data, sig verify, dest_hash recompute, collision check |
+| `RNS/Identity.py:101-113` → `def remember(packet_hash,` | `Identity.remember` — `known_destinations` update |
+| `RNS/Identity.py:410-443` → `def _remember_ratchet(destination_hash,` | `_remember_ratchet` — ratchet persistence |
 | `RNS/Transport.py:2171-2541` | inbound dispatch for `packet_type == ANNOUNCE`: quick sig check, ingress limiting, path table population, handler dispatch |
-| `RNS/Transport.py:3725-3742` | `timebase_from_random_blob`, `announce_emitted` |
-| `RNS/Transport.py:1883` | general per-interface frame bound, measured against `interface.HW_MTU` |
-| `RNS/Transport.py:1896` | announce-specific ingress bound against `Reticulum.MTU` (RNS ≥ 1.5.2) |
-| `RNS/Packet.py:241` | emit-side MTU bound in `Packet.pack` |
-| `RNS/Interfaces/Interface.py:60-245` | ingress-limit constants, `should_ingress_limit`, `hold_announce`, `process_held_announces` |
-| `RNS/Packet.py:83` | `PATH_RESPONSE = 0x0B` context constant |
+| `RNS/Transport.py:3725-3742` → `def timebase_from_random_blob(random_blob):` | `timebase_from_random_blob`, `announce_emitted` |
+| `RNS/Transport.py:1791` → `Frame size exceeded MTU of` | general per-interface frame bound, measured against `interface.HW_MTU` |
+| `RNS/Transport.py:1804` → `Excessive announce packet frame size` | announce-specific ingress bound against `Reticulum.MTU` (RNS ≥ 1.5.2) |
+| `RNS/Packet.py:239` → `raise IOError("Packet size of "` | emit-side MTU bound in `Packet.pack` |
+| `RNS/Interfaces/Interface.py:60-245` → `IA_FREQ_SAMPLES =` | ingress-limit constants, `should_ingress_limit`, `hold_announce`, `process_held_announces` |
+| `RNS/Packet.py:83` → `PATH_RESPONSE = 0x0B` | `PATH_RESPONSE = 0x0B` context constant |
 
 ### 4.6 `rrc.hub` announce app_data (Reticulum Relay Chat)
 
@@ -823,7 +823,7 @@ RNS bundles `umsgpack` (`RNS/vendor/umsgpack.py`) and uses it for every signing 
 > which round-trips both forms through upstream and reads its verdict.)
 >
 > The asymmetry is structural, not a matter of emphasis. The signature covers
-> the **4-element** payload (`LXMF/LXMessage.py:367` →
+> the **4-element** payload (`LXMF/LXMessage.py:367` → `hashed_part += msgpack.packb(self.payload)` →
 > `hashed_part += msgpack.packb(self.payload)`); the stamp is appended
 > *afterwards* (`:373` → `if self.stamp != None: self.payload.append(self.stamp)`),
 > so the **5-element** array is what reaches the wire (`:381` →
@@ -832,7 +832,7 @@ RNS bundles `umsgpack` (`RNS/vendor/umsgpack.py`) and uses it for every signing 
 > rebuild them.
 >
 > That rebuild is an equality between two independently produced encodings —
-> the sender's `:367` output and the receiver's `:758` output. Upstream Python
+> the sender's `:367` → `hashed_part += msgpack.packb(self.payload)` output and the receiver's `:758` → `packed_payload = msgpack.packb(unpacked_payload)` output. Upstream Python
 > satisfies it trivially because the same encoder runs on both sides, which is
 > precisely why the requirement is invisible from the Python side and has to
 > be stated normatively here. Any divergence — an integer one envelope wider,
@@ -928,14 +928,14 @@ stamp = RNS.Identity.truncated_hash(ticket || message_id)    # = SHA-256(...)[:1
 
 > ⚠️ **A ticket stamp is 16 bytes — not `STAMP_SIZE`.**
 > `RNS.Identity.truncated_hash` truncates to
-> `TRUNCATED_HASHLENGTH = 128` bits (`RNS/Identity.py:362-369` →
+> `TRUNCATED_HASHLENGTH = 128` bits (`RNS/Identity.py:362-369` → `def truncated_hash(data):` →
 > `full_hash(data)[:(Identity.TRUNCATED_HASHLENGTH//8)]`), **half**
 > the 32-byte proof-of-work stamp of §5.7.2. Payload element [4] is
 > therefore not fixed-width: 32 bytes in the PoW form, 16 in the ticket
 > form. Both failure modes are silent.
 >
 > - A sender that emits a 32-byte ticket stamp is compared against
->   upstream's 16-byte derivation (`LXMF/LXMessage.py:277` →
+>   upstream's 16-byte derivation (`LXMF/LXMessage.py:277` → `if self.stamp == RNS.Identity.truncated_hash(ticket+self.message_id):` →
 >   `self.stamp == RNS.Identity.truncated_hash(ticket+self.message_id)`),
 >   misses the
 >   ticket branch, falls through to the PoW branch, fails that too, and
@@ -985,7 +985,7 @@ valid value. The range is not derivable from the algorithm — a stamp cost is
 a leading-zero-bit target over a SHA-256 digest, so *arithmetically* anything
 in `0..256` is satisfiable — it comes from the only path by which a conformant
 peer arrives at the value it announces, `LXMRouter.set_inbound_stamp_cost`
-(`LXMF/LXMRouter.py:378-394`):
+(`LXMF/LXMRouter.py:378-394` → `def set_inbound_stamp_cost(self,`):
 
 ```python
 if stamp_cost == None:
@@ -1008,7 +1008,7 @@ Three rules follow, and the first two are easy to get wrong:
 | `>= 255` | **Refused by the setter**, which returns `False` and leaves the destination's previous cost in place. A conformant peer therefore never *announces* `>= 255` |
 
 > ⚠️ **The reading side does not re-validate.**
-> `stamp_cost_from_app_data` (`LXMF/LXMF.py:174-185`) returns element [1]
+> `stamp_cost_from_app_data` (`LXMF/LXMF.py:174-185` → `def stamp_cost_from_app_data(app_data=None):`) returns element [1]
 > verbatim — no type check, no range check. A peer that ignores the setter,
 > or a hostile one, can put any msgpack value there, including `255`, a
 > huge integer, a float, or a string. A receiver that wants the bounds above
@@ -1021,7 +1021,7 @@ See §4.3 for where the field sits in the announce `app_data` array.
 When a receiver gets a message:
 
 - If `delivery_destination.stamp_cost == None`: no stamp required; messages without one are accepted.
-- If `delivery_destination.stamp_cost != None` AND the inbound message has no valid stamp AND `_enforce_stamps == True`: the message is **dropped** (`LXMRouter.py:1871-1872`).
+- If `delivery_destination.stamp_cost != None` AND the inbound message has no valid stamp AND `_enforce_stamps == True`: the message is **dropped** (`LXMRouter.py:1871-1872` → `if not message.stamp_valid:`).
 - If `_enforce_stamps == False` (default): the message is accepted regardless, and the application is told via `message.stamp_valid` whether the stamp checked out.
 
 A clean-room implementation that doesn't implement stamps at all will:
@@ -1035,15 +1035,15 @@ For interop coverage today, "implement PoW for outbound; tolerate-but-don't-vali
 
 | File | What |
 |---|---|
-| `LXMF/LXStamper.py:49-77` | `stamp_workblock`, `stamp_value`, `stamp_valid` |
-| `LXMF/LXStamper.py:15` | `STAMP_SIZE = 32` (PoW stamp length) |
-| `LXMF/LXMessage.py:42` | `TICKET_LENGTH = 16` |
-| `LXMF/LXMessage.py:53` | `COST_TICKET = 0x100` (256) — sentinel `stamp_value` for ticket-validated stamps |
-| `LXMF/LXMessage.py:273-294` | `validate_stamp` (ticket-then-PoW dispatch); `:277` is the 16-byte ticket comparison |
-| `LXMF/LXMessage.py:296-328` | `get_stamp` (ticket-or-PoW emission); `:300` → `truncated_hash(self.outbound_ticket+self.message_id)` derives the 16-byte ticket stamp |
-| `RNS/Identity.py:362-369` | `truncated_hash` — `full_hash(x)[:TRUNCATED_HASHLENGTH//8]` = 16 bytes |
-| `LXMF/LXMRouter.py:1837-1910` | inbound dispatch — ticket cache + stamp validation + drop logic |
-| `LXMF/LXMF.py:19` | `FIELD_TICKET = 0x0C` constant |
+| `LXMF/LXStamper.py:49-77` → `def stamp_workblock(material,` | `stamp_workblock`, `stamp_value`, `stamp_valid` |
+| `LXMF/LXStamper.py:15` → `STAMP_SIZE = RNS.Identity.HASHLENGTH//8` | `STAMP_SIZE = 32` (PoW stamp length) |
+| `LXMF/LXMessage.py:42` → `TICKET_LENGTH = RNS.Identity.TRUNCATED_HASHLENGTH//8` | `TICKET_LENGTH = 16` |
+| `LXMF/LXMessage.py:53` → `COST_TICKET = 0x100` | `COST_TICKET = 0x100` (256) — sentinel `stamp_value` for ticket-validated stamps |
+| `LXMF/LXMessage.py:273-294` → `def validate_stamp(self,` | `validate_stamp` (ticket-then-PoW dispatch); `:277` → `if self.stamp == RNS.Identity.truncated_hash(ticket+self.message_id):` is the 16-byte ticket comparison |
+| `LXMF/LXMessage.py:296-328` → `def get_stamp(self,` | `get_stamp` (ticket-or-PoW emission); `:300` → `truncated_hash(self.outbound_ticket+self.message_id)` derives the 16-byte ticket stamp |
+| `RNS/Identity.py:362-369` → `def truncated_hash(data):` | `truncated_hash` — `full_hash(x)[:TRUNCATED_HASHLENGTH//8]` = 16 bytes |
+| `LXMF/LXMRouter.py:1837-1910` → `def lxmf_delivery(self,` | inbound dispatch — ticket cache + stamp validation + drop logic |
+| `LXMF/LXMF.py:19` → `FIELD_TICKET = 0x0C` | `FIELD_TICKET = 0x0C` constant |
 
 ### 5.8 Propagation node protocol (offline message store-and-forward)
 
@@ -1053,7 +1053,7 @@ The `PROPAGATED` LXMF method (`LXMessage.py:423-441`, mentioned in `flows/send-l
 
 #### 5.8.1 The `lxmf.propagation` destination
 
-Every propagation node registers a SINGLE destination of name `lxmf.propagation` (`LXMRouter.py:190`):
+Every propagation node registers a SINGLE destination of name `lxmf.propagation` (`LXMRouter.py:190` → `self.propagation_destination =`):
 
 ```python
 self.propagation_destination = RNS.Destination(
@@ -1075,9 +1075,9 @@ A propagation node registers request handlers across **two** destinations, not o
 
 The two public paths (`/offer`, `/get`) are the interop surface and are the only ones an ordinary client or peer uses. The three `/pn/…` control paths are registered on a **separate** destination — `RNS.Destination(identity, IN, SINGLE, "lxmf", "propagation", "control")`, name_hash `4576672b3f55049c2e46` — whose `allowed_list` is `[self.identity.hash]`, i.e. the node's own operator identity and nobody else. A client MUST NOT expect to reach them on the `lxmf.propagation` destination hash, and an implementation that omits them entirely is still spec-compliant for interop; they exist so an operator can drive their own node remotely.
 
-All five are reached over an active Reticulum Link via the §11 REQUEST/RESPONSE protocol. The link must be `identify()`-d first in every case: `/offer` and `/get` use the identity to decide *whose* mail is being offered or fetched, and the control paths reject an unidentified link with `ERROR_NO_IDENTITY` before any allow-list check (`LXMRouter.py:843-844`, `:855-856`).
+All five are reached over an active Reticulum Link via the §11 REQUEST/RESPONSE protocol. The link must be `identify()`-d first in every case: `/offer` and `/get` use the identity to decide *whose* mail is being offered or fetched, and the control paths reject an unidentified link with `ERROR_NO_IDENTITY` before any allow-list check (`LXMRouter.py:843-844` → `def peer_sync_request(self,`, `:855-856` → `def peer_unpeer_request(self,`).
 
-Both control-path handlers that take an argument (`/pn/peer/sync`, `/pn/peer/unpeer`) expect `data` to be a bare 16-byte peer destination hash — not a msgpack wrapper — and return `ERROR_INVALID_DATA` for any other type or length, `ERROR_NOT_FOUND` if that hash isn't a current peer, and `True` on success (`LXMRouter.py:843-866`).
+Both control-path handlers that take an argument (`/pn/peer/sync`, `/pn/peer/unpeer`) expect `data` to be a bare 16-byte peer destination hash — not a msgpack wrapper — and return `ERROR_INVALID_DATA` for any other type or length, `ERROR_NOT_FOUND` if that hash isn't a current peer, and `True` on success (`LXMRouter.py:843-866` → `def peer_sync_request(self,`).
 
 #### 5.8.2 Peer-to-peer sync via `/offer`
 
@@ -1097,7 +1097,7 @@ The receiving node validates the peering_key, then for each `transient_id`:
 - If it already has the message in `propagation_entries`: skip.
 - Otherwise: add to `wanted_ids`.
 
-Then returns one of three response shapes (`LXMRouter.py:2320-2328`):
+Then returns one of three response shapes (`LXMRouter.py:2320-2328` → `if len(wanted_ids) == 0:`):
 
 | Response | Meaning |
 |---|---|
@@ -1114,7 +1114,7 @@ RNS.Resource(resource_data, link, callback=...)
 
 The Resource contains the **full encrypted LXMF bodies** — the bytes that were signed and encrypted by the original sender; the propagation nodes never decrypt them. The receiving node writes each one to its propagation store under its `transient_id` key.
 
-Error responses (`LXMPeer.py:24-31`):
+Error responses (`LXMPeer.py:24-31` → `ERROR_NO_IDENTITY =`):
 
 | Constant | Hex | Meaning |
 |---|---|---|
@@ -1165,8 +1165,8 @@ The propagation node only returns messages whose `propagation_entries[tid][0] ==
 > symptom is either "every message dropped" or "the first two messages are
 > mangled", not a decode error you can chase.
 >
-> The §11 RESPONSE framing (`[request_id, response]`, `RNS/Link.py:848`,
-> `:908-911`) is still there and is still stripped by the Link layer before
+> The §11 RESPONSE framing (`[request_id, response]`, `RNS/Link.py:848` → `packed_response = umsgpack.packb([request_id,`,
+> `:908-911` → `packed_response = resource.data.read()`) is still there and is still stripped by the Link layer before
 > the callback fires; `response` is the flat list. See §11.2.
 >
 > Verified by `tools/verify_propagation_get.py`.
@@ -1174,8 +1174,8 @@ The propagation node only returns messages whose `propagation_entries[tid][0] ==
 > **Retrieved bodies have had the propagation stamp stripped.**
 > The node stores `lxmf_data || stamp` — the §5.7 propagation stamp is
 > `STAMP_SIZE = 32` bytes and is appended at ingest
-> (`LXMRouter.py:2512`) — but it serves
-> `lxmf_data[:-LXStamper.STAMP_SIZE]` (`:1549`). A body delivered over
+> (`LXMRouter.py:2512` → `stamped_data = lxmf_data+stamp_data`) — but it serves
+> `lxmf_data[:-LXStamper.STAMP_SIZE]` (`:1549` → `response_messages.append(lxmf_data[:-LXStamper.STAMP_SIZE])`). A body delivered over
 > `/get` is therefore the **pre-stamp** propagated form,
 > `dest_hash(16) || ciphertext`, and decrypts exactly like an
 > opportunistic body (§5.5). Do not slice 32 bytes off it a second time:
@@ -1186,9 +1186,9 @@ The propagation node only returns messages whose `propagation_entries[tid][0] ==
 > The node keys its store on
 > `transient_id = RNS.Identity.full_hash(lxmf_data)` computed **before**
 > the stamp is appended (`:2494` →
-> `transient_id = RNS.Identity.full_hash(lxmf_data)`, then `:2512` →
+> `transient_id = RNS.Identity.full_hash(lxmf_data)`, then `:2512` → `stamped_data = lxmf_data+stamp_data` →
 > `stamped_data = lxmf_data+stamp_data`), so the client's
-> `full_hash(body_as_received)` (`:1627`) reproduces exactly that id and
+> `full_hash(body_as_received)` (`:1627` → `haves.append(RNS.Identity.full_hash(lxmf_data))`) reproduces exactly that id and
 > can be handed straight back in the `have_ids` slot. It is not obvious
 > that hashing what you received yields the id the node filed it under —
 > it holds only because the two strips are the same 32 bytes.
@@ -1211,7 +1211,7 @@ peering_key = (find any 32B value such that
 
 #### 5.8.5 Propagation node announce app_data
 
-Distinct from §4.3 (which is for `lxmf.delivery`). For `lxmf.propagation` announces, `LXMRouter.get_propagation_node_app_data` (`LXMF/LXMRouter.py:324-336`) emits a 7-element msgpack array:
+Distinct from §4.3 (which is for `lxmf.delivery`). For `lxmf.propagation` announces, `LXMRouter.get_propagation_node_app_data` (`LXMF/LXMRouter.py:324-336` → `def get_propagation_node_app_data(self):`) emits a 7-element msgpack array:
 
 ```python
 announce_data = [
@@ -1235,23 +1235,23 @@ Element [5] sub-fields:
 | `[5][1]` | `stamp_cost_flexibility` | Tolerance — client stamps within this many bits below `stamp_cost` are still accepted |
 | `[5][2]` | `peering_cost` | PoW cost for peering keys per §5.8.4 |
 
-Receivers parse this via `pn_announce_data_is_valid` (`LXMF/LXMF.py:224-250`), which insists on exactly 7 elements with type-correct positions. **A client that misparses element [5] as a single integer (rather than a 3-element list) silently fails to compute the right peering / retrieval stamp and is rejected** — this is the most common interop break in custom propagation-node implementations.
+Receivers parse this via `pn_announce_data_is_valid` (`LXMF/LXMF.py:224-250` → `def pn_announce_data_is_valid(data):`), which insists on exactly 7 elements with type-correct positions. **A client that misparses element [5] as a single integer (rather than a 3-element list) silently fails to compute the right peering / retrieval stamp and is rejected** — this is the most common interop break in custom propagation-node implementations.
 
 #### 5.8.6 Source map
 
 | File | What |
 |---|---|
-| `LXMF/LXMRouter.py:190` | propagation_destination construction |
-| `LXMF/LXMRouter.py:324-336` | propagation announce app_data shape |
+| `LXMF/LXMRouter.py:190` → `self.propagation_destination =` | propagation_destination construction |
+| `LXMF/LXMRouter.py:324-336` → `def get_propagation_node_app_data(self):` | propagation announce app_data shape |
 | `LXMF/LXMRouter.py:669-670` | `/offer` and `/get` handler registration |
-| `LXMF/LXMRouter.py:1482-1561` | `message_get_request` handler (client `/get`); `:1523`, `:1549`, `:1555-1556` are the flat-list response and the stamp strip |
-| `LXMF/LXMRouter.py:1607-1644` | `message_get_response` — client side; `:1624-1627` iterates bodies and rehashes them for the purge round |
-| `LXMF/LXMRouter.py:2487-2540` | `lxmf_propagation` — ingest; `:2494` derives `transient_id` pre-stamp, `:2512` appends the stamp for storage |
-| `LXMF/LXMRouter.py:2266-2335` | `offer_request` handler (peer `/offer`) |
-| `LXMF/LXMPeer.py:14-31` | request-path, peer-state and error-response constants |
-| `LXMF/LXMPeer.py:267-494` | initiator-side `/offer` flow (`sync` → `offer_response`) |
+| `LXMF/LXMRouter.py:1482-1561` → `def message_get_request(self,` | `message_get_request` handler (client `/get`); `:1523` → `response_messages =`, `:1549` → `response_messages.append(lxmf_data[:-LXStamper.STAMP_SIZE])`, `:1555-1556` → `self.client_propagation_messages_served +=` are the flat-list response and the stamp strip |
+| `LXMF/LXMRouter.py:1607-1644` → `def message_get_response(self,` | `message_get_response` — client side; `:1624-1627` → `for lxmf_data in` iterates bodies and rehashes them for the purge round |
+| `LXMF/LXMRouter.py:2487-2540` → `def lxmf_propagation(self,` | `lxmf_propagation` — ingest; `:2494` derives `transient_id` pre-stamp, `:2512` → `stamped_data = lxmf_data+stamp_data` appends the stamp for storage |
+| `LXMF/LXMRouter.py:2266-2335` → `def offer_request(self,` | `offer_request` handler (peer `/offer`) |
+| `LXMF/LXMPeer.py:14-31` → `OFFER_REQUEST_PATH =` | request-path, peer-state and error-response constants |
+| `LXMF/LXMPeer.py:267-494` → `def sync(self):` | initiator-side `/offer` flow (`sync` → `offer_response`) |
 | `LXMF/LXStamper.py::validate_peering_key` | peering-key PoW validation |
-| `LXMF/LXMF.py:224-250` | `pn_announce_data_is_valid` parser |
+| `LXMF/LXMF.py:224-250` → `def pn_announce_data_is_valid(data):` | `pn_announce_data_is_valid` parser |
 
 ### 5.9 LXMF field constants and helper specifiers
 
@@ -1404,7 +1404,7 @@ test vector would further pin the msgpack `str`-vs-`bin` choice.
 
 #### 5.9.8 `FIELD_REACTION` (`0x40`): tap-back reactions
 
-Official as of LXMF 1.0.0 (2026-05-28): `FIELD_REACTION = 0x40` (`LXMF/LXMF.py:25`). A reaction is a standalone LXMF message whose `fields[0x40]` is a msgpack dict keyed by 1-byte integers (`LXMF/LXMF.py:109-110`):
+Official as of LXMF 1.0.0 (2026-05-28): `FIELD_REACTION = 0x40` (`LXMF/LXMF.py:25` → `FIELD_REACTION =`). A reaction is a standalone LXMF message whose `fields[0x40]` is a msgpack dict keyed by 1-byte integers (`LXMF/LXMF.py:109-110` → `REACTION_TO = 0x00`):
 
 ```
 fields[0x40] = {
@@ -1424,7 +1424,7 @@ fields[0x40] = {
 
 #### 5.9.9 `FIELD_REPLY_TO` (`0x30`) + optional `FIELD_REPLY_QUOTE` (`0x31`): reply-to threading
 
-> ✅ **Official as of LXMF 1.0.0** (2026-05-28): `FIELD_REPLY_TO = 0x30` (`LXMF/LXMF.py:23`) and `FIELD_REPLY_QUOTE = 0x31` (`:24`).
+> ✅ **Official as of LXMF 1.0.0** (2026-05-28): `FIELD_REPLY_TO = 0x30` (`LXMF/LXMF.py:23` → `FIELD_REPLY_TO =`) and `FIELD_REPLY_QUOTE = 0x31` (`:24` → `FIELD_REPLY_QUOTE`).
 
 ```
 fields[0x30] = <raw 32-byte LXMF message_id (NOT hex-encoded)>
@@ -1438,7 +1438,7 @@ fields[0x31] = <UTF-8 quoted content>     # optional
 
 #### 5.9.10 `FIELD_COMMENT` (`0x41`): message-as-comment
 
-Official as of LXMF 1.0.0 (`FIELD_COMMENT = 0x41`, `LXMF/LXMF.py:26`). Marks the carrying message as a comment on another message. The comment text itself is carried as the normal LXM `content`, so a client that doesn't support comments simply renders it as an ordinary message (upstream rationale, `LXMF/LXMF.py:111-117`).
+Official as of LXMF 1.0.0 (`FIELD_COMMENT = 0x41`, `LXMF/LXMF.py:26` → `FIELD_COMMENT = 0x41`). Marks the carrying message as a comment on another message. The comment text itself is carried as the normal LXM `content`, so a client that doesn't support comments simply renders it as an ordinary message (upstream rationale, `LXMF/LXMF.py:111-117`).
 
 ```
 fields[0x41] = {
@@ -1446,12 +1446,12 @@ fields[0x41] = {
 }
 ```
 
-- `COMMENT_FOR` (`0x00`, `LXMF/LXMF.py:118`) is the canonical LXMF `message_id` of the commented-on message — raw 32 bytes per §5.5, NOT hex-encoded.
+- `COMMENT_FOR` (`0x00`, `LXMF/LXMF.py:118` → `COMMENT_FOR = 0x00`) is the canonical LXMF `message_id` of the commented-on message — raw 32 bytes per §5.5, NOT hex-encoded.
 - The same inner-map decode tolerance and `bytes`/`str` carrier tolerance described in §5.9.8 apply.
 
 #### 5.9.11 `FIELD_CONTINUATION` (`0x42`): message-as-continuation
 
-Official as of LXMF 1.0.0 (`FIELD_CONTINUATION = 0x42`, `LXMF/LXMF.py:27`). Marks the carrying message as a continuation of an earlier message. As with comments, the continuation text is carried as the normal LXM `content`, so unsupporting clients render it as an ordinary message (upstream rationale, `LXMF/LXMF.py:120-125`).
+Official as of LXMF 1.0.0 (`FIELD_CONTINUATION = 0x42`, `LXMF/LXMF.py:27` → `FIELD_CONTINUATION =`). Marks the carrying message as a continuation of an earlier message. As with comments, the continuation text is carried as the normal LXM `content`, so unsupporting clients render it as an ordinary message (upstream rationale, `LXMF/LXMF.py:120-125` → `# Clients choose how to handle messages that`).
 
 ```
 fields[0x42] = {
@@ -1459,7 +1459,7 @@ fields[0x42] = {
 }
 ```
 
-- `CONTINUATION_OF` (`0x00`, `LXMF/LXMF.py:126`) is the canonical LXMF `message_id` of the continued message — raw 32 bytes per §5.5, NOT hex-encoded.
+- `CONTINUATION_OF` (`0x00`, `LXMF/LXMF.py:126` → `CONTINUATION_OF =`) is the canonical LXMF `message_id` of the continued message — raw 32 bytes per §5.5, NOT hex-encoded.
 - The same inner-map decode tolerance and `bytes`/`str` carrier tolerance described in §5.9.8 apply.
 
 ### 5.10 Source
@@ -1486,7 +1486,7 @@ Both initiator-side keys are **fresh ephemeral keys** (not the initiator's long-
 
 A `packet_type = PROOF (3)` with `context = 0xff`, addressed to the link itself — i.e. `dest_hash` in the packet header is the 16-byte `link_id` (`RNS/Packet.py:185-187`: when context is `LRPROOF`, `header += destination.link_id` and the body is appended unencrypted).
 
-Body (`proof_data` at `RNS/Link.py:371`):
+Body (`proof_data` at `RNS/Link.py:371` → `proof_data = signature+self.pub_bytes+signalling_bytes`):
 
 ```
 signature(64) || responder_X25519_pub(32) || [signalling(3)]
@@ -1508,7 +1508,7 @@ The signalling slot, when present, carries the responder's `confirmed_mtu` and t
 link_id = SHA256(hashable_part_of_LINKREQUEST_packet)[:16]
 ```
 
-`hashable_part` is built by `Packet.get_hashable_part` (`RNS/Packet.py:361-366`):
+`hashable_part` is built by `Packet.get_hashable_part` (`RNS/Packet.py:361-366` → `def get_hashable_part(self):`):
 
 ```
 hashable_part = byte(flags & 0x0F) || raw[N:]
@@ -1518,7 +1518,7 @@ hashable_part = byte(flags & 0x0F) || raw[N:]
 
 The "hashable part" deliberately strips `header_type`, `context_flag`, `transport_type` (top 4 bits of flags — modifiable by transit relays), the `hops` byte (modified by every relay), and (for HEADER_2) the `transport_id` (added by the originator and re-written by each relay). What remains in both cases is the low nibble of flags + dest_hash + context + body, so the resulting `link_id` is the same whether the LINKREQUEST is hashed at the initiator (HEADER_1) or at the responder after one or more transport relays (HEADER_2). Both sides agree on the 16-byte ID.
 
-For LINKREQUEST packets specifically, the trailing signalling bytes (if present, indicated by `len(packet.data) > Link.ECPUBSIZE` in `link_id_from_lr_packet` at `RNS/Link.py:336-342`) are stripped from the END of `hashable_part` before hashing, so the link_id is invariant under MTU-discovery signalling.
+For LINKREQUEST packets specifically, the trailing signalling bytes (if present, indicated by `len(packet.data) > Link.ECPUBSIZE` in `link_id_from_lr_packet` at `RNS/Link.py:336-342` → `def link_id_from_lr_packet(packet):`) are stripped from the END of `hashable_part` before hashing, so the link_id is invariant under MTU-discovery signalling.
 
 ### 6.4 Session keys and link activation
 
@@ -1551,7 +1551,7 @@ After validating the responder's LRPROOF and deriving session keys, the initiato
 | body (plaintext) | `umsgpack.packb(rtt_seconds)` — a single msgpack float64 (9 bytes) carrying the initiator's measured RTT in seconds (LRREQ-send to LRPROOF-receive) |
 | body (wire) | the plaintext above, encrypted with the link's session keys per §3.1 (link form Token, no `eph_pub` prefix) |
 
-Source: `RNS/Link.py:435-437` constructs and sends the packet immediately after LRPROOF validation:
+Source: `RNS/Link.py:435-437` → `rtt_data = umsgpack.packb(self.rtt)` constructs and sends the packet immediately after LRPROOF validation:
 
 ```python
 rtt_data   = umsgpack.packb(self.rtt)
@@ -1559,11 +1559,11 @@ rtt_packet = RNS.Packet(self, rtt_data, context=RNS.Packet.LRRTT)
 rtt_packet.send()
 ```
 
-The responder uses receipt of LRRTT as the trigger to transition its link state from `HANDSHAKE` to `ACTIVE` (`RNS/Link.py:516-538`). The initiator transitions independently upon LRPROOF validation (`Link.py:424-426`); the responder MUST NOT transition before LRRTT arrives. The responder routes context `LRRTT` to `Link.rtt_packet()` from its main `receive()` dispatch at `RNS/Link.py:1022-1025`.
+The responder uses receipt of LRRTT as the trigger to transition its link state from `HANDSHAKE` to `ACTIVE` (`RNS/Link.py:516-538` → `def rtt_packet(self,`). The initiator transitions independently upon LRPROOF validation (`Link.py:424-426`); the responder MUST NOT transition before LRRTT arrives. The responder routes context `LRRTT` to `Link.rtt_packet()` from its main `receive()` dispatch at `RNS/Link.py:1022-1025` → `elif packet.context == RNS.Packet.LRRTT:`.
 
-`Link.rtt_packet()` is also the only path on the responder side that fires the `link_established` callback (`Link.py:532-533`). Without that callback, application layers cannot install link-state policies that depend on `ACTIVE` — most importantly, LXMF's `LXMRouter.delivery_link_established` (`LXMF/LXMRouter.py:1956-1962`) only calls `link.set_resource_strategy(ACCEPT_APP)` from this callback. Until that strategy is installed, the responder's `Link.receive()` hits the silent-drop branch `elif self.resource_strategy == Link.ACCEPT_NONE: pass` (`RNS/Link.py:1065`) on every inbound `RESOURCE_ADV`, and any oversize LXMF delivered as a Resource is discarded with no log line at default levels. This is silent, end-to-end, default-config message loss for an initiator that completes LRPROOF and immediately sends RESOURCE_ADV without first sending LRRTT.
+`Link.rtt_packet()` is also the only path on the responder side that fires the `link_established` callback (`Link.py:532-533`). Without that callback, application layers cannot install link-state policies that depend on `ACTIVE` — most importantly, LXMF's `LXMRouter.delivery_link_established` (`LXMF/LXMRouter.py:1956-1962` → `def delivery_link_established(self,`) only calls `link.set_resource_strategy(ACCEPT_APP)` from this callback. Until that strategy is installed, the responder's `Link.receive()` hits the silent-drop branch `elif self.resource_strategy == Link.ACCEPT_NONE: pass` (`RNS/Link.py:1065` → `elif self.resource_strategy == Link.ACCEPT_NONE:`) on every inbound `RESOURCE_ADV`, and any oversize LXMF delivered as a Resource is discarded with no log line at default levels. This is silent, end-to-end, default-config message loss for an initiator that completes LRPROOF and immediately sends RESOURCE_ADV without first sending LRRTT.
 
-The exact RTT value reported is non-load-bearing: the responder takes `max(its_own_measurement, initiator_reported)` (`Link.py:522`). Implementations that don't have an accurate RTT measurement at this point may report a coarse estimate or zero — the responder's measurement carries forward when the initiator reports a smaller value. The value is, however, included in the encrypted body and so is integrity-bound to the link session keys; a peer that fails to encrypt this body with the correct link keys will fail decrypt and `rtt_packet` returns without transitioning to `ACTIVE`.
+The exact RTT value reported is non-load-bearing: the responder takes `max(its_own_measurement, initiator_reported)` (`Link.py:522` → `self.rtt = max(measured_rtt,`). Implementations that don't have an accurate RTT measurement at this point may report a coarse estimate or zero — the responder's measurement carries forward when the initiator reports a smaller value. The value is, however, included in the encrypted body and so is integrity-bound to the link session keys; a peer that fails to encrypt this body with the correct link keys will fail decrypt and `rtt_packet` returns without transitioning to `ACTIVE`.
 
 #### 6.4.3 Header type for post-handshake DATA and Resource
 
@@ -1582,7 +1582,7 @@ elif remaining_hops == 1:
     new_raw += packet.raw[(RNS.Identity.TRUNCATED_HASHLENGTH//8)+2:]
 ```
 
-Once the link exists, post-handshake traffic addressed to `link_id` is routed via `link_table`, not `path_table`. The link_table forwarding branch (`RNS/Transport.py:2123-2162`) does NOT touch the header — it bumps `hops` and forwards the bytes verbatim:
+Once the link exists, post-handshake traffic addressed to `link_id` is routed via `link_table`, not `path_table`. The link_table forwarding branch (`RNS/Transport.py:2123-2162` → `if packet.packet_type != RNS.Packet.ANNOUNCE and packet.packet_type`) does NOT touch the header — it bumps `hops` and forwards the bytes verbatim:
 
 ```python
 new_raw = packet.raw[0:1]
@@ -1602,7 +1602,7 @@ if packet.transport_id != None and packet.packet_type != RNS.Packet.ANNOUNCE:
 
 The drop fires only at `LOG_EXTREME` (level 7) and is invisible at the default `LOG_NOTICE` (level 3); see §9.9.
 
-Upstream RNS does not trip this in practice because its own constructors use `Packet`'s defaults (`HEADER_1`, `transport_id=None`) regardless of multi-hop. The relevant ones, all in `RNS/Resource.py` and `RNS/Link.py`, take the form `RNS.Packet(self.link, body, context=...)` (e.g. `Resource.py:588` for `RESOURCE_ADV`); see `Packet.__init__` at `RNS/Packet.py:123-124` for the default values. Upstream-to-upstream interop therefore never exercises this path. A clean-room implementation that copies the LINKREQUEST multi-hop pattern verbatim — setting `transport_id` on every link-bound packet — silently fails on any link with one or more transit relays in the path. The unit tests for that implementation pass (both sides agree on the same wire mistake) but localhost-rnsd interop with a real upstream destination drops every Resource part.
+Upstream RNS does not trip this in practice because its own constructors use `Packet`'s defaults (`HEADER_1`, `transport_id=None`) regardless of multi-hop. The relevant ones, all in `RNS/Resource.py` and `RNS/Link.py`, take the form `RNS.Packet(self.link, body, context=...)` (e.g. `Resource.py:588` for `RESOURCE_ADV`); see `Packet.__init__` at `RNS/Packet.py:123-124` → `def __init__(self, destination,` for the default values. Upstream-to-upstream interop therefore never exercises this path. A clean-room implementation that copies the LINKREQUEST multi-hop pattern verbatim — setting `transport_id` on every link-bound packet — silently fails on any link with one or more transit relays in the path. The unit tests for that implementation pass (both sides agree on the same wire mistake) but localhost-rnsd interop with a real upstream destination drops every Resource part.
 
 The asymmetry summarized: the same Link is set up via a `HEADER_2`-eligible LINKREQUEST, but uses `HEADER_1` for everything else once established.
 
@@ -1617,7 +1617,7 @@ This section specifies the regular PROOF body. Two related proof formats are doc
 
 #### 6.5.1 Two body formats: explicit vs implicit
 
-Regular PROOFs come in two wire forms (`RNS/Packet.py:411-412`):
+Regular PROOFs come in two wire forms (`RNS/Packet.py:411-412` → `EXPL_LENGTH = RNS.Identity.HASHLENGTH//8+RNS.Identity.SIGLENGTH//8`):
 
 ```
 EXPL_LENGTH = HASHLENGTH//8 + SIGLENGTH//8 = 32 + 64 = 96 bytes
@@ -1630,15 +1630,15 @@ implicit body  =                     signature(64)
 Where:
 
 - `packet_hash = Identity.full_hash(original_packet.get_hashable_part())` — the full SHA-256 (32 bytes, **not** truncated to 16) of the prove-target packet's hashable part. `get_hashable_part` is the same recipe used for `link_id` derivation in §6.3, so the proof binds to the version of the packet that survived any HEADER_1↔HEADER_2 conversion in transit (the high nibble of flags, hops byte, and any HEADER_2 transport_id are stripped before hashing).
-- `signature` is the destination's (or link's) Ed25519 signature **over `packet_hash`**, NOT over the proof body itself. The signing key is the destination's long-term Ed25519 private key for an opportunistic DATA proof, or **the link's Ed25519 signing key** (`Link.sig_prv`, `RNS/Link.py:277` / `:285` in RNS 1.5.2) for a Link DATA proof — the owner identity's long-term key on the responder side, the link's ephemeral Ed25519 keypair on the initiator side. (The HKDF-derived `signing_key` from §6.4.1 is a separate **symmetric HMAC key** for the link Token form §3.1 — it cannot produce an Ed25519 signature and is not used here.)
+- `signature` is the destination's (or link's) Ed25519 signature **over `packet_hash`**, NOT over the proof body itself. The signing key is the destination's long-term Ed25519 private key for an opportunistic DATA proof, or **the link's Ed25519 signing key** (`Link.sig_prv`, `RNS/Link.py:277` → `self.sig_prv = self.owner.identity.sig_prv` / `:285` → `self.sig_prv = Ed25519PrivateKey.generate()` in RNS 1.5.2) for a Link DATA proof — the owner identity's long-term key on the responder side, the link's ephemeral Ed25519 keypair on the initiator side. (The HKDF-derived `signing_key` from §6.4.1 is a separate **symmetric HMAC key** for the link Token form §3.1 — it cannot produce an Ed25519 signature and is not used here.)
 
-The two forms are distinguished **purely by length** at the receiver. `PacketReceipt.validate_proof` (`RNS/Packet.py:493-537`) dispatches on `len(proof) == 96` (explicit) vs `len(proof) == 64` (implicit); lengths matching neither are rejected outright. There is no flag bit or context byte that signals which form is being used — wire length is the only signal.
+The two forms are distinguished **purely by length** at the receiver. `PacketReceipt.validate_proof` (`RNS/Packet.py:493-537` → `def validate_proof(self, proof,`) dispatches on `len(proof) == 96` (explicit) vs `len(proof) == 64` (implicit); lengths matching neither are rejected outright. There is no flag bit or context byte that signals which form is being used — wire length is the only signal.
 
 #### 6.5.2 Choosing which form to emit
 
 Sender side, two distinct policies:
 
-**Opportunistic DATA addressed to a SINGLE destination** — `RNS.Identity.prove(packet, destination)` at `RNS/Identity.py:946-957`:
+**Opportunistic DATA addressed to a SINGLE destination** — `RNS.Identity.prove(packet, destination)` at `RNS/Identity.py:946-957` → `def prove(self, packet,`:
 
 ```python
 def prove(self, packet, destination=None):
@@ -1654,7 +1654,7 @@ def prove(self, packet, destination=None):
 
 The default upstream value is `Reticulum.__use_implicit_proof = True` (`RNS/Reticulum.py:260`), so **upstream emits the 64-byte implicit form by default**. The 96-byte explicit form is only emitted when the operator's `[reticulum]` config sets `use_implicit_proof = No`. A clean-room implementation that hardcodes either single form will fail to interop with peers running the other one — receiver-side validators handle both, but a hardcoded sender writing the wrong length to the wire is not negotiable.
 
-**DATA on an active Link** — `RNS.Link.prove_packet(packet)` at `RNS/Link.py:378-389`:
+**DATA on an active Link** — `RNS.Link.prove_packet(packet)` at `RNS/Link.py:378-389` → `def prove_packet(self,`:
 
 ```python
 def prove_packet(self, packet):
@@ -1664,13 +1664,13 @@ def prove_packet(self, packet):
     proof.send()
 ```
 
-with the upstream comment `# TODO: Hardcoded as explicit proof for now`. Link DATA proofs are **always** the 96-byte explicit form in RNS 1.5.2 regardless of the `use_implicit_proof` setting, and the matching `validate_link_proof` at `RNS/Packet.py:447-491` has the implicit-form branch commented out with the same note. Today, Link DATA proofs are explicit-only on both ends; an implementation may match this behavior with a single hardcoded length on the link path, but should be ready to revisit if upstream re-enables the implicit branch (no fixed timeline).
+with the upstream comment `# TODO: Hardcoded as explicit proof for now`. Link DATA proofs are **always** the 96-byte explicit form in RNS 1.5.2 regardless of the `use_implicit_proof` setting, and the matching `validate_link_proof` at `RNS/Packet.py:447-491` → `def validate_link_proof(self,` has the implicit-form branch commented out with the same note. Today, Link DATA proofs are explicit-only on both ends; an implementation may match this behavior with a single hardcoded length on the link path, but should be ready to revisit if upstream re-enables the implicit branch (no fixed timeline).
 
 #### 6.5.3 Where the proof packet is addressed
 
 The dest_hash position in the proof packet's outer header depends on which side of which transport the proven packet was on:
 
-- **Opportunistic DATA proof:** `dest_hash = packet_hash[:16]` (the 16-byte truncation of the full SHA-256 of the proved packet's hashable part, used as a synthetic `ProofDestination` — `RNS/Packet.py:389-403`). The proof rides through `Transport.outbound` (a thin wrapper over `Transport._outbound` since RNS 1.5.0) and follows the reverse path home via the receiver's `reverse_table`.
+- **Opportunistic DATA proof:** `dest_hash = packet_hash[:16]` (the 16-byte truncation of the full SHA-256 of the proved packet's hashable part, used as a synthetic `ProofDestination` — `RNS/Packet.py:389-403` → `class ProofDestination:`). The proof rides through `Transport.outbound` (a thin wrapper over `Transport._outbound` since RNS 1.5.0) and follows the reverse path home via the receiver's `reverse_table`.
 - **Link DATA proof:** `dest_hash = link.link_id` (the 16-byte link id, just like all other Link traffic; `RNS/Packet.py:185-187` notes this position is filled by `destination.link_id` whenever the destination object is a Link). The proof rides on the link itself.
 
 #### 6.5.4 Wire summary
@@ -1686,7 +1686,7 @@ implicit form (64 bytes total body):
 [ 64B Ed25519_signature(SHA256(get_hashable_part(original_packet))) ]
 ```
 
-Note `context = 0x00 (NONE)` in both cases — the proof-ness is conveyed by `packet_type = PROOF (3)` in the flag byte, not by a context. This is in contrast to LRPROOF (which uses `context = 0xFF`) and RESOURCE_PRF (which uses `context = 0x05`). The `LINKPROOF (0xFD)` context constant defined at `RNS/Packet.py:90` is reserved but not actually used by either prove path in RNS 1.5.2.
+Note `context = 0x00 (NONE)` in both cases — the proof-ness is conveyed by `packet_type = PROOF (3)` in the flag byte, not by a context. This is in contrast to LRPROOF (which uses `context = 0xFF`) and RESOURCE_PRF (which uses `context = 0x05`). The `LINKPROOF (0xFD)` context constant defined at `RNS/Packet.py:90` → `LINKPROOF = 0xFD` is reserved but not actually used by either prove path in RNS 1.5.2.
 
 #### 6.5.5 Receiver tolerance
 
@@ -1712,7 +1712,7 @@ byte 1 :  m m m m m m m m       — mtu[15..8]
 byte 2 :  m m m m m m m m       — mtu[7..0]
 ```
 
-Encoded by `RNS/Link.py:148-151`:
+Encoded by `RNS/Link.py:148-151` → `def signalling_bytes(mtu,`:
 
 ```python
 @staticmethod
@@ -1736,7 +1736,7 @@ The mtu decode trick: the full 24-bit value of all three bytes is masked with th
 
 #### 6.6.2 Mode field
 
-3-bit value (0..7) at the top of byte 0. Defined values, with `RNS/Link.py:125-137`:
+3-bit value (0..7) at the top of byte 0. Defined values, with `RNS/Link.py:125-137` → `MODE_AES128_CBC =`:
 
 | Mode | Name | Status in RNS 1.5.2 | Derived key length |
 |---|---|---|---|
@@ -1756,7 +1756,7 @@ A clean-room implementation today can safely hardcode mode = `0x01` on emit. On 
 
 21-bit unsigned integer in the low 21 bits of the 24-bit signalling value. Max representable: `0x1FFFFF = 2,097,151` bytes. Real Reticulum `HW_MTU` values are radically smaller (LoRa: 508; TCP: typical HW MTU ~64 KiB; AutoInterface: matches its bearer). The 21-bit width is forward-looking: it leaves room for future high-bandwidth interfaces without a wire-format change.
 
-When the initiator emits a LINKREQUEST with signalling, the encoded `mtu` is the next-hop interface's `HW_MTU` (`RNS/Link.py:309-314`):
+When the initiator emits a LINKREQUEST with signalling, the encoded `mtu` is the next-hop interface's `HW_MTU` (`RNS/Link.py:309-314` → `RNS.log(f"Signalling`):
 
 ```python
 nh_hw_mtu = RNS.Transport.next_hop_interface_hw_mtu(destination.hash)
@@ -1766,7 +1766,7 @@ else:
     signalling_bytes = Link.signalling_bytes(RNS.Reticulum.MTU, self.mode)
 ```
 
-When the responder emits an LRPROOF with signalling, the encoded `mtu` is the **min** of its own next-hop view and what arrived in the LINKREQUEST. In RNS 1.5.2 the clamp is performed by transit relays in the DATA forwarding path (`RNS/Transport.py:2059-2087`), which rewrite the LINKREQUEST's signalling bytes in place before forwarding so the responder's `Link.validate_request` (`RNS/Link.py:186-200`) sees the already-clamped value:
+When the responder emits an LRPROOF with signalling, the encoded `mtu` is the **min** of its own next-hop view and what arrived in the LINKREQUEST. In RNS 1.5.2 the clamp is performed by transit relays in the DATA forwarding path (`RNS/Transport.py:2059-2087` → `if packet.packet_type == RNS.Packet.LINKREQUEST:`), which rewrite the LINKREQUEST's signalling bytes in place before forwarding so the responder's `Link.validate_request` (`RNS/Link.py:186-200` → `def validate_request(owner,`) sees the already-clamped value:
 
 ```python
 path_mtu = Link.mtu_from_lr_packet(packet) or Reticulum.MTU
@@ -1790,9 +1790,9 @@ Both directions detect the optional signalling slot **purely by packet body leng
 | LINKREQUEST | `ECPUBSIZE = 64` | `ECPUBSIZE + LINK_MTU_SIZE = 67` |
 | LRPROOF     | `SIGLENGTH//8 + ECPUBSIZE//2 = 96` | `... + LINK_MTU_SIZE = 99` |
 
-Where `ECPUBSIZE = 64` is the combined initiator ephemeral X25519 + Ed25519 public key (`Link.py:70`), and `SIGLENGTH//8 = 64` is the responder's Ed25519 signature.
+Where `ECPUBSIZE = 64` is the combined initiator ephemeral X25519 + Ed25519 public key (`Link.py:70` → `ECPUBSIZE = 32+32`), and `SIGLENGTH//8 = 64` is the responder's Ed25519 signature.
 
-Receivers MUST handle both forms. `validate_request` at `RNS/Link.py:186-190` checks `len(data) == ECPUBSIZE` OR `len(data) == ECPUBSIZE+LINK_MTU_SIZE` and rejects anything else. The same length-dispatch is in `validate_proof` for the LRPROOF side at `RNS/Link.py:404-410`. There is no flag bit signalling presence — wire length is the only signal.
+Receivers MUST handle both forms. `validate_request` at `RNS/Link.py:186-190` → `def validate_request(owner,` checks `len(data) == ECPUBSIZE` OR `len(data) == ECPUBSIZE+LINK_MTU_SIZE` and rejects anything else. The same length-dispatch is in `validate_proof` for the LRPROOF side at `RNS/Link.py:404-410`. There is no flag bit signalling presence — wire length is the only signal.
 
 #### 6.6.5 Inclusion in LRPROOF signed_data
 
@@ -1806,17 +1806,17 @@ A clean-room implementation that omits the signalling bytes when present (or inc
 
 #### 6.6.6 Disabling MTU discovery
 
-The `[reticulum]` config option `link_mtu_discovery = No` makes `Reticulum.link_mtu_discovery()` return False, so the initiator skips signalling on outbound LINKREQUESTs (`RNS/Link.py:311-314`). In that case the link uses `Reticulum.MTU` (default 500 bytes) globally, no per-link MTU clamping happens, and all four lengths fall back to the no-signalling sizes in §6.6.4.
+The `[reticulum]` config option `link_mtu_discovery = No` makes `Reticulum.link_mtu_discovery()` return False, so the initiator skips signalling on outbound LINKREQUESTs (`RNS/Link.py:311-314` → `RNS.log(f"Establishing`). In that case the link uses `Reticulum.MTU` (default 500 bytes) globally, no per-link MTU clamping happens, and all four lengths fall back to the no-signalling sizes in §6.6.4.
 
 A receiver doesn't need its own copy of the disable switch — it just stops seeing trailing signalling bytes from peers that have it disabled. Its own MTU reporting on the LRPROOF return path runs unaffected for peers that send it.
 
 ### 6.7 KEEPALIVE and link teardown
 
-A Link goes through five states (`RNS/Link.py:110-114`): `PENDING → HANDSHAKE → ACTIVE → STALE → CLOSED`. `KEEPALIVE` and `LINKCLOSE` are the two control-plane packet types that drive transitions out of `ACTIVE`.
+A Link goes through five states (`RNS/Link.py:110-114` → `PENDING = 0x00`): `PENDING → HANDSHAKE → ACTIVE → STALE → CLOSED`. `KEEPALIVE` and `LINKCLOSE` are the two control-plane packet types that drive transitions out of `ACTIVE`.
 
 #### 6.7.1 KEEPALIVE (`context = 0xFA`)
 
-Cadence (`RNS/Link.py:795-797`):
+Cadence (`RNS/Link.py:795-797` → `def __update_keepalive(self):`):
 
 ```python
 def __update_keepalive(self):
@@ -1834,9 +1834,9 @@ def send_keepalive(self):
     keepalive_packet.send()
 ```
 
-Body is a single byte `0xFF` — the "ping" sentinel. **KEEPALIVE is NOT Token-encrypted** — `RNS/Packet.py` `pack()` puts `KEEPALIVE` in its not-encrypted branch alongside `RESOURCE`, `RESOURCE_PRF`, link `PROOF`, and `CACHE_REQUEST` (`self.ciphertext = self.data`, `Packet.py:207-210` in RNS 1.5.2). The wire body is the single sentinel byte in the clear — no IV, no ciphertext expansion, no HMAC.
+Body is a single byte `0xFF` — the "ping" sentinel. **KEEPALIVE is NOT Token-encrypted** — `RNS/Packet.py` `pack()` puts `KEEPALIVE` in its not-encrypted branch alongside `RESOURCE`, `RESOURCE_PRF`, link `PROOF`, and `CACHE_REQUEST` (`self.ciphertext = self.data`, `Packet.py:207-210` → `# by itself` in RNS 1.5.2). The wire body is the single sentinel byte in the clear — no IV, no ciphertext expansion, no HMAC.
 
-The **responder** receives this in `Link.receive` at `RNS/Link.py:1130-1134` and answers with the "pong" sentinel (in 1.2.4 the body is `bytes([0xFE])`):
+The **responder** receives this in `Link.receive` at `RNS/Link.py:1130-1134` → `elif packet.context == RNS.Packet.KEEPALIVE:` and answers with the "pong" sentinel (in 1.2.4 the body is `bytes([0xFE])`):
 
 ```python
 elif packet.context == RNS.Packet.KEEPALIVE:
@@ -1850,7 +1850,7 @@ So:
 - **Pong** = responder → initiator, body `0xFE`.
 - Only the initiator originates KEEPALIVE traffic. The responder never spontaneously pings.
 
-Both sentinel bytes are arbitrary; what actually matters for keep-alive purposes is that *any* inbound traffic on the link refreshes `last_inbound` (the watchdog's anchor for staleness decisions). KEEPALIVE packets do **not** generate a PROOF receipt — the link-DATA proof path in `RNS/Link.py` `receive()` is gated on `packet.context == RNS.Packet.NONE` (`Link.py:950` in RNS 1.5.2), and KEEPALIVE takes its own branch at line 1130-1134. So a successful ping/pong exchange resets the staleness clock on **both** sides via the two-packet exchange itself: ping → pong (no pong-proof).
+Both sentinel bytes are arbitrary; what actually matters for keep-alive purposes is that *any* inbound traffic on the link refreshes `last_inbound` (the watchdog's anchor for staleness decisions). KEEPALIVE packets do **not** generate a PROOF receipt — the link-DATA proof path in `RNS/Link.py` `receive()` is gated on `packet.context == RNS.Packet.NONE` (`Link.py:950` → `if packet.context == RNS.Packet.NONE:` in RNS 1.5.2), and KEEPALIVE takes its own branch at line 1130-1134. So a successful ping/pong exchange resets the staleness clock on **both** sides via the two-packet exchange itself: ping → pong (no pong-proof).
 
 A clean-room responder MUST emit the pong on inbound `0xFF`; without it the initiator's watchdog will declare the link stale on the next cycle.
 
@@ -1885,7 +1885,7 @@ Wire form:
 - `packet_type = DATA (0)`, `context = 0xFC`, `dest_hash = link_id`.
 - Body is the **16-byte link_id**, Token-encrypted by the link's session key.
 
-The peer's receiver path at `RNS/Link.py:1027-1028` calls `teardown_packet(packet)` (line 674-683):
+The peer's receiver path at `RNS/Link.py:1027-1028` → `elif packet.context == RNS.Packet.LINKCLOSE:` calls `teardown_packet(packet)` (line 674-683):
 
 ```python
 def teardown_packet(self, packet):
@@ -1910,7 +1910,7 @@ After `link_closed()` (line 685-710) runs:
 
 #### 6.7.4 Teardown reason codes
 
-`Link.teardown_reason` is set to one of (`RNS/Link.py:116-118`):
+`Link.teardown_reason` is set to one of (`RNS/Link.py:116-118` → `TIMEOUT = 0x01`):
 
 | Constant | Hex | Meaning |
 |---|---|---|
@@ -1939,7 +1939,7 @@ Link control packets. Used by the initiator to prove which long-term
 identity is making the request without re-running the Link handshake;
 §11.6 covers the calling context on the NomadNet REQUEST path.
 
-`Link.identify(identity)` (`RNS/Link.py:454-470` in RNS 1.5.2):
+`Link.identify(identity)` (`RNS/Link.py:454-470` → `def identify(self,` in RNS 1.5.2):
 
 ```python
 def identify(self, identity):
@@ -1972,7 +1972,7 @@ link-encrypted per §3.1 link-derived form like ordinary link DATA —
 `context = 0xFB` is NOT in `RNS/Packet.py` `pack()`'s not-encrypted
 set, unlike KEEPALIVE (§6.7.1) or link `PROOF` (§6.5).
 
-The responder's `receive()` (`RNS/Link.py:970-989`) decrypts the
+The responder's `receive()` (`RNS/Link.py:970-989` → `elif packet.context == RNS.Packet.LINKIDENTIFY:`) decrypts the
 body, splits off the 64-byte public_key prefix, reconstructs
 `signed_data = link_id || public_key`, verifies the signature, and on
 success sets `self.remote_identity` so subsequent REQUEST handlers can
@@ -2008,7 +2008,7 @@ The whole 6-byte header + payload is the Link DATA packet's **plaintext**, which
 
 #### 6.8.2 Reserved system message types
 
-`RNS/Channel.py:45-46`:
+`RNS/Channel.py:45-46` → `class SystemMessageTypes(enum.IntEnum):`:
 
 ```python
 class SystemMessageTypes(enum.IntEnum):
@@ -2018,17 +2018,17 @@ class SystemMessageTypes(enum.IntEnum):
 `0xff00` is reserved for upstream's stream-over-channel implementation. Application-defined message types should stay in the `0x0000..0xfeff` range to avoid collisions with reserved system types. There's no centralized registry — each Link's `Channel` instance maintains its own `message_factories` dict mapping `msgtype` to a constructor.
 
 The usable payload for a Channel message is `Channel.mdu = link.mdu - 6`
-(`RNS/Channel.py:542`) — the 6 bytes being the §6.8.1 header. A
+(`RNS/Channel.py:542` → `mdu = self._outlet.mdu`) — the 6 bytes being the §6.8.1 header. A
 `SMT_STREAM_DATA` message spends 2 further bytes on its own stream header
 (`StreamDataMessage.HEADER_LEN`), leaving `StreamDataMessage.MAX_DATA_LEN =
 link.mdu - 8` = **423 bytes** of stream payload per packet at the default
-`Reticulum.MTU` of 500 (`RNS/Buffer.py:56-58`).
+`Reticulum.MTU` of 500 (`RNS/Buffer.py:56-58` → `HEADER_LEN = 2 #`).
 
 > **Changed in RNS 1.5.0 — larger stream chunks.** `RawChannelWriter`
 > previously sized each chunk at `channel.mdu - OVERHEAD` (`- 8`), which
 > subtracted the 6-byte channel envelope a second time even though
 > `Channel.mdu` had already accounted for it. It now uses
-> `channel.mdu - HEADER_LEN` (`- 2`, `RNS/Buffer.py:230`), so a full chunk
+> `channel.mdu - HEADER_LEN` (`- 2`, `RNS/Buffer.py:230` → `self._mdu = channel.mdu`), so a full chunk
 > carries **423 bytes instead of 417** at default MTU — the writer finally
 > fills `MAX_DATA_LEN`. The wire form is unchanged and the two versions
 > interoperate in both directions: `length` is explicit in the header, and
@@ -2070,11 +2070,11 @@ A clean-room client that only implements opportunistic LXMF can ignore Channel e
 
 | File | What |
 |---|---|
-| `RNS/Channel.py:113-148` | `Envelope` — wire-form pack/unpack |
+| `RNS/Channel.py:113-148` → `class Envelope:` | `Envelope` — wire-form pack/unpack |
 | `RNS/Channel.py:151-...` | `Channel` — windowed reliable delivery on a Link |
-| `RNS/Channel.py:45-46` | `SMT_STREAM_DATA = 0xff00` reserved system type |
-| `RNS/Channel.py:253-260` | `register_message_type` — per-Link MSGTYPE dispatch table |
-| `RNS/Packet.py:86` | `CHANNEL = 0x0E` context constant |
+| `RNS/Channel.py:45-46` → `class SystemMessageTypes(enum.IntEnum):` | `SMT_STREAM_DATA = 0xff00` reserved system type |
+| `RNS/Channel.py:253-260` → `def register_message_type(self,` | `register_message_type` — per-Link MSGTYPE dispatch table |
+| `RNS/Packet.py:86` → `CHANNEL = 0x0E #` | `CHANNEL = 0x0E` context constant |
 
 ### 6.9 Source
 
@@ -2098,7 +2098,7 @@ if not RNS.Transport.has_path(destination_hash) and lxmessage.method == LXMessag
 
 In other words: a `path?` is sent before the LXM **only when no entry exists in `Transport.path_table`** for the target — `has_path()` is just a key-presence check via `LXMRouter.handle_outbound`. Existing-but-stale path entries are NOT replaced by this preamble; LXMF instead leans on the periodic `Transport.jobs` cycle to evict expired path entries (`stale_paths` accumulator at `RNS/Transport.py:929+`), after which the next outbound LXM rediscovers the unknown-path branch and triggers the `request_path`. A second `request_path` is issued from the retry path (`LXMRouter.py:2736+`) once `lxmessage.delivery_attempts >= MAX_PATHLESS_TRIES`, so on a flaky path peers can see multiple `path?` retransmits without intervening DATA — that matches BLE-trace observations.
 
-The timing constants governing the preamble and the retry loop are class-level on `LXMRouter` (`LXMF/LXMRouter.py:30-34` in LXMF 1.1.1; verified by `tools/verify_path_request.py`):
+The timing constants governing the preamble and the retry loop are class-level on `LXMRouter` (`LXMF/LXMRouter.py:30-34` → `MAX_DELIVERY_ATTEMPTS =` in LXMF 1.1.1; verified by `tools/verify_path_request.py`):
 
 | Constant | Value | Role |
 |---|---|---|
@@ -2123,9 +2123,9 @@ A `path?` request itself is a regular DATA packet (verified by `tools/verify_pat
 
 #### 7.2.1 Path-request packet parse rules
 
-The path-request handler at `RNS/Transport.py:3380-3418` parses inbound packets addressed to `path_request_destination` (the dest_hash in §7.1). The handler is registered as the destination's `packet_callback` at `Transport.py:348`, so any DATA packet to that dest_hash flows through it.
+The path-request handler at `RNS/Transport.py:3380-3418` → `def path_request_handler(data,` parses inbound packets addressed to `path_request_destination` (the dest_hash in §7.1). The handler is registered as the destination's `packet_callback` at `Transport.py:348` → `if len(packet_hash)`, so any DATA packet to that dest_hash flows through it.
 
-The path-request destination is a **PLAIN destination** with no identity attached, which is why its `dest_hash` derives only from the name: `dest_hash = SHA256(SHA256("rnstransport.path.request")[:10])[:16]` per the PLAIN/GROUP recipe in §1.4.3 (the `identity == None` branch of `Destination.hash` at `RNS/Destination.py:121-130`). The result is a constant — `6b9f66014d9853faab220fba47d02761` — that every node on the mesh resolves identically without needing to discover a per-peer identity first.
+The path-request destination is a **PLAIN destination** with no identity attached, which is why its `dest_hash` derives only from the name: `dest_hash = SHA256(SHA256("rnstransport.path.request")[:10])[:16]` per the PLAIN/GROUP recipe in §1.4.3 (the `identity == None` branch of `Destination.hash` at `RNS/Destination.py:121-130` → `addr_hash_material =`). The result is a constant — `6b9f66014d9853faab220fba47d02761` — that every node on the mesh resolves identically without needing to discover a per-peer identity first.
 
 ```python
 def path_request_handler(data, packet):
@@ -2177,19 +2177,19 @@ if not tag_valid:
 > already-seen if it is in *either* set. When the live set exceeds
 > `max_pr_tags`, `Transport.jobs` rotates it wholesale into
 > `discovery_pr_tags_prev` and starts a fresh empty set
-> (`Transport.py:821-824`) instead of ageing entries out individually.
+> (`Transport.py:821-824` → `held_entry = Transport.held_announces.pop(destination_hash)`) instead of ageing entries out individually.
 > A tag is therefore remembered for between one and two rotation
 > periods. The observable behaviour is unchanged — duplicates are
 > suppressed, fresh tags are not — so this is an implementation note,
 > not an interop requirement.
 
-`discovery_pr_tags` is bounded at `Transport.max_pr_tags = 16000` entries (`Transport.py:190`; it was `32000` through RNS 1.4.2). **Every node — leaf or transport — that wants to respond to path requests MUST maintain this dedup table** or it will respond to every retransmit, and a transport-enabled node will additionally re-forward to all other interfaces, generating a broadcast storm.
+`discovery_pr_tags` is bounded at `Transport.max_pr_tags = 16000` entries (`Transport.py:190` → `blackholed_identities =`; it was `32000` through RNS 1.4.2). **Every node — leaf or transport — that wants to respond to path requests MUST maintain this dedup table** or it will respond to every retransmit, and a transport-enabled node will additionally re-forward to all other interfaces, generating a broadcast storm.
 
 The `unique_tag = dest_hash || tag` format means the same tag bytes against different destination_hashes are distinct — so two different requesters racing for the same target with happenstance-identical random tags don't suppress each other. Senders MUST use a fresh random tag per fresh request (the upstream emitter calls `Identity.get_random_hash()`); reusing tags across requests for the same destination_hash makes the second request appear to be a duplicate.
 
 #### 7.2.3 The five-way dispatch in `Transport.path_request`
 
-`RNS/Transport.py:3420-3594`. After dedup, the handler calls into `path_request()` which decides how to respond. Five mutually-exclusive branches in priority order:
+`RNS/Transport.py:3420-3594` → `def path_request(destination_hash,`. After dedup, the handler calls into `path_request()` which decides how to respond. Five mutually-exclusive branches in priority order:
 
 1. **`destination_hash` is local** (i.e. it's one of our own registered destinations, line 3454-3458):
    ```python
@@ -2202,7 +2202,7 @@ The `unique_tag = dest_hash || tag` format means the same tag bytes against diff
 
 3. **Request is from a local-client interface, no path known** (line 3523-3531): forward the request to every OTHER interface so the broader mesh can answer. Generates a fresh random tag for the forwarded request to avoid loop-back through the same dedup table.
 
-4. **`transport_enabled` AND no path known AND interface allows discovery** (line 3532-3584): record a `discovery_path_requests` entry (capped at `PATH_REQUEST_TIMEOUT = 15s`) and forward the request to every other interface, **preserving the original tag** to prevent loops. Since RNS 1.4.2 the fan-out additionally skips any interface that is not `online` (`if not interface.online: continue`, `RNS/Transport.py:3576`), alongside the pre-existing `search_mode_filter` and per-interface egress-limit checks. This is recursive transport-mode discovery — we don't know the destination but we'll go ask the rest of the mesh.
+4. **`transport_enabled` AND no path known AND interface allows discovery** (line 3532-3584): record a `discovery_path_requests` entry (capped at `PATH_REQUEST_TIMEOUT = 15s`) and forward the request to every other interface, **preserving the original tag** to prevent loops. Since RNS 1.4.2 the fan-out additionally skips any interface that is not `online` (`if not interface.online: continue`, `RNS/Transport.py:3576` → `if not interface.online:`), alongside the pre-existing `search_mode_filter` and per-interface egress-limit checks. This is recursive transport-mode discovery — we don't know the destination but we'll go ask the rest of the mesh.
 
 5. **No path known and not transport-enabled** (the final `else`, line 3592-3593): log "no path known" and drop. Note upstream splits this into two `elif`s — a node that is not transport-enabled but *does* have local-client interfaces attached first forwards the request to those clients (line 3585-3590) before the drop branch is reached. Leaf clients hit this branch when they receive a path? for someone else's destination.
 
@@ -2219,11 +2219,11 @@ else:             announce_context = RNS.Packet.NONE
 
 The body — public_key || name_hash || random_hash || [ratchet_pub] || signature || app_data — is built identically; the random_hash carries a fresh emission timestamp, the signature is computed over the same signed_data per §4.2. A receiver running the validation flow in §4.5 can't tell from the announce body that this is a response to a query rather than a periodic re-announce; only the context byte distinguishes them.
 
-A `tag` argument hands a previously-built path-response announce body back unchanged when the same tag is requested twice within `Destination.PR_TAG_WINDOW = 30s` (`RNS/Destination.py:260-278`). This is what prevents a flood of identical path-response announces when several relays simultaneously forward the same path? request to a leaf — the leaf serves the cached body to all of them with the same wire bytes, lining up dedup decisions on every transit relay.
+A `tag` argument hands a previously-built path-response announce body back unchanged when the same tag is requested twice within `Destination.PR_TAG_WINDOW = 30s` (`RNS/Destination.py:260-278` → `stale_responses =`). This is what prevents a flood of identical path-response announces when several relays simultaneously forward the same path? request to a leaf — the leaf serves the cached body to all of them with the same wire bytes, lining up dedup decisions on every transit relay.
 
 #### 7.2.5 Timing: `PATH_REQUEST_GRACE` and roaming
 
-When branch 2 fires (transit relay answering on behalf of a remote destination), the rebroadcast is delayed by `PATH_REQUEST_GRACE = 0.4s` (`Transport.py:133`) — extra grace to let directly-reachable peers respond first if they're in earshot. On `MODE_ROAMING` interfaces an additional `PATH_REQUEST_RG = 1.5s` is added on top (`Transport.py:134`) so well-connected fixed nodes get a chance to answer before mobile ones.
+When branch 2 fires (transit relay answering on behalf of a remote destination), the rebroadcast is delayed by `PATH_REQUEST_GRACE = 0.4s` (`Transport.py:133`) — extra grace to let directly-reachable peers respond first if they're in earshot. On `MODE_ROAMING` interfaces an additional `PATH_REQUEST_RG = 1.5s` is added on top (`Transport.py:134` → `PATH_REQUEST_TIMEOUT =`) so well-connected fixed nodes get a chance to answer before mobile ones.
 
 Branch 1 (local destination answers) fires immediately with no grace, since the leaf is the authoritative source for its own destination — there's no point waiting for someone else to potentially answer faster.
 
@@ -2250,7 +2250,7 @@ For a chronological walk-through of the full request → response → path-table
 
 The 32-byte `ratchet_pub` field in announces is meant to rotate periodically. The **purpose** is forward secrecy: rotating the ECDH key on a regular cadence limits the plaintext window an adversary can decrypt if a single ratchet privkey leaks. It is **not** what makes your announces visible to the mesh.
 
-The actual replay-and-loop defence in upstream is keyed on **`random_hash`**, not on `ratchet_pub` — see §4.5 step 6.3 (path-table replacement check `not random_blob in random_blobs` at `RNS/Transport.py:2238, 2271, 2282`). Verified by `tools/verify_ratchet_dedup.py`: two announces sharing a `ratchet_pub` but differing in `random_hash[:5]` are both accepted by upstream's replay machinery.
+The actual replay-and-loop defence in upstream is keyed on **`random_hash`**, not on `ratchet_pub` — see §4.5 step 6.3 (path-table replacement check `not random_blob in random_blobs` at `RNS/Transport.py:2238, 2271, 2282` → `if not random_blob in random_blobs and`). Verified by `tools/verify_ratchet_dedup.py`: two announces sharing a `ratchet_pub` but differing in `random_hash[:5]` are both accepted by upstream's replay machinery.
 
 > ⚠️ **Spec correction:** Earlier revisions of this section claimed transit nodes dedup announces on `(destination_hash, ratchet_pub)` tuples and that a non-rotating client becomes invisible to the mesh after one announce. That was wrong on the mechanism: upstream's `RATCHET_INTERVAL = 30 min` × `ANNOUNCE_INTERVAL = 5–15 min` means most upstream announces share a ratchet across 2–6 emissions, so if relays really dropped on `ratchet_pub` equality, upstream wouldn't function. The actual win observed in the bootstrap test (per `agent.md` §5) was incidental — the fix that rotated ratchets per announce also rotated `random_hash`, and it was the latter that mattered.
 
@@ -2296,7 +2296,7 @@ Emitting `context_flag = 0` (no `ratchet_pub` field, body layout per §4.5 step 
 
 Senders cache the most recent ratchet they've seen for each destination. If you rotate your ratchet faster than relays propagate the announce, in-flight messages may arrive encrypted to your *previous* ratchet. To decrypt these, keep a ring of recent ratchet privkeys and try each in order during decrypt. The fallback to the long-term identity privkey is the ultimate safety net.
 
-Upstream's default ring size is **`Destination.RATCHET_COUNT = 512`** (`RNS/Destination.py:85` in RNS 1.5.2), with a minimum rotation interval of `RATCHET_INTERVAL = 30*60` seconds (line 90) and per-ratchet `RATCHET_EXPIRY = 60*60*24*30` seconds (`RNS/Identity.py:69`). A new ratchet is generated on each `rotate_ratchets()` call and prepended to the in-memory list; `_clean_ratchets` truncates back to `RATCHET_COUNT`. The 512 figure is generous and not a hard interop requirement — it's an in-memory bound on the inbound-decrypt try-list.
+Upstream's default ring size is **`Destination.RATCHET_COUNT = 512`** (`RNS/Destination.py:85` → `RATCHET_COUNT = 512` in RNS 1.5.2), with a minimum rotation interval of `RATCHET_INTERVAL = 30*60` seconds (line 90) and per-ratchet `RATCHET_EXPIRY = 60*60*24*30` seconds (`RNS/Identity.py:69` → `RATCHET_EXPIRY =`). A new ratchet is generated on each `rotate_ratchets()` call and prepended to the in-memory list; `_clean_ratchets` truncates back to `RATCHET_COUNT`. The 512 figure is generous and not a hard interop requirement — it's an in-memory bound on the inbound-decrypt try-list.
 
 A minimal client may keep just the current ratchet privkey, accepting that the brief window between rotation and announce-propagation will lose some messages. Mention the trade-off in your implementation notes.
 
@@ -2485,7 +2485,7 @@ Full inventory in `RNode_Firmware/Framing.h:24-95`. The configuration handshake 
 
 #### 8.4.2 Bring-up sequence
 
-Adapted from `RNodeInterface.initRadio` (`RNS/Interfaces/RNodeInterface.py:473-484`):
+Adapted from `RNodeInterface.initRadio` (`RNS/Interfaces/RNodeInterface.py:473-484` → `def initRadio(self):`):
 
 ```
 1. Open serial port (or BLE GATT, or whatever bearer)
@@ -2578,7 +2578,7 @@ The reference implementation is `RNS/Interfaces/AutoInterface.py` (~700 lines). 
 
 #### 8.6.1 IPv6 multicast group derivation
 
-`AutoInterface.py:202-212`. Each AutoInterface mesh is identified by a `group_id` (default `b"reticulum"`); the actual multicast address is derived from a SHA-256 of the group_id:
+`AutoInterface.py:202-212` → `self.group_hash =`. Each AutoInterface mesh is identified by a `group_id` (default `b"reticulum"`); the actual multicast address is derived from a SHA-256 of the group_id:
 
 ```python
 group_hash = SHA256(group_id)                     # 32 bytes
@@ -2606,7 +2606,7 @@ So with the default `group_id = b"reticulum"`, default `multicast_address_type =
 
 #### 8.6.2 UDP ports
 
-`AutoInterface.py:47-48`:
+`AutoInterface.py:47-48` → `DEFAULT_DISCOVERY_PORT =`:
 
 | Port | Default | Use |
 |---|---|---|
@@ -2618,7 +2618,7 @@ A clean-room implementation MUST listen on the discovery port for inbound multic
 
 #### 8.6.3 Discovery cadence
 
-`AutoInterface.py:61-64`:
+`AutoInterface.py:61-64` → `PEERING_TIMEOUT =`:
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -2641,14 +2641,14 @@ Effective HW_MTU is `1196` bytes (`AutoInterface.HW_MTU`, line 44) — chosen to
 
 #### 8.6.6 IFAC integration
 
-If the AutoInterface is configured with an `ifac_identity` (out-of-band-shared key), every Reticulum packet on the data port is IFAC-sealed and unmasked using the standard Transport-level IFAC mechanism (`RNS/Transport.py:1762-1788`). Peers with mismatched IFAC keys can see each other's discovery announces but can't decode each other's data — a pragmatic privacy boundary on a shared LAN.
+If the AutoInterface is configured with an `ifac_identity` (out-of-band-shared key), every Reticulum packet on the data port is IFAC-sealed and unmasked using the standard Transport-level IFAC mechanism (`RNS/Transport.py:1762-1788` → `# If interface access`). Peers with mismatched IFAC keys can see each other's discovery announces but can't decode each other's data — a pragmatic privacy boundary on a shared LAN.
 
 #### 8.6.7 Source map
 
 | File | What |
 |---|---|
-| `RNS/Interfaces/AutoInterface.py:43-72` | Default ports, group_id, scope/address-type constants, intervals |
-| `RNS/Interfaces/AutoInterface.py:202-212` | Multicast address derivation from `SHA256(group_id)` |
+| `RNS/Interfaces/AutoInterface.py:43-72` → `class AutoInterface(Interface):` | Default ports, group_id, scope/address-type constants, intervals |
+| `RNS/Interfaces/AutoInterface.py:202-212` → `self.group_hash =` | Multicast address derivation from `SHA256(group_id)` |
 | `RNS/Interfaces/AutoInterface.py:108+` | Per-interface socket setup (multicast join, unicast bind) |
 | `RNS/Interfaces/AutoInterface.py::announce_handler` | Discovery announce emission |
 | `RNS/Interfaces/AutoInterface.py::peer_jobs` | Peer aging, multicast-echo loop, IFAC sealing |
@@ -2676,7 +2676,7 @@ Both browser `window.crypto.subtle.encrypt({name:"AES-CBC", iv}, key, plaintext)
 - `_unpack_string` decodes to Python `str` via `bytes.decode("utf-8")`
 - `_unpack_binary` returns raw Python `bytes`
 
-The downstream parser at `LXMF/LXMF.py:165` does `dn.decode("utf-8")` on the unpacked first element. This works only when `dn` is `bytes`. If a producer wrote a `str`-encoded name (fixstr), umsgpack returns Python `str`, `.decode()` raises `AttributeError`, the parser swallows it and returns `None` → no display name.
+The downstream parser at `LXMF/LXMF.py:165` → `decoded = dn.decode("utf-8").replace("\x00",` does `dn.decode("utf-8")` on the unpacked first element. This works only when `dn` is `bytes`. If a producer wrote a `str`-encoded name (fixstr), umsgpack returns Python `str`, `.decode()` raises `AttributeError`, the parser swallows it and returns `None` → no display name.
 
 **Implementation rule:** encode the display name field as msgpack `bin` (Python `bytes` equivalent), never `str`. Upstream LXMRouter does this correctly via `display_name.encode("utf-8")` before packing.
 
@@ -2705,7 +2705,7 @@ LoRa devices without an RTC will populate the LXMF `timestamp` field with second
 
 Even after a successful initial announce, paths in the mesh expire within minutes. Without a 5–15 minute re-announce loop, the second message any peer tries to send you will fail because the relay's path table has aged out. (See also §7.5.)
 
-There is **no upstream-mandated default** — `RNS/Reticulum.py:909` uses `6*60*60` (6 h) for interface-level *discovery* announces and `RNS/Transport.py:266` uses `2*60*60` (2 h) for transport-management announces, but those are not the cadence end-user destinations announce at. Sideband emits roughly every 30 minutes; the upstream manual recommends 30–60 minutes for a desktop client. Practical guidance for application destinations:
+There is **no upstream-mandated default** — `RNS/Reticulum.py:909` → `if discovery_announce_interval ==` uses `6*60*60` (6 h) for interface-level *discovery* announces and `RNS/Transport.py:266` → `mgmt_announce_interval =` uses `2*60*60` (2 h) for transport-management announces, but those are not the cadence end-user destinations announce at. Sideband emits roughly every 30 minutes; the upstream manual recommends 30–60 minutes for a desktop client. Practical guidance for application destinations:
 
 | Deployment | RECOMMENDED cadence |
 |---|---|
@@ -2745,7 +2745,7 @@ upstream Python form of `5 random bytes || big-endian uint40 unix_seconds`
 big-endian uint40 of unix seconds. A uniformly-random uint40 has median value
 ~5.5×10¹¹ ≈ year 19403 AD, so such an announce read as "far-future". Once one
 populated `path_table[dest][IDX_PT_RANDBLOBS]`, the equal-or-greater-hop branch
-at `RNS/Transport.py:2260-2288` rejected subsequent real-timestamped announces
+at `RNS/Transport.py:2260-2288` → `path_announce_emitted = 0` rejected subsequent real-timestamped announces
 as stale until the path TTL expired. Symptom: on a mixed-vendor mesh, paths
 "stuck" to the microReticulum side even when shorter or fresher Python paths
 came up. First-contact path-table population was unaffected — it only surfaced
@@ -2775,25 +2775,25 @@ shape of failure:
 
 A **Resource** transfers a payload that exceeds the per-packet content limit of an established Reticulum Link. It is the only way to carry an LXMF body, NomadNet page, or file larger than ~360 bytes (`LINK_PACKET_MAX_CONTENT`) over a Link. Resource is built **on top of** an active Link — it relies on the Link's session key for encryption (§3.1 link-derived form) and on the Link's bidirectional DATA channel for control traffic.
 
-The complete reference is `RNS/Resource.py` (1376 lines in RNS 1.5.2); `RNS/Packet.py:74-79` defines the context constants. This section describes the wire-level invariants a clean-room implementation must respect; many implementation choices (window sizing heuristics, watchdog timers, EIFR computation) are private and listed only when their absence would cause an interop break.
+The complete reference is `RNS/Resource.py` (1376 lines in RNS 1.5.2); `RNS/Packet.py:74-79` → `RESOURCE_ADV = 0x02` defines the context constants. This section describes the wire-level invariants a clean-room implementation must respect; many implementation choices (window sizing heuristics, watchdog timers, EIFR computation) are private and listed only when their absence would cause an interop break.
 
 ### 10.1 When Resource runs
 
 Three triggers in upstream:
 
-1. **`LXMessage.send()` for `DIRECT` method with `representation == RESOURCE`.** Set automatically when the encrypted-form LXMF body exceeds `LINK_PACKET_MAX_CONTENT` (`LXMF/LXMessage.py:415-421`).
+1. **`LXMessage.send()` for `DIRECT` method with `representation == RESOURCE`.** Set automatically when the encrypted-form LXMF body exceeds `LINK_PACKET_MAX_CONTENT` (`LXMF/LXMessage.py:415-421` → `self.__delivery_destination = self.__destination`).
 2. **NomadNet page request fulfillment** — a server returning a page whose body exceeds the link MTU.
 3. **Direct file transfers** via `rncp` and similar utilities.
 
 ### 10.2 Initiator-side preparation
 
-Given input data and an `RNS.Link` in `ACTIVE` state (`RNS/Resource.py:249-487`):
+Given input data and an `RNS.Link` in `ACTIVE` state (`RNS/Resource.py:249-487` → `def __init__(self, data,`):
 
 1. **Optional metadata prefix.** If the caller supplied a `metadata` dict, msgpack-pack it and prepend `length(3 bytes, big-endian uint24) || packed_metadata` to the body. The `has_metadata` (`x`) flag in the advertisement signals this. Receivers strip the prefix during reassembly (line 709-716).
 2. **Optional bz2 compression.** If `auto_compress` is true and the data fits within `auto_compress_limit` (default 64 MiB), the body is bz2-compressed and the `compressed` (`c`) flag is set. If compression doesn't shrink the data, the uncompressed form is sent and `c` is cleared.
-3. **Random hash prefix.** A 4-byte (`Resource.RANDOM_HASH_SIZE`) random hash is prepended to the (compressed-or-not) body — `Resource.py:401`/`408`, a fresh `RNS.Identity.get_random_hash()[:4]` call. This prefix is **not** the `r` field, and is **not** part of the `hash` / `expected_proof` input. It is a separate throwaway value that travels inside the encrypted blob; the receiver strips and discards it (§10.8 step 3). The advertisement's `r` field carries a *different* value — `self.random_hash`, generated by its own `get_random_hash()[:4]` call at `Resource.py:436` — which is the actual integrity-hash and hashmap salt.
+3. **Random hash prefix.** A 4-byte (`Resource.RANDOM_HASH_SIZE`) random hash is prepended to the (compressed-or-not) body — `Resource.py:401`/`408`, a fresh `RNS.Identity.get_random_hash()[:4]` call. This prefix is **not** the `r` field, and is **not** part of the `hash` / `expected_proof` input. It is a separate throwaway value that travels inside the encrypted blob; the receiver strips and discards it (§10.8 step 3). The advertisement's `r` field carries a *different* value — `self.random_hash`, generated by its own `get_random_hash()[:4]` call at `Resource.py:436` → `self.sent_parts = 0` — which is the actual integrity-hash and hashmap salt.
 4. **Link encryption.** The full `random_hash || (compressed?) data` blob is encrypted using `link.encrypt(...)` — i.e. the link-derived Token form (§3.1), no ephemeral_pub prefix. The `encrypted` (`e`) flag is set.
-5. **Hash and proof material** (`Resource.py:436-439`). All three are computed over the **original uncompressed `plaintext`** — the caller's input, including any metadata prefix from step 1 (`Resource.py:261-267`) — *not* the compressed body, and *not* the random-prefixed wire blob from step 3:
+5. **Hash and proof material** (`Resource.py:436-439` → `self.sent_parts = 0`). All three are computed over the **original uncompressed `plaintext`** — the caller's input, including any metadata prefix from step 1 (`Resource.py:261-267` → `if metadata != None:`) — *not* the compressed body, and *not* the random-prefixed wire blob from step 3:
    - `random_hash = RNS.Identity.get_random_hash()[:4]` — the value the advertisement's `r` field carries.
    - `hash = SHA256(plaintext || random_hash)` (32 bytes)
    - `truncated_hash = hash[:16]`
@@ -2802,9 +2802,9 @@ Given input data and an `RNS.Link` in `ACTIVE` state (`RNS/Resource.py:249-487`)
    The 4-byte prefix from step 3 is **not** in any of these inputs. The receiver strips the prefix and bz2-decompresses *before* hashing (§10.8 steps 3-5), so the sender must hash the uncompressed, unprefixed `plaintext` for the two sides to agree. A receiver that includes the prefix, or hashes the compressed form, rejects every legitimate Resource as `CORRUPT`.
 6. **Part split.** The encrypted body is sliced into parts of size `sdu = link.mtu - HEADER_MAXSIZE - IFAC_MIN_SIZE`. Each part becomes a packed `RNS.Packet(link, part_data, context=RESOURCE)`; the packed wire bytes are stored in `parts[i]` for later sending.
 
-   **`sdu` follows the link's negotiated MTU (§6.6) and therefore differs per link** (`RNS/Resource.py:343-344`). At the base `Reticulum.MTU` of 500 it is 464; on a link whose §6.6 handshake settled 1064 it is 1028. It is **not** the class constant `Resource.SDU` (`RNS/Resource.py:104`), which is fixed at 464 and used only as the fallback when a link reports no MTU at all.
+   **`sdu` follows the link's negotiated MTU (§6.6) and therefore differs per link** (`RNS/Resource.py:343-344` → `if self.link.mtu:`). At the base `Reticulum.MTU` of 500 it is 464; on a link whose §6.6 handshake settled 1064 it is 1028. It is **not** the class constant `Resource.SDU` (`RNS/Resource.py:104` → `SDU = RNS.Packet.MDU`), which is fixed at 464 and used only as the fallback when a link reports no MTU at all.
 
-   This is load-bearing in both directions, because **each side computes the part count from its own `sdu`** — the sender as `hashmap_entries = ⌈size / sdu⌉` (`:437`) and the receiver as `total_parts = ⌈size / sdu⌉` (`:188`). Both derive it from the same negotiated `link.mtu`, so they agree. A receiver that substitutes the fixed 464 disagrees with a 1064-MTU sender about how many parts exist *and* rejects every oversized part it receives. Nothing surfaces as an error — a part that cannot be placed is simply dropped — so the transfer makes no progress and times out looking like an unresponsive peer. See §10.4 for the quantities that behave the opposite way.
+   This is load-bearing in both directions, because **each side computes the part count from its own `sdu`** — the sender as `hashmap_entries = ⌈size / sdu⌉` (`:437` → `hashmap_entries =`) and the receiver as `total_parts = ⌈size / sdu⌉` (`:188` → `resource.total_parts =`). Both derive it from the same negotiated `link.mtu`, so they agree. A receiver that substitutes the fixed 464 disagrees with a 1064-MTU sender about how many parts exist *and* rejects every oversized part it receives. Nothing surfaces as an error — a part that cannot be placed is simply dropped — so the transfer makes no progress and times out looking like an unresponsive peer. See §10.4 for the quantities that behave the opposite way.
 7. **Hashmap.** Each part is fingerprinted to `MAPHASH_LEN = 4 bytes`. The full hashmap is `b"".join(map_hashes)`. **Hash collisions within the COLLISION_GUARD_SIZE = 2 × WINDOW_MAX + HASHMAP_MAX_LEN window are detected at construction time** — if two parts hash to the same 4-byte map_hash within that window, the random hash is regenerated and the whole hashmap is recomputed. Without this guard, the receiver can't disambiguate which part it just received from a part-request that named a colliding map_hash.
 
 After preparation: `total_parts = ceil(size / SDU)`; `total_size` includes metadata; `total_segments = ceil(total_size / MAX_EFFICIENT_SIZE)` where `MAX_EFFICIENT_SIZE = 1 MiB - 1 = 1_048_575`.
@@ -2825,7 +2825,7 @@ All of these are sent on the established Link and use the Link's session key for
 
 ### 10.4 RESOURCE_ADV — the advertisement
 
-The first packet in the transfer. Body is `umsgpack.packb(dict)` with these keys (`RNS/Resource.py:1344-1366`):
+The first packet in the transfer. Body is `umsgpack.packb(dict)` with these keys (`RNS/Resource.py:1344-1366` → `"l": self.l, # Total`):
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -2841,7 +2841,7 @@ The first packet in the transfer. Body is `umsgpack.packb(dict)` with these keys
 | `f` | int | **Flags byte** (see below) |
 | `m` | bytes | **Hashmap fragment** for THIS advertisement segment — up to `HASHMAP_MAX_LEN = ⌊(Link.MDU - 134)/4⌋` = **74** 4-byte map_hashes. Fixed — see the callout below |
 
-The flags byte `f` packs six booleans (`Resource.py:1307, 1356-1361`):
+The flags byte `f` packs six booleans (`Resource.py:1307, 1356-1361` → `self.p = False #`):
 
 ```
 bit 0 : e — encrypted
@@ -2868,7 +2868,7 @@ bit 5 : x — has_metadata
 > | `COLLISION_GUARD_SIZE` | `HASHMAP_MAX_LEN` (class) | no | 224 |
 >
 > `HASHMAP_MAX_LEN` and `COLLISION_GUARD_SIZE` are evaluated once at import
-> (`RNS/Resource.py:1256-1258`) from the **class-level** `RNS.Link.MDU`
+> (`RNS/Resource.py:1256-1258` → `OVERHEAD = 134`) from the **class-level** `RNS.Link.MDU`
 > (`RNS/Link.py:73`), which comes from `Reticulum.MTU` and never from any
 > link. They are identical on every link regardless of what was negotiated,
 > and implementations **MUST NOT** recompute them from a negotiated MTU.
@@ -2882,7 +2882,7 @@ bit 5 : x — has_metadata
 
 `HASHMAP_MAX_LEN` matters: the entire hashmap may not fit in one ADV. If `n > HASHMAP_MAX_LEN`, the receiver reconstructs subsequent map segments via RESOURCE_HMU packets after exhausting the first slice (§10.7).
 
-The advertisement is sent once on `Resource.advertise()`; if no part requests arrive within the watchdog timeout, it is retransmitted up to `MAX_ADV_RETRIES = 4` times before the resource is cancelled (`Resource.py:573-590`).
+The advertisement is sent once on `Resource.advertise()`; if no part requests arrive within the watchdog timeout, it is retransmitted up to `MAX_ADV_RETRIES = 4` times before the resource is cancelled (`Resource.py:573-590` → `def watchdog_job(self):`).
 
 > **Security: cap `t` and `d` at receive time.** `t` and `d` are the
 > sender's claims about how big the resource will be. A misbehaving
@@ -2913,10 +2913,10 @@ The advertisement is sent once on `Resource.advertise()`; if no part requests ar
 > `Resource.assemble` uses `bz2.BZ2Decompressor.decompress(data,
 > max_length=self.max_decompressed_size)` and rejects the resource
 > if `decompressor.eof` is False after the bounded read
-> (`RNS/Resource.py:695-700`). The Channel-mode counterpart is
+> (`RNS/Resource.py:695-700` → `data = data[Resource.RANDOM_HASH_SIZE:]`). The Channel-mode counterpart is
 > `Buffer.RawChannelReader` which caps each chunk at
 > `RawChannelWriter.MAX_CHUNK_LEN` via the same `max_length` mechanism
-> (`RNS/Buffer.py:96-98`). Clean-room implementations should mirror
+> (`RNS/Buffer.py:96-98` → `decompressor = bz2.BZ2Decompressor()`). Clean-room implementations should mirror
 > this — a `bz2.BZ2Decompressor.decompress(data, max_length=N)` plus
 > `eof` check is the minimum. **Do not use the one-shot
 > `bz2.decompress()` API for resource bodies** — it has no output
@@ -2926,7 +2926,7 @@ The advertisement is sent once on `Resource.advertise()`; if no part requests ar
 > Since RNS 1.3.9 upstream also enforces a hard parse-time bound on
 > the advertisement itself: `ResourceAdvertisement.unpack` raises on
 > `t > Resource.MAX_EFFICIENT_SIZE * 3` (= 3 × (1 MiB − 1) =
-> 3,145,725 bytes; `RNS/Resource.py:1374`, `:117` in RNS 1.5.2), so
+> 3,145,725 bytes; `RNS/Resource.py:1374` → `if adv.t > Resource.MAX_EFFICIENT_SIZE*3:`, `:117` → `MAX_EFFICIENT_SIZE =` in RNS 1.5.2), so
 > the ADV is dropped before any allocation. A legitimate per-segment
 > `t` never reaches this bound, because senders split anything larger
 > than `MAX_EFFICIENT_SIZE` into separately-advertised segments.
@@ -2935,7 +2935,7 @@ The advertisement is sent once on `Resource.advertise()`; if no part requests ar
 > arrives, too.** The caps above and §16.9's `n` cap both act at parse
 > time, on the sender's *claims*. Nothing in §10 checks the parts
 > against those claims afterwards, and upstream imposes no such check:
-> `Resource.receive_part` (`RNS/Resource.py:842-940`) locates the
+> `Resource.receive_part` (`RNS/Resource.py:842-940` → `def receive_part(self,`) locates the
 > hashmap slot and buffers whatever arrived — no per-part size check,
 > no running total. `assemble()` never compares the assembled length
 > to `t` either; its only bounds are the bz2 `max_length`
@@ -2980,11 +2980,11 @@ Where:
 - `resource_hash` is the 32-byte `h` from the advertisement.
 - The trailing `requested_map_hashes` is a concatenation of `N` × 4-byte map_hashes the receiver wants delivered. `N` is at most `WINDOW` (initial 4, dynamically grown — see §10.10).
 
-Receivers who already have the part for a requested map_hash don't issue requests for it; the request is constructed only from `parts[search_start:search_start+window]` where `parts[i] is None` (`Resource.py:941-957`).
+Receivers who already have the part for a requested map_hash don't issue requests for it; the request is constructed only from `parts[search_start:search_start+window]` where `parts[i] is None` (`Resource.py:941-957` → `# Called on incoming`).
 
 ### 10.6 RESOURCE part packets
 
-For each map_hash in a RESOURCE_REQ, the sender locates the matching pre-packed part within `parts[receiver_min_consecutive_height : receiver_min_consecutive_height + COLLISION_GUARD_SIZE]` and emits it as a regular Link DATA packet with `context = RESOURCE (0x01)` (`Resource.py:1008-1020`). The body is just the part's encrypted data — no metadata, no sequence number. The receiver matches the inbound part to its hashmap by recomputing its 4-byte map_hash and inserting it into `parts[i]` at the position where `hashmap[i]` matches (`Resource.py:866-882`).
+For each map_hash in a RESOURCE_REQ, the sender locates the matching pre-packed part within `parts[receiver_min_consecutive_height : receiver_min_consecutive_height + COLLISION_GUARD_SIZE]` and emits it as a regular Link DATA packet with `context = RESOURCE (0x01)` (`Resource.py:1008-1020`). The body is just the part's encrypted data — no metadata, no sequence number. The receiver matches the inbound part to its hashmap by recomputing its 4-byte map_hash and inserting it into `parts[i]` at the position where `hashmap[i]` matches (`Resource.py:866-882` → `if self.req_resp_rtt_rate >`).
 
 Two interop traps:
 
@@ -3018,7 +3018,7 @@ Two interop traps:
 > decrypt expects. This is a common implementer mistake and the
 > spec text "parts are link-encrypted" reads ambiguously enough
 > that several clean-room ports have made it. Verbatim from
-> `Resource.py:607-625`:
+> `Resource.py:607-625` → `elif self.status == Resource.TRANSFERRING:`:
 >
 > ```python
 > for i in range(0, hashmap_entries):
@@ -3043,15 +3043,15 @@ body = resource_hash(32) || umsgpack.packb([segment_index(int), hashmap_segment_
 
 The segment_index is `part_index // HASHMAP_MAX_LEN`. The receiver applies this with `Resource.hashmap_update(segment, hashmap)` to extend its known hashmap and continues issuing RESOURCE_REQ for the new range.
 
-If the part_index doesn't land on a `HASHMAP_MAX_LEN` boundary, the sender treats it as a sequencing error and cancels the resource (`Resource.py:1042-1045`).
+If the part_index doesn't land on a `HASHMAP_MAX_LEN` boundary, the sender treats it as a sequencing error and cancels the resource (`Resource.py:1042-1045` → `part_index = self.receiver_min_consecutive_height`).
 
 > **HMU hardening (RNS ≥ 1.3.9).** The receiver ignores any
 > RESOURCE_HMU that arrives while it is not actually waiting for one
 > (`waiting_for_hmu` gate in `hashmap_update_packet`,
 > `Resource.py:481`), and an HMU whose hashmap segment decodes to
-> zero map-hashes cancels the transfer (`Resource.py:497-501`). The
+> zero map-hashes cancels the transfer (`Resource.py:497-501` → `def hashmap_update(self,`). The
 > sender likewise cancels instead of emitting an empty hashmap
-> continuation (`Resource.py:1055-1058`). Implementations should not
+> continuation (`Resource.py:1055-1058` → `else: segment = part_index`). Implementations should not
 > rely on out-of-turn or empty HMUs being tolerated.
 
 > **An exhausted RESOURCE_REQ MAY still carry parts — a conformant
@@ -3084,7 +3084,7 @@ If the part_index doesn't land on a `HASHMAP_MAX_LEN` boundary, the sender treat
 
 ### 10.8 RESOURCE_PRF — final proof
 
-When the receiver has assembled the full resource (`received_count == total_parts`), it runs `assemble()` (`Resource.py:676-755`):
+When the receiver has assembled the full resource (`received_count == total_parts`), it runs `assemble()` (`Resource.py:676-755` → `if sleep_time == 0:`):
 
 1. Concatenate `parts[0..n]` to a single buffer.
 2. `link.decrypt(...)` to plaintext.
@@ -3117,14 +3117,14 @@ where full_proof = SHA256(plaintext || resource_hash)
 
 sent as `RNS.Packet(link, proof_data, packet_type=PROOF, context=RESOURCE_PRF)` (`Resource.py:755-766`). The `full_proof` is exactly what the initiator pre-computed as `expected_proof` in §10.2 step 5 — it can validate the proof bytewise without re-running the SHA-256.
 
-The initiator's `validate_proof` (`Resource.py:787-832`) checks `proof_data[32:] == self.expected_proof` and transitions status to `COMPLETE`. If the resource is multi-segment (`s == True`), the next segment's advertisement is sent immediately upon proof of the current segment.
+The initiator's `validate_proof` (`Resource.py:787-832` → `progress_callback = self.__progress_callback,`) checks `proof_data[32:] == self.expected_proof` and transitions status to `COMPLETE`. If the resource is multi-segment (`s == True`), the next segment's advertisement is sent immediately upon proof of the current segment.
 
 ### 10.9 RESOURCE_ICL / RESOURCE_RCL — cancellation
 
 Either side can cancel; the body is just `resource_hash(32)`:
 
 - **`RESOURCE_ICL (0x06)`** — initiator cancel. Sent when the initiator decides to abort (e.g. the user kills the upload, the link MTU shrinks below the resource's pre-packed parts, the watchdog gives up after `MAX_RETRIES = 16`).
-- **`RESOURCE_RCL (0x07)`** — receiver reject / cancel. Sent on advertisement reject (`Resource.reject(adv_packet)`, `Resource.py:155-165` in RNS 1.5.2, e.g. resource too large per app callback) and — since RNS 1.3.9 — on any receiver-side abort while the link is still active (`Resource.cancel()` receiver branch, `Resource.py:1101-1107`). Before 1.3.9 only the reject path put RCL on the wire; a mid-transfer receiver abort was silent. Inbound RCL handling has existed on both sides throughout (`Link.py:1121`).
+- **`RESOURCE_RCL (0x07)`** — receiver reject / cancel. Sent on advertisement reject (`Resource.reject(adv_packet)`, `Resource.py:155-165` in RNS 1.5.2, e.g. resource too large per app callback) and — since RNS 1.3.9 — on any receiver-side abort while the link is still active (`Resource.cancel()` receiver branch, `Resource.py:1101-1107` → `elif self.status <`). Before 1.3.9 only the reject path put RCL on the wire; a mid-transfer receiver abort was silent. Inbound RCL handling has existed on both sides throughout (`Link.py:1121` → `elif packet.context == RNS.Packet.RESOURCE_RCL:`).
 
 Either form transitions the resource to `FAILED`, releases the parts, and notifies the link's resource-concluded callback.
 
@@ -3141,11 +3141,11 @@ WINDOW_MAX_VERY_SLOW = 4
 WINDOW_FLEXIBILITY = 4
 ```
 
-After each successful round (every requested part arrived), `window += 1` up to `window_max`; `window_min += 1` once `window - window_min > WINDOW_FLEXIBILITY - 1` (`Resource.py:899-903`). The window cap is promoted to `WINDOW_MAX_FAST` after `FAST_RATE_THRESHOLD` consecutive rounds at observed throughput > `RATE_FAST = 50 kbps / 8`, and demoted to `WINDOW_MAX_VERY_SLOW` after `VERY_SLOW_RATE_THRESHOLD = 2` rounds below `RATE_VERY_SLOW = 2 kbps / 8` (`Resource.py:914-924`). These are receiver-private — they're not negotiated, so two implementations with different rate-detection cutoffs interop fine but may emerge with different effective throughput on the same channel.
+After each successful round (every requested part arrived), `window += 1` up to `window_max`; `window_min += 1` once `window - window_min > WINDOW_FLEXIBILITY - 1` (`Resource.py:899-903`). The window cap is promoted to `WINDOW_MAX_FAST` after `FAST_RATE_THRESHOLD` consecutive rounds at observed throughput > `RATE_FAST = 50 kbps / 8`, and demoted to `WINDOW_MAX_VERY_SLOW` after `VERY_SLOW_RATE_THRESHOLD = 2` rounds below `RATE_VERY_SLOW = 2 kbps / 8` (`Resource.py:914-924` → `self.window_min +=`). These are receiver-private — they're not negotiated, so two implementations with different rate-detection cutoffs interop fine but may emerge with different effective throughput on the same channel.
 
 ### 10.11 Multi-segment resources
 
-For payloads larger than `MAX_EFFICIENT_SIZE = 1 MiB - 1`, the resource is split into multiple segments at `MAX_EFFICIENT_SIZE` boundaries (`Resource.py:299-314`). Each segment is its own Resource with its own RESOURCE_ADV; the `i` (segment_index) and `l` (total_segments) fields disambiguate. The `o` (original_hash) field carries the first segment's `h` so the receiver can correlate segments belonging to the same logical transfer.
+For payloads larger than `MAX_EFFICIENT_SIZE = 1 MiB - 1`, the resource is split into multiple segments at `MAX_EFFICIENT_SIZE` boundaries (`Resource.py:299-314` → `if self.total_size`). Each segment is its own Resource with its own RESOURCE_ADV; the `i` (segment_index) and `l` (total_segments) fields disambiguate. The `o` (original_hash) field carries the first segment's `h` so the receiver can correlate segments belonging to the same logical transfer.
 
 The sender doesn't pre-prepare every segment up front — it builds segment N+1 in `__prepare_next_segment` while segment N is still being delivered, and sends segment N+1's advertisement only after it has received the proof for segment N (`Resource.py:770-783, 816-826`). This caps memory usage; a 100 MiB transfer doesn't materialize 100 segments simultaneously.
 
@@ -3163,7 +3163,7 @@ resource.storagepath      = RNS.Reticulum.resourcepath+"/"+resource.original_has
 resource.meta_storagepath = resource.storagepath+".meta"
 ```
 
-The partial transfer lives at `{configdir}/storage/resources/{o.hex()}` (`RNS/Reticulum.py:249` → `Reticulum.resourcepath  = Reticulum.configdir+"/storage/resources"`, `:327`). The key is the advertised `o` and nothing else — **the correlation domain is the node, not the link the segments arrive on**. Nothing binds `o` to the link, to the peer, or to the first segment's own `h`; `accept` copies it out of the advertisement unchecked (`:179`).
+The partial transfer lives at `{configdir}/storage/resources/{o.hex()}` (`RNS/Reticulum.py:249` → `Reticulum.resourcepath  = Reticulum.configdir+"/storage/resources"`, `:327` → `if not os.path.isdir(Reticulum.resourcepath):`). The key is the advertised `o` and nothing else — **the correlation domain is the node, not the link the segments arrive on**. Nothing binds `o` to the link, to the peer, or to the first segment's own `h`; `accept` copies it out of the advertisement unchecked (`:179` → `__interface_detach_ran = False`).
 
 Two inbound transfers that present the same `o` on different links therefore share one assembly file, in append mode. Each segment still has to clear its own integrity check before its bytes are written — `assemble` compares `SHA256(plaintext || r)` against `h` and only opens the file on a match (`Resource.py:698-713`) — so an injector can only contribute bytes it legitimately hashed, but those bytes land in someone else's assembly and the victim's completed body is corrupt. The exposure is bounded in practice because `o` travels inside link encryption and is a 32-byte hash of data the attacker does not have, so it must be learned rather than guessed. An implementation is free to scope the key per-link, which is strictly safer and interoperates identically; **implementations SHOULD do so**, since nothing on the wire depends on the key being global.
 
@@ -3176,7 +3176,7 @@ self.file.write(data)
 self.file.close()
 ```
 
-No seek, and no use of `i` for placement. `i` is read at `Resource.py:201` and thereafter used **only** to decide whether this is the final segment (`:700` for the metadata prefix, `:729` and `:793` for conclusion) — never to order the data.
+No seek, and no use of `i` for placement. `i` is read at `Resource.py:201` → `resource.meta_storagepath` and thereafter used **only** to decide whether this is the final segment (`:700` → `self.data = decompressor.decompress(data,` for the metadata prefix, `:729` and `:793` for conclusion) — never to order the data.
 
 Upstream's reassembly is correct only because the sequential-send rule above happens to guarantee ordering. §10.11 states that rule as a sender-side memory measure; the receiver **depends** on it. The failure mode is silent: out-of-order segments each pass their own `h` check, the body assembles in the wrong order, and nothing detects it — the per-segment hash is the only integrity check there is, and there is no hash over the reassembled whole. Indexing by `i` is strictly more tolerant and diverges from upstream in a way that never shows up on a conformant link.
 
@@ -3191,7 +3191,7 @@ age   = now - mtime
 if age > Reticulum.RESOURCE_CACHE: os.unlink(filepath)
 ```
 
-The sweep runs every `CLEAN_INTERVAL = 15*60` seconds (`Reticulum.py:159` → `CLEAN_INTERVAL   = 15*60`, `:390-392`). Two details a naive reading misses:
+The sweep runs every `CLEAN_INTERVAL = 15*60` seconds (`Reticulum.py:159` → `CLEAN_INTERVAL   = 15*60`, `:390-392` → `self.last_cache_clean = time.time()`). Two details a naive reading misses:
 
 - `mtime` is refreshed by every segment append, so the 24 h is time **since the last segment**, not a budget for the whole transfer.
 - There is no absolute ceiling at all. A peer dripping one segment per day keeps a partial assembly alive indefinitely.
@@ -3209,7 +3209,7 @@ The sweep runs every `CLEAN_INTERVAL = 15*60` seconds (`Reticulum.py:159` → `C
 > and any absolute ceiling must exceed the worst-case **single-segment**
 > transfer time, not the whole transfer's.
 
-The `.meta` sidecar written for a metadata-carrying first segment (`Resource.py:704-706`) is unlinked when the final segment concludes (`:737`), but it is **not** swept: `__clean_caches` only considers filenames of exactly `(HASHLENGTH//8)*2 = 64` characters (`Reticulum.py:1238`), and `{o.hex()}.meta` is 69. An abandoned multi-segment transfer leaves its metadata file behind permanently.
+The `.meta` sidecar written for a metadata-carrying first segment (`Resource.py:704-706` → `RNS.log(f"Decompressed`) is unlinked when the final segment concludes (`:737`), but it is **not** swept: `__clean_caches` only considers filenames of exactly `(HASHLENGTH//8)*2 = 64` characters (`Reticulum.py:1238` → `# Clean resource`), and `{o.hex()}.meta` is 69. An abandoned multi-segment transfer leaves its metadata file behind permanently.
 
 **4. `l` is unbounded on the wire, and so is the number of concurrent assemblies.** Nothing in `Resource.accept` (`Resource.py:167-246`) bounds `l`, and nothing bounds how many distinct `o` values one link may have open. Upstream is unbothered because it spends **disk**, not RAM, and the 24 h sweep eventually reclaims it.
 
@@ -3228,7 +3228,7 @@ parts[i]            = link.encrypt(wire_blob)[i*SDU : (i+1)*SDU]   # encrypt who
 hash                = SHA256(uncompressed_body || random_hash)    # integrity; random_hash = adv `r`
 ```
 
-Critically, **the link encryption is applied to the WHOLE concatenated data first, then sliced into parts** — not to each part individually. This means part boundaries don't align with cipher block boundaries; a missing part can't be decrypted in isolation. The receiver must accumulate all parts before calling `link.decrypt()` (`Resource.py:676-679`).
+Critically, **the link encryption is applied to the WHOLE concatenated data first, then sliced into parts** — not to each part individually. This means part boundaries don't align with cipher block boundaries; a missing part can't be decrypted in isolation. The receiver must accumulate all parts before calling `link.decrypt()` (`Resource.py:676-679` → `if sleep_time == 0:`).
 
 This also means swapping in a new link session key mid-transfer would break decryption — the encryption happened with the link's key as it was when the resource was constructed.
 
@@ -3236,22 +3236,22 @@ This also means swapping in a new link session key mid-transfer would break decr
 
 | File | What it pins down |
 |---|---|
-| `RNS/Resource.py:44-166` | Class header, constants, state machine values, `reject` |
-| `RNS/Resource.py:168-247` | `accept` — receiver-side advertisement acceptance |
-| `RNS/Resource.py:249-486` | `Resource.__init__` — preparation, hashmap construction, collision guard |
-| `RNS/Resource.py:517-571` | `advertise`, `__advertise_job` |
-| `RNS/Resource.py:573-683` | `watchdog_job` / `__watchdog_job` — retry/timeout state machine, advertisement retransmit |
-| `RNS/Resource.py:685-763` | `assemble` — receiver reassembly, decrypt, decompress, hash-match |
-| `RNS/Resource.py:765-840` | `prove` and `validate_proof` |
-| `RNS/Resource.py:842-940` | `receive_part` — receiver-side part insertion + window adjust |
-| `RNS/Resource.py:942-992` | `request_next` — receiver-side RESOURCE_REQ construction |
-| `RNS/Resource.py:994-1088` | `request` — initiator-side fulfillment + RESOURCE_HMU emission |
-| `RNS/Resource.py:1090-1123` | `cancel` — ICL/RCL emission on abort |
-| `RNS/Resource.py:1255-1375` | `ResourceAdvertisement` — pack/unpack of the ADV msgpack dict |
-| `RNS/Packet.py:72-79` | RESOURCE_* context constants |
-| `RNS/Reticulum.py:157-159` | `RESOURCE_CACHE = 24 h`, `JOB_INTERVAL`, `CLEAN_INTERVAL = 15 min` |
-| `RNS/Reticulum.py:249, 327` | `resourcepath = {configdir}/storage/resources` |
-| `RNS/Reticulum.py:1234-1250` | `__clean_caches` — mtime-based sweep of partial resource assemblies |
+| `RNS/Resource.py:44-166` → `class Resource:` | Class header, constants, state machine values, `reject` |
+| `RNS/Resource.py:168-247` → `def accept(advertisement_packet,` | `accept` — receiver-side advertisement acceptance |
+| `RNS/Resource.py:249-486` → `def __init__(self, data,` | `Resource.__init__` — preparation, hashmap construction, collision guard |
+| `RNS/Resource.py:517-571` → `def advertise(self):` | `advertise`, `__advertise_job` |
+| `RNS/Resource.py:573-683` → `def watchdog_job(self):` | `watchdog_job` / `__watchdog_job` — retry/timeout state machine, advertisement retransmit |
+| `RNS/Resource.py:685-763` → `def assemble(self):` | `assemble` — receiver reassembly, decrypt, decompress, hash-match |
+| `RNS/Resource.py:765-840` → `def prove(self):` | `prove` and `validate_proof` |
+| `RNS/Resource.py:842-940` → `def receive_part(self,` | `receive_part` — receiver-side part insertion + window adjust |
+| `RNS/Resource.py:942-992` → `def request_next(self):` | `request_next` — receiver-side RESOURCE_REQ construction |
+| `RNS/Resource.py:994-1088` → `def request(self,` | `request` — initiator-side fulfillment + RESOURCE_HMU emission |
+| `RNS/Resource.py:1090-1123` → `def cancel(self):` | `cancel` — ICL/RCL emission on abort |
+| `RNS/Resource.py:1255-1375` → `class ResourceAdvertisement:` | `ResourceAdvertisement` — pack/unpack of the ADV msgpack dict |
+| `RNS/Packet.py:72-79` → `NONE = 0x00 # Generic` | RESOURCE_* context constants |
+| `RNS/Reticulum.py:157-159` → `RESOURCE_CACHE =` | `RESOURCE_CACHE = 24 h`, `JOB_INTERVAL`, `CLEAN_INTERVAL = 15 min` |
+| `RNS/Reticulum.py:249, 327` → `Reticulum.resourcepath =` | `resourcepath = {configdir}/storage/resources` |
+| `RNS/Reticulum.py:1234-1250` → `def __clean_caches(self,` | `__clean_caches` — mtime-based sweep of partial resource assemblies |
 
 ---
 
@@ -3356,7 +3356,7 @@ The `request_id` in element [0] of the response msgpack lets the initiator match
 > ```
 >
 > i.e. **`SHA-256(packet.get_hashable_part())[:16]`** where
-> `get_hashable_part()` (`Packet.py:353-358`) is:
+> `get_hashable_part()` (`Packet.py:353-358` → `def get_hash(self):`) is:
 >
 > ```
 > hashable = (raw[0] & 0x0F) || raw[2:]              # HEADER_1
@@ -3376,7 +3376,7 @@ The `request_id` in element [0] of the response msgpack lets the initiator match
 
 #### File responses
 
-If the server's response generator returns a `(file_handle, metadata)` tuple, the response goes out as a Resource carrying the file's bytes with optional msgpack metadata in the Resource advertisement's `metadata` slot — `RNS/Link.py:836-846`:
+If the server's response generator returns a `(file_handle, metadata)` tuple, the response goes out as a Resource carrying the file's bytes with optional msgpack metadata in the Resource advertisement's `metadata` slot — `RNS/Link.py:836-846` → `file_handle = None`:
 
 ```python
 if type(response) == tuple and isinstance(response[0], io.BufferedReader):
@@ -3518,7 +3518,7 @@ A client that hasn't implemented file downloads can detect `/file/` paths and ei
 
 #### 11.6.6 Authorization: `ALLOW_ALL` vs `ALLOW_LIST`
 
-Pages are registered with one of three allow modes (`Destination.py:74-76`):
+Pages are registered with one of three allow modes (`Destination.py:74-76` → `ALLOW_NONE = 0x00`):
 
 - `ALLOW_ALL` — anyone with a Link can fetch. Used for public NomadNet pages, the propagation node's `/get`, etc.
 - `ALLOW_LIST` — caller's identity hash must appear in the page's `.allowed` file. Server checks `remote_identity.hash` against the list at request time (`Node.py:152-154`).
@@ -3569,13 +3569,13 @@ None of these are wire-spec — they're caller conventions layered on top of §1
 
 | File | What |
 |---|---|
-| `RNS/Link.py:473-511` | `Link.request()` — initiator-side packing and dispatch by size |
-| `RNS/Link.py:804-856` | `Link.handle_request()` — server-side path lookup + auth + response dispatch |
-| `RNS/Link.py:857-884` | `Link.handle_response()` — initiator-side response correlation |
+| `RNS/Link.py:473-511` → `def request(self,` | `Link.request()` — initiator-side packing and dispatch by size |
+| `RNS/Link.py:804-856` → `def handle_request(self,` | `Link.handle_request()` — server-side path lookup + auth + response dispatch |
+| `RNS/Link.py:857-884` → `def handle_response(self,` | `Link.handle_response()` — initiator-side response correlation |
 | `RNS/Link.py:1311-1498` → `class RequestReceipt():` | `RequestReceipt` — callback machinery |
 | `RNS/Destination.py::register_request_handler` | Server-side handler registration |
-| `RNS/Destination.py:74-76` | `ALLOW_NONE/ALLOW_LIST/ALLOW_ALL` constants |
-| `RNS/Packet.py:81-82` | `REQUEST = 0x09`, `RESPONSE = 0x0A` context constants |
+| `RNS/Destination.py:74-76` → `ALLOW_NONE = 0x00` | `ALLOW_NONE/ALLOW_LIST/ALLOW_ALL` constants |
+| `RNS/Packet.py:81-82` → `REQUEST = 0x09 #` | `REQUEST = 0x09`, `RESPONSE = 0x0A` context constants |
 
 ---
 
@@ -3603,7 +3603,7 @@ For an inbound DATA packet (`packet_type == DATA`, `destination_type` not LINK) 
 - `packet.transport_id == Transport.identity.hash` (the originator picked us as the next hop), AND
 - `packet.destination_hash` is in `Transport.path_table`,
 
-the relay rewrites the wire bytes according to `path_table[dest][HOPS]` and re-transmits on `path_table[dest][RVCD_IF]`. From `RNS/Transport.py:2022-2057`, three cases by `remaining_hops`:
+the relay rewrites the wire bytes according to `path_table[dest][HOPS]` and re-transmits on `path_table[dest][RVCD_IF]`. From `RNS/Transport.py:2022-2057` → `if path_entry !=`, three cases by `remaining_hops`:
 
 #### 12.2.1 `remaining_hops > 1` — forward as HEADER_2
 
@@ -3637,7 +3637,7 @@ The destination is registered on the relay itself (it's both our path-table next
 
 #### 12.2.4 LINKREQUEST forwarding extras
 
-When the forwarded packet is a `LINKREQUEST`, the relay also writes a `link_table` entry keyed by the link_id (computed via §6.3's `link_id_from_lr_packet`). Entry contents (`Transport.py:1999-2007`):
+When the forwarded packet is a `LINKREQUEST`, the relay also writes a `link_table` entry keyed by the link_id (computed via §6.3's `link_id_from_lr_packet`). Entry contents (`Transport.py:1999-2007` → `# If there is no`):
 
 ```
 [ now,                            # 0  IDX_LT_TIMESTAMP
@@ -3685,7 +3685,7 @@ The `announce_table` entry queues a delayed retransmit; the actual emission happ
 
 #### 12.3.1 Announce cap (`ANNOUNCE_CAP`)
 
-`Reticulum.ANNOUNCE_CAP = 2.0` (default 2% of airtime, configurable via `[reticulum] announce_cap`). Each interface tracks its outbound announce airtime and when the rolling-window utilization exceeds the cap, further announces are queued in `interface.announce_queue` rather than transmitted immediately. `process_announce_queue` (`RNS/Interfaces/Interface.py:390-427`) drains the queue at a rate the cap permits, picking the lowest-hop-count entry first.
+`Reticulum.ANNOUNCE_CAP = 2.0` (default 2% of airtime, configurable via `[reticulum] announce_cap`). Each interface tracks its outbound announce airtime and when the rolling-window utilization exceeds the cap, further announces are queued in `interface.announce_queue` rather than transmitted immediately. `process_announce_queue` (`RNS/Interfaces/Interface.py:390-427` → `def process_announce_queue(self):`) drains the queue at a rate the cap permits, picking the lowest-hop-count entry first.
 
 The cap is per-interface, not global — a relay with multiple interfaces budgets each one independently, which lets a fast TCP backbone interface announce freely while the same node throttles announces on a slow LoRa interface. Without per-interface caps, a single high-rate interface would starve every other.
 
@@ -3699,7 +3699,7 @@ The cap is per-interface, not global — a relay with multiple interfaces budget
 
 ### 12.4 Path table management
 
-`Transport.path_table[destination_hash]` entry shape (`Transport.py:4047-4053`):
+`Transport.path_table[destination_hash]` entry shape (`Transport.py:4047-4053` → `source_list = umsgpack.unpackb(packed)`):
 
 ```
 [ timestamp,                # 0  IDX_PT_TIMESTAMP — when last refreshed
@@ -3725,7 +3725,7 @@ The wide spread of defaults reflects expected churn rates: AP-mode interfaces ha
 
 #### 12.4.2 Eviction
 
-`Transport.jobs` runs a `stale_paths` accumulator that walks `path_table` and pops entries whose `expires` timestamp has passed (`Transport.py:928-949`). Eviction is silent — no notification to the application; the next outbound message to the destination just re-discovers it via `request_path` per §7.1.
+`Transport.jobs` runs a `stale_paths` accumulator that walks `path_table` and pops entries whose `expires` timestamp has passed (`Transport.py:928-949` → `# similar.`). Eviction is silent — no notification to the application; the next outbound message to the destination just re-discovers it via `request_path` per §7.1.
 
 A relay also evicts path entries whose underlying interface has been removed (`receiving_interface not in Transport.interfaces`). This handles the case where a TCP client disconnects.
 
@@ -3773,7 +3773,7 @@ For a `DATA` packet with `destination_type == LINK` whose `dest_hash` is in `lin
 >    link-addressed packet is therefore no longer additionally considered
 >    for the announce, LRPROOF and reverse_table branches below.
 
-Unlike the path_table forwarding in §12.2 — which strips `transport_id` (`HEADER_2` → `HEADER_1`) at the last hop — link_table forwarding does NOT touch the header. The relay bumps `hops` and emits `packet.raw[0:1] + struct.pack("!B", packet.hops) + packet.raw[2:]` (`Transport.py:2067-2069`). Whatever header bytes the initiator emitted reach the destination verbatim. This is why the originator's wire conventions for post-handshake link DATA are constrained — see §6.4.3: senders MUST emit `HEADER_1` with no `transport_id` for every link-addressed packet, because a `HEADER_2` link packet would arrive at the destination with `transport_id` intact and be dropped by the destination's `packet_filter` as "for another transport instance".
+Unlike the path_table forwarding in §12.2 — which strips `transport_id` (`HEADER_2` → `HEADER_1`) at the last hop — link_table forwarding does NOT touch the header. The relay bumps `hops` and emits `packet.raw[0:1] + struct.pack("!B", packet.hops) + packet.raw[2:]` (`Transport.py:2067-2069` → `nh_mtu = outbound_interface.HW_MTU`). Whatever header bytes the initiator emitted reach the destination verbatim. This is why the originator's wire conventions for post-handshake link DATA are constrained — see §6.4.3: senders MUST emit `HEADER_1` with no `transport_id` for every link-addressed packet, because a `HEADER_2` link packet would arrive at the destination with `transport_id` intact and be dropped by the destination's `packet_filter` as "for another transport instance".
 
 #### 12.5.3 PROOF receipt forwarding via `reverse_table`
 
@@ -3803,7 +3803,7 @@ pr_entry = {
 Transport.discovery_path_requests[destination_hash] = pr_entry
 ```
 
-Then forwards the path? to every other **online** interface (offline interfaces are skipped since RNS 1.4.2 — `RNS/Transport.py:3576`) preserving the original tag. This is recursive transport-mode discovery — the relay is acting as a search proxy. When the response announce eventually arrives back, the relay forwards it on `requesting_interface` (the one the original path? came from), and the entry is aged out.
+Then forwards the path? to every other **online** interface (offline interfaces are skipped since RNS 1.4.2 — `RNS/Transport.py:3576` → `if not interface.online:`) preserving the original tag. This is recursive transport-mode discovery — the relay is acting as a search proxy. When the response announce eventually arrives back, the relay forwards it on `requesting_interface` (the one the original path? came from), and the entry is aged out.
 
 #### 12.6.2 `tunnels`
 
@@ -3825,7 +3825,7 @@ Each path inside the tunnel's `paths_dict` mirrors a `path_table` entry. When th
 When multiple processes on one host share a single Reticulum stack (via `share_instance = Yes` in the rnsd config), one process owns `Transport` and the others connect to it as **local clients** via a small TCP loopback interface. The shared instance treats local-client traffic specially:
 
 - `from_local_client` and `for_local_client` are computed on every inbound packet (`Transport.py:1877-1882`).
-- Path-table entries with `IDX_PT_HOPS == 0` mean "destination is a local client" — the §2.3 originator-side HEADER_1 conversion applies for hops==1 too, so the shared instance gets a transport_id-tagged packet (`Transport.py:1365-1376`).
+- Path-table entries with `IDX_PT_HOPS == 0` mean "destination is a local client" — the §2.3 originator-side HEADER_1 conversion applies for hops==1 too, so the shared instance gets a transport_id-tagged packet (`Transport.py:1365-1376` → `not (packet.context >= RNS.Packet.KEEPALIVE`).
 - Local-client originated path? requests are forwarded to every external interface, fanning out the search across the shared mesh (§7.2 dispatch branch 3).
 
 The wire protocol for shared-instance loopback is just the same Reticulum packets over a TCP loopback interface — no special framing or commands. What's "shared" is the path_table and announce dispatch, not the wire format.
@@ -3835,15 +3835,15 @@ The wire protocol for shared-instance loopback is just the same Reticulum packet
 | File | What |
 |---|---|
 | `RNS/Transport.py:2018-2116` | DATA forwarding (HEADER_1↔HEADER_2 conversion for relay) |
-| `RNS/Transport.py:2090-2098` | `link_table` entry shape |
-| `RNS/Transport.py:2105-2107` | `reverse_table` entry shape |
-| `RNS/Transport.py:2336-2485` | ANNOUNCE rebroadcast queue and per-interface dispatch |
-| `RNS/Transport.py:2609-2667` | LRPROOF forwarding via `link_table` |
-| `RNS/Transport.py:2734-2743` | PROOF receipt forwarding via `reverse_table` |
-| `RNS/Transport.py:4122-4128` | `path_table` entry shape (IDX_PT_*) |
-| `RNS/Transport.py:957-1056` | stale-path / stale-tunnel eviction |
-| `RNS/Transport.py:3545-3572` | `discovery_path_requests` recursive search |
-| `RNS/Interfaces/Interface.py:390-427` | per-interface `announce_queue` and `ANNOUNCE_CAP` enforcement |
+| `RNS/Transport.py:2090-2098` → `link_entry = [ now,` | `link_table` entry shape |
+| `RNS/Transport.py:2105-2107` → `reverse_entry = [` | `reverse_table` entry shape |
+| `RNS/Transport.py:2336-2485` → `attached_interface = None` | ANNOUNCE rebroadcast queue and per-interface dispatch |
+| `RNS/Transport.py:2609-2667` → `if packet.context == RNS.Packet.LRPROOF:` | LRPROOF forwarding via `link_table` |
+| `RNS/Transport.py:2734-2743` → `if (RNS.Reticulum.transport_enabled() or from_local_client` | PROOF receipt forwarding via `reverse_table` |
+| `RNS/Transport.py:4122-4128` → `IDX_PT_TIMESTAMP =` | `path_table` entry shape (IDX_PT_*) |
+| `RNS/Transport.py:957-1056` → `# Cull the path table` | stale-path / stale-tunnel eviction |
+| `RNS/Transport.py:3545-3572` → `# interface has PR` | `discovery_path_requests` recursive search |
+| `RNS/Interfaces/Interface.py:390-427` → `def process_announce_queue(self):` | per-interface `announce_queue` and `ANNOUNCE_CAP` enforcement |
 
 ---
 
@@ -3857,15 +3857,15 @@ Upstream RNS spawns the following persistent daemon threads at `Transport.start(
 
 | Thread | Source | Cadence | Purpose |
 |---|---|---|---|
-| **`Transport.jobloop`** | `RNS/Transport.py:400, 679-682` | every `job_interval = 0.250s` | Runs `Transport.jobs()` — the catch-all maintenance pass: link state checks, announce-queue drain, stale-path eviction, hashlist cleanup, reverse-table cleanup, tunnels housekeeping. |
-| **`Transport.count_traffic_loop`** | `RNS/Transport.py:401, 591-676` | every 1s | Snapshots per-interface RX/TX byte counters into rolling-window deques for bandwidth/airtime accounting. |
-| **`Link.__watchdog_job`** | `RNS/Link.py:712-782` | per-link, RTT-driven | One per active Link. Drives keepalive emission (initiator side), STALE→CLOSED transitions, and link-establishment timeouts. Sleeps `min(WATCHDOG_MAX_SLEEP=5s, RTT-derived)` between iterations. |
-| **`Resource.__watchdog_job`** | `RNS/Resource.py:573-679` | per-resource | One per in-progress Resource. Detects retransmit timeouts, advertisement retries, and PRF-wait timeouts. |
-| **`AnnounceHandler` callbacks** | `RNS/Transport.py:2506-2535` | per inbound announce | Each accepted announce fires its registered handler **on a fresh daemon thread** — the dispatcher does not serialize. Two announces from the same destination back-to-back run two handler threads concurrently. |
+| **`Transport.jobloop`** | `RNS/Transport.py:400, 679-682` → `threading.Thread(target=Transport.jobloop,` | every `job_interval = 0.250s` | Runs `Transport.jobs()` — the catch-all maintenance pass: link state checks, announce-queue drain, stale-path eviction, hashlist cleanup, reverse-table cleanup, tunnels housekeeping. |
+| **`Transport.count_traffic_loop`** | `RNS/Transport.py:401, 591-676` → `threading.Thread(target=Transport.count_traffic_loop,` | every 1s | Snapshots per-interface RX/TX byte counters into rolling-window deques for bandwidth/airtime accounting. |
+| **`Link.__watchdog_job`** | `RNS/Link.py:712-782` → `def __watchdog_job(self):` | per-link, RTT-driven | One per active Link. Drives keepalive emission (initiator side), STALE→CLOSED transitions, and link-establishment timeouts. Sleeps `min(WATCHDOG_MAX_SLEEP=5s, RTT-derived)` between iterations. |
+| **`Resource.__watchdog_job`** | `RNS/Resource.py:573-679` → `def watchdog_job(self):` | per-resource | One per in-progress Resource. Detects retransmit timeouts, advertisement retries, and PRF-wait timeouts. |
+| **`AnnounceHandler` callbacks** | `RNS/Transport.py:2506-2535` → `if execute_callback:` | per inbound announce | Each accepted announce fires its registered handler **on a fresh daemon thread** — the dispatcher does not serialize. Two announces from the same destination back-to-back run two handler threads concurrently. |
 | **Per-interface RX threads** | `RNS/Interfaces/*Interface.py` | always | Each interface (TCP, KISS, RNode, AutoInterface) has its own blocking-read RX thread that calls `Transport.inbound(raw, self)` on each complete frame. |
-| **`Transport.inbound_job`** | `RNS/Transport.py:1899-1912` | drains continuously | **New in RNS 1.5.0.** Dequeues preprocessed packets from the prioritized ingress queue and runs `Transport._inbound(packet)` — the packet-handling body that lived inline in `Transport.inbound` through 1.4.2. |
-| **`process_announce_queue`** | `RNS/Interfaces/Interface.py:425` | one-shot timer per drain | Per-interface `announce_queue` drain uses `threading.Timer` to schedule the next emission at the airtime-cap-derived wait time. Not a long-running thread but a chain of one-shots. |
-| **`Resource.__advertise_job`** | `RNS/Resource.py:537-560` | per-resource | One-shot daemon thread that performs the resource hashmap construction (which can take seconds on a large body) so the calling thread doesn't block. |
+| **`Transport.inbound_job`** | `RNS/Transport.py:1899-1912` → `def inbound_job():` | drains continuously | **New in RNS 1.5.0.** Dequeues preprocessed packets from the prioritized ingress queue and runs `Transport._inbound(packet)` — the packet-handling body that lived inline in `Transport.inbound` through 1.4.2. |
+| **`process_announce_queue`** | `RNS/Interfaces/Interface.py:425` → `timer = threading.Timer(wait_time,` | one-shot timer per drain | Per-interface `announce_queue` drain uses `threading.Timer` to schedule the next emission at the airtime-cap-derived wait time. Not a long-running thread but a chain of one-shots. |
+| **`Resource.__advertise_job`** | `RNS/Resource.py:537-560` → `def __advertise_job(self):` | per-resource | One-shot daemon thread that performs the resource hashmap construction (which can take seconds on a large body) so the calling thread doesn't block. |
 
 A clean-room implementation with cooperative scheduling (e.g. asyncio, embedded RTOS task model) needs to provide equivalent behavior for each row. The key invariants — not the exact thread inventory — are what matter for interop:
 
@@ -3882,11 +3882,11 @@ that into a three-stage pipeline with a queue in the middle:
 
 | Stage | Function | Runs on | Does |
 |---|---|---|---|
-| 1 | `Transport.inbound` (`RNS/Transport.py:1682-1686`) | interface RX thread | Thin exception-trapping wrapper. Still the public entry point interfaces call. |
-| 2 | `Transport.preprocess_inbound` (`:1753-1897`) | interface RX thread | IFAC authentication, frame-size check against `interface.HW_MTU`, `Packet.unpack` (which since RNS 1.5.2 also rejects a zero-length data field — §2.2), `packet_filter`, hop increment, the announce-specific `Reticulum.MTU` bound (RNS ≥ 1.5.2 — §4.5), path-request dedup (§7.2.2), ingress limiting — then assigns a **traffic class** and enqueues. |
+| 1 | `Transport.inbound` (`RNS/Transport.py:1682-1686` → `def inbound(raw,`) | interface RX thread | Thin exception-trapping wrapper. Still the public entry point interfaces call. |
+| 2 | `Transport.preprocess_inbound` (`:1753-1897` → `def preprocess_inbound(raw,`) | interface RX thread | IFAC authentication, frame-size check against `interface.HW_MTU`, `Packet.unpack` (which since RNS 1.5.2 also rejects a zero-length data field — §2.2), `packet_filter`, hop increment, the announce-specific `Reticulum.MTU` bound (RNS ≥ 1.5.2 — §4.5), path-request dedup (§7.2.2), ingress limiting — then assigns a **traffic class** and enqueues. |
 | 3 | `Transport._inbound` (`:1822-…`) | `Transport.inbound_job` thread | Everything else: local delivery, path_table / link_table / reverse_table forwarding, announce processing and rebroadcast. |
 
-The queue between stages 2 and 3 is `InboundQueues` (`RNS/Transport.py:46-92`)
+The queue between stages 2 and 3 is `InboundQueues` (`RNS/Transport.py:46-92` → `class InboundQueues:`)
 — four separate FIFOs drained strictly highest-priority-first:
 
 | Traffic class | Value | Queue length | Assigned to |
@@ -3975,15 +3975,15 @@ A client running on a constrained device (less RAM, slower CPU) can scale all of
 
 | File | What |
 |---|---|
-| `RNS/Transport.py:400-401` | top-level thread spawn at startup |
-| `RNS/Transport.py:204-221` | the lock inventory (Transport-side) |
-| `RNS/Transport.py:248, 250, 261` | `job_interval`, `links_check_interval`, `tables_last_culled` |
-| `RNS/Transport.py:679-682` | `jobloop` — the periodic driver |
+| `RNS/Transport.py:400-401` → `threading.Thread(target=Transport.jobloop,` | top-level thread spawn at startup |
+| `RNS/Transport.py:204-221` → `announce_table_lock =` | the lock inventory (Transport-side) |
+| `RNS/Transport.py:248, 250, 261` → `job_interval = 0.250` | `job_interval`, `links_check_interval`, `tables_last_culled` |
+| `RNS/Transport.py:679-682` → `def jobloop():` | `jobloop` — the periodic driver |
 | `RNS/Transport.py:660+` | `jobs()` body (held under `jobs_lock`) |
-| `RNS/Transport.py:2506-2535` | announce-handler dispatch (fresh thread per callback) |
-| `RNS/Link.py:712-781` | per-link `__watchdog_job` |
-| `RNS/Resource.py:573-679` | per-resource `__watchdog_job` |
-| `RNS/Resource.py:529-551` | one-shot `__advertise_job` |
+| `RNS/Transport.py:2506-2535` → `if execute_callback:` | announce-handler dispatch (fresh thread per callback) |
+| `RNS/Link.py:712-781` → `def __watchdog_job(self):` | per-link `__watchdog_job` |
+| `RNS/Resource.py:573-679` → `def watchdog_job(self):` | per-resource `__watchdog_job` |
+| `RNS/Resource.py:529-551` → `def ensure_link(self):` | one-shot `__advertise_job` |
 | `RNS/Interfaces/*Interface.py` | per-interface RX thread |
 
 ---
@@ -4309,7 +4309,7 @@ A reader hitting §2.3 might wonder "do I need this?" Three different answers:
 
 - **Cat 1 (e.g. Sideband):** No — `RNS.Transport._outbound` at lines 1342-1351 does the conversion automatically when you call `Packet.send()` to a destination with `path_table[dest][HOPS] > 1`. Your app just calls `LXMessage.send()` or `Packet.send()` and §2.3 happens invisibly. You can read §2.3 to understand WHY some captures show HEADER_2 with a transport_id, but you have no code to write.
 - **Cat 2 (wrappers):** Same as Cat 1 — the wrapped Python RNS does the conversion. Your wrapper is just relaying API calls.
-- **Cat 3 (clean-room):** **Yes, you implement §2.3 yourself.** Failure to do so means your packets aren't forwarded by transit relays — they're processed and dropped silently per `Transport.py:1928` (only HEADER_2 packets with `transport_id == relay.identity.hash` enter the forwarding branch). The symptom is "messages I send through a relay never arrive, but direct-link messages do." Sideband works in shared-instance and direct-TCP modes both because **upstream** does the conversion; a clean-room app working only via shared-instance is masking the missing §2.3.
+- **Cat 3 (clean-room):** **Yes, you implement §2.3 yourself.** Failure to do so means your packets aren't forwarded by transit relays — they're processed and dropped silently per `Transport.py:1928` → `while len(Transport.local_client_snr_cache)` (only HEADER_2 packets with `transport_id == relay.identity.hash` enter the forwarding branch). The symptom is "messages I send through a relay never arrive, but direct-link messages do." Sideband works in shared-instance and direct-TCP modes both because **upstream** does the conversion; a clean-room app working only via shared-instance is masking the missing §2.3.
 
 ### 17.4 Pragmatic implication
 

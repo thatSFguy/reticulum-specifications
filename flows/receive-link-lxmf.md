@@ -14,7 +14,7 @@ A Reticulum DATA packet with `packet_type = LINKREQUEST (2)`, addressed to the r
 initiator_X25519_pub(32) || initiator_Ed25519_pub(32) || [signalling(3)]
 ```
 
-`Transport.inbound` (`RNS/Transport.py:2540` → `elif packet.packet_type == RNS.Packet.LINKREQUEST and not link_request_handled:`) recognizes `packet_type == LINKREQUEST + destination_type == SINGLE`, looks up the destination in `destinations_map`, and calls `Destination.receive(packet)` which routes to `Destination.incoming_link_request(data, packet)` per `RNS/Destination.py:414-435` (`receive` at 414 → `if packet.packet_type == RNS.Packet.LINKREQUEST:`, dispatching to `incoming_link_request` at `:431`):
+`Transport.inbound` (`RNS/Transport.py:2540` → `elif packet.packet_type == RNS.Packet.LINKREQUEST and not link_request_handled:`) recognizes `packet_type == LINKREQUEST + destination_type == SINGLE`, looks up the destination in `destinations_map`, and calls `Destination.receive(packet)` which routes to `Destination.incoming_link_request(data, packet)` per `RNS/Destination.py:414-435` → `def receive(self,` (`receive` at 414 → `if packet.packet_type == RNS.Packet.LINKREQUEST:`, dispatching to `incoming_link_request` at `:431` → `def incoming_link_request(self,`):
 
 ```python
 def receive(self, packet):

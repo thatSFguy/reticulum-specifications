@@ -45,7 +45,7 @@ Transport.path_requests[destination_hash] = time.time()
 
 The well-known dest hash `6b9f66014d9853faab220fba47d02761` is computed as `SHA256(SHA256("rnstransport.path.request")[:10])[:16]` per [`../SPEC.md`](../SPEC.md) §1.2 (the `identity=None` branch of `Destination.hash`). It is the same on every node — no per-node uniqueness — because the destination is `PLAIN` with no identity attached.
 
-The packet is `DATA` (not ANNOUNCE), `BROADCAST` transport, `HEADER_1`, and `context = NONE`. The body is **unencrypted** because the outer destination is `PLAIN` — `Packet.pack` falls through to `self.destination.encrypt(self.data)` at `RNS/Packet.py:218`, and `Destination.encrypt` returns `plaintext` unchanged for `Destination.PLAIN` (`RNS/Destination.py:592-593`).
+The packet is `DATA` (not ANNOUNCE), `BROADCAST` transport, `HEADER_1`, and `context = NONE`. The body is **unencrypted** because the outer destination is `PLAIN` — `Packet.pack` falls through to `self.destination.encrypt(self.data)` at `RNS/Packet.py:218` → `# with the destination's`, and `Destination.encrypt` returns `plaintext` unchanged for `Destination.PLAIN` (`RNS/Destination.py:592-593` → `raise TypeError("Only the`).
 
 Initiator records `Transport.path_requests[destination_hash] = time.time()` for `PATH_REQUEST_GATE_TIMEOUT = 120s` rate-limiting (prevents the same node from repeating identical path? requests faster than `PATH_REQUEST_MI = 20s`).
 
@@ -135,7 +135,7 @@ When the path-response announce arrives back at the initiator, `validate_announc
 
 If no response arrives within `Transport.PATH_REQUEST_TIMEOUT = 15s` (`RNS/Transport.py:134` → `PATH_REQUEST_TIMEOUT        = 15`), the `discovery_path_requests` entry on transit relays is aged out by the `Transport.jobs` cycle (`Transport.py:851-858` → `with Transport.discovery_pr_tags_lock:`). The originating LXM stays in `pending_outbound`; on the next retry tick after `LXMRouter.PATH_REQUEST_WAIT`, `LXMRouter.process_outbound` checks `has_path()` again, finds it still False, and re-issues `request_path`. This continues up to `LXMRouter.MAX_DELIVERY_ATTEMPTS` (typically 5) before the message is marked failed.
 
-The full outer retry behaviour (drop_path then re-request, the `MAX_PATHLESS_TRIES + 1` rediscovery branch at `LXMRouter.py:2735-2764`) is documented in `flows/send-opportunistic-lxmf.md` step 12.
+The full outer retry behaviour (drop_path then re-request, the `MAX_PATHLESS_TRIES + 1` rediscovery branch at `LXMRouter.py:2735-2764` → `if lxmessage.method == LXMessage.OPPORTUNISTIC:`) is documented in `flows/send-opportunistic-lxmf.md` step 12.
 
 ---
 

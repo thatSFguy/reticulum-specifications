@@ -10,7 +10,7 @@ Out of scope: receiving a packet over an established Reticulum Link (DIRECT meth
 
 ## Preconditions
 
-- Recipient has an `RNS.Identity` with the X25519 + Ed25519 private keys, plus a `lxmf.delivery` `RNS.Destination` registered with `LXMRouter.register_delivery_identity` — that registration calls `delivery_destination.set_packet_callback(self.delivery_packet)` at `LXMF/LXMRouter.py:358`, which is the hand-off point in step 7 below.
+- Recipient has an `RNS.Identity` with the X25519 + Ed25519 private keys, plus a `lxmf.delivery` `RNS.Destination` registered with `LXMRouter.register_delivery_identity` — that registration calls `delivery_destination.set_packet_callback(self.delivery_packet)` at `LXMF/LXMRouter.py:358` → `delivery_destination.set_packet_callback(self.delivery_packet)`, which is the hand-off point in step 7 below.
 - Recipient has, at some point, been the target of one or more announces from the sender, so `RNS.Identity.known_destinations` knows the sender's full `public_key` (X25519 || Ed25519) under their `dest_hash`. Without this, signature validation in step 11 will fail with `unverified_reason = SOURCE_UNKNOWN`.
 
 ---
@@ -25,7 +25,7 @@ For RNode KISS specifically, `CMD_STAT_RSSI = 0x23` and `CMD_STAT_SNR = 0x24` si
 
 ### 2. `Transport.inbound(raw, interface)` entry point
 
-`RNS/Transport.py:1682-1686` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` (`:1753-1896`). The single entry point for any inbound packet on any interface. The function is gated by `Transport.ready` — packets arriving before transport startup are dropped with a warning.
+`RNS/Transport.py:1682-1686` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` (`:1753-1896` → `def preprocess_inbound(raw,`). The single entry point for any inbound packet on any interface. The function is gated by `Transport.ready` — packets arriving before transport startup are dropped with a warning.
 
 ### 3. IFAC unmask (Interface Authentication Codes)
 
@@ -46,7 +46,7 @@ packet.hops += 1
 
 `packet.unpack` reads the header byte fields per SPEC.md §2.1, sets `packet.header_type`, `packet.packet_type`, `packet.destination_type`, `packet.destination_hash`, `packet.context`, and slices `packet.data` from the remainder. Importantly, **hops is incremented by 1 here**, so even on a leaf-endpoint receive the local `packet.hops` is one more than what flew on the wire — flow logic that treats `packet.hops == 0` as "originator on this interface" must use the wire byte before this increment.
 
-RSSI / SNR / Q link-quality stats are attached to `packet` if the interface exposed them (`RNS/Transport.py:1793-1800`).
+RSSI / SNR / Q link-quality stats are attached to `packet` if the interface exposed them (`RNS/Transport.py:1793-1800` → `packet = RNS.Packet(None, raw)`).
 
 ### 5. Hop fix-up for shared-instance and local-client interfaces
 
@@ -93,11 +93,11 @@ def receive(self, packet):
         return True
 ```
 
-For `lxmf.delivery` destinations, `self.callbacks.packet` was set at `LXMF/LXMRouter.py:358` to the router's `delivery_packet` — see step 9.
+For `lxmf.delivery` destinations, `self.callbacks.packet` was set at `LXMF/LXMRouter.py:358` → `delivery_destination.set_packet_callback(self.delivery_packet)` to the router's `delivery_packet` — see step 9.
 
 ### 8. `Destination.decrypt` → `Identity.decrypt` — Token decode with ratchet ring
 
-`RNS/Destination.py:622-664` (`def decrypt(self, ciphertext)`) delegates to `RNS/Identity.py:852-908` (`def decrypt(self, ciphertext_token`). The packet body is the Token form from SPEC.md §3.1: `ephemeral_pub(32) || iv(16) || aes_ciphertext || hmac_sha256(32)`.
+`RNS/Destination.py:622-664` → `def decrypt(self,` (`def decrypt(self, ciphertext)`) delegates to `RNS/Identity.py:852-908` → `def decrypt(self,` (`def decrypt(self, ciphertext_token`). The packet body is the Token form from SPEC.md §3.1: `ephemeral_pub(32) || iv(16) || aes_ciphertext || hmac_sha256(32)`.
 
 ```python
 peer_pub_bytes = ciphertext_token[:32]                     # sender's ephemeral X25519 pub

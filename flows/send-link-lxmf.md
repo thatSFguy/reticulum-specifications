@@ -63,7 +63,7 @@ Setting `process_outbound` itself as the link's established-callback is the tric
 
 ### 3. `RNS.Link(destination)` builds and sends a LINKREQUEST
 
-`RNS/Link.py:230-323` → `def __init__(self, destination=None, established_callback=None`. The `Link` constructor on the **initiator** side generates a fresh ephemeral X25519 + Ed25519 keypair (`pub_bytes` and `sig_pub_bytes`) and constructs the LINKREQUEST body (`RNS/Link.py:308-324`):
+`RNS/Link.py:230-323` → `def __init__(self, destination=None, established_callback=None`. The `Link` constructor on the **initiator** side generates a fresh ephemeral X25519 + Ed25519 keypair (`pub_bytes` and `sig_pub_bytes`) and constructs the LINKREQUEST body (`RNS/Link.py:308-324` → `signalling_bytes = Link.signalling_bytes(nh_hw_mtu,`):
 
 ```
 request_data = initiator_X25519_pub(32) || initiator_Ed25519_pub(32) || [signalling(3)]
@@ -88,7 +88,7 @@ The LINKREQUEST then goes through the same `Transport.outbound` path as any othe
 
 ### 4. Wait for LRPROOF; verify; complete handshake
 
-The initiator's link sits in `Link.PENDING` while it waits for the responder's LRPROOF. The responder's side of this exchange (entering `Destination.receive` with `packet_type == LINKREQUEST` → `incoming_link_request` → `Link.validate_request` → `Link.handshake` → `Link.prove`, all at `RNS/Link.py:186-227` → `def validate_request(owner, data, packet)`, and `:348-375`) is its own flow document; this flow describes only what the initiator sees.
+The initiator's link sits in `Link.PENDING` while it waits for the responder's LRPROOF. The responder's side of this exchange (entering `Destination.receive` with `packet_type == LINKREQUEST` → `incoming_link_request` → `Link.validate_request` → `Link.handshake` → `Link.prove`, all at `RNS/Link.py:186-227` → `def validate_request(owner, data, packet)`, and `:348-375` → `def handshake(self):`) is its own flow document; this flow describes only what the initiator sees.
 
 The LRPROOF arrives back at `Transport.inbound` with `packet_type = PROOF`, `context = LRPROOF (0xff)`, `dest_hash = link_id`. `Transport.inbound` looks up the link by its `link_id` and dispatches to `Link.validate_proof` (`RNS/Link.py:391-451` → `def validate_proof(self, packet)`). For an initiator with link still in `PENDING`:
 
@@ -112,14 +112,14 @@ Immediately after step 5 succeeds — and before any application DATA leaves —
 
 ### 5. Transfer the LXM body over the active link
 
-Back in `process_outbound` (`LXMF/LXMRouter.py:2789-2799`), with `direct_link.status == ACTIVE`:
+Back in `process_outbound` (`LXMF/LXMRouter.py:2789-2799` → `RNS.log("Starting transfer`), with `direct_link.status == ACTIVE`:
 
 ```python
 lxmessage.set_delivery_destination(direct_link)                 # __delivery_destination = link
 lxmessage.send()                                                # LXMessage.send branches on representation
 ```
 
-`LXMessage.send` for DIRECT/PACKET (`LXMF/LXMessage.py:471-490`) calls `self.__as_packet()` which constructs:
+`LXMessage.send` for DIRECT/PACKET (`LXMF/LXMessage.py:471-490` → `self.ratchet_id = lxm_packet.ratchet_id`) calls `self.__as_packet()` which constructs:
 
 ```python
 RNS.Packet(self.__delivery_destination, self.packed)            # full LXMF body, dest_hash included
@@ -151,7 +151,7 @@ The recipient (per the receive flow — TODO `receive-link-lxmf.md`) decrypts th
 
 ### 8. (Optional) RESOURCE representation for large bodies
 
-If the packed body exceeds `LINK_PACKET_MAX_CONTENT` (`LXMF/LXMessage.py:415-421`), `representation` is set to `RESOURCE` and step 5 instead constructs an `RNS.Resource` (`__as_resource`, line 651):
+If the packed body exceeds `LINK_PACKET_MAX_CONTENT` (`LXMF/LXMessage.py:415-421` → `self.__delivery_destination = self.__destination`), `representation` is set to `RESOURCE` and step 5 instead constructs an `RNS.Resource` (`__as_resource`, line 651):
 
 ```python
 RNS.Resource(self.packed, self.__delivery_destination, callback=..., progress_callback=..., auto_compress=...)
@@ -163,7 +163,7 @@ When the resource concludes successfully, the same `__mark_delivered` path runs 
 
 ### 9. Backchannel identification (optional, after first successful DIRECT delivery)
 
-`LXMF/LXMRouter.py:2700-2714`. After a DIRECT delivery completes (`lxmessage.state == DELIVERED`), if the link doesn't yet have a backchannel identity associated, the initiator's `LXMRouter` calls `direct_link.identify(backchannel_identity)`:
+`LXMF/LXMRouter.py:2700-2714` → `if lxmessage.method == LXMessage.DIRECT and`. After a DIRECT delivery completes (`lxmessage.state == DELIVERED`), if the link doesn't yet have a backchannel identity associated, the initiator's `LXMRouter` calls `direct_link.identify(backchannel_identity)`:
 
 - `direct_link.identify` sends an IDENTIFY packet on the link bound to one of the **sender's** local `lxmf.delivery` destinations.
 - The receiving side's `delivery_link_established` callback (set at `LXMRouter.py:1956-1963` → `def delivery_link_established(self, link)`) installs `delivery_packet` on the link's packet callback, so subsequent inbound DATA on this link reaches the LXMF parser.
