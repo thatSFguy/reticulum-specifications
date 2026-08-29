@@ -22,7 +22,7 @@ This flow covers the **receive + ingest** path that every Reticulum node runs (l
 
 Steps 1-6 of [`receive-opportunistic-lxmf.md`](receive-opportunistic-lxmf.md) apply unchanged:
 
-1. KISS / HDLC deframer (and RNode 2-frame split-packet reassembly per [`../SPEC.md`](../SPEC.md) §8.3 if applicable) hands the raw Reticulum packet bytes to `RNS.Transport.inbound(raw, interface)` (`RNS/Transport.py:1682-1686` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` at `:1753`).
+1. KISS / HDLC deframer (and RNode 2-frame split-packet reassembly per [`../SPEC.md`](../SPEC.md) §8.3 if applicable) hands the raw Reticulum packet bytes to `RNS.Transport.inbound(raw, interface)` (`RNS/Transport.py:1682-1686` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` at `:1753` → `def preprocess_inbound(raw,`).
 2. IFAC unmask if the interface has `ifac_identity` configured.
 3. `packet = RNS.Packet(None, raw); packet.unpack(); packet.hops += 1`.
 4. RSSI / SNR / Q stats are attached to the packet.
@@ -46,7 +46,7 @@ if interface != None and RNS.Identity.validate_announce(packet, only_validate_si
 `validate_announce(only_validate_signature=True)` runs the full body-parse and Ed25519 signature verification (steps 1-2 of SPEC.md §4.5) but **skips** the destination_hash recomputation and the cache updates. If the signature is valid the call:
 
 - Returns `True` so the wider dispatch can proceed.
-- Calls `interface.received_announce()`, which appends `time.time()` to the per-interface `ia_freq_deque` (`RNS/Interfaces/Interface.py:304-308` → `self.ia_freq_deque.append(time.time())`; called from `RNS/Transport.py:1811`). This deque feeds `incoming_announce_frequency()` and is what drives ingress-limit decisions in step 3.
+- Calls `interface.received_announce()`, which appends `time.time()` to the per-interface `ia_freq_deque` (`RNS/Interfaces/Interface.py:304-308` → `self.ia_freq_deque.append(time.time())`; called from `RNS/Transport.py:1811` → `elif packet.receiving_interface !=`). This deque feeds `incoming_announce_frequency()` and is what drives ingress-limit decisions in step 3.
 
 If the signature fails, the announce is silently dropped here without the deque update — a malformed sender can't burn through the receiver's ingress budget by spamming bad-sig announces. This is a sharp design choice and worth replicating in any clean-room implementation: **signature-checked-then-counted**, not "counted-then-validated".
 
@@ -70,11 +70,11 @@ The check runs only for **unknown-destination** announces (already-known destina
 
 Held announces are released later by `Interface.process_held_announces()` (`RNS/Interfaces/Interface.py:257-280` → `def process_held_announces(self)`), which fires every `IC_HELD_RELEASE_INTERVAL = 2s`, picks the **lowest-hop-count** held announce, and re-injects it via `Transport.inbound(announce_packet.raw, announce_packet.receiving_interface)`. The re-injection re-enters this flow at step 1, so the rate-limiter doesn't get bypassed; the held announce takes its turn in line.
 
-`held_announces` is bounded by `MAX_HELD_ANNOUNCES = 256` per interface; overflow simply drops the new announce instead of evicting an older one (`hold_announce` at `RNS/Interfaces/Interface.py:269-275`).
+`held_announces` is bounded by `MAX_HELD_ANNOUNCES = 256` per interface; overflow simply drops the new announce instead of evicting an older one (`hold_announce` at `RNS/Interfaces/Interface.py:269-275` → `def hold_announce(self,`).
 
 ### 4. Local-destination short-circuit
 
-`RNS/Transport.py:1765-1768`:
+`RNS/Transport.py:1765-1768` → `if interface != None and hasattr(interface,`:
 
 ```python
 local_destination = None
@@ -87,7 +87,7 @@ If the announce's `destination_hash` matches one of our own registered destinati
 
 ### 5. Full announce validation
 
-`RNS/Transport.py:2176`:
+`RNS/Transport.py:2176` → `if local_destination ==`:
 
 ```python
 if local_destination == None and announce_valid:
@@ -202,7 +202,7 @@ so any client built on the LXMF router gets contacts/propagation-node discovery 
 
 If `RNS.Reticulum.transport_enabled() == True`, the same `Transport.inbound` dispatch then walks an additional code path that constructs a rebroadcast announce, queues it on each suitable interface (`announce_queue`), and emits it later subject to the per-interface `announce_cap` (default 2% of airtime). This entire path is skipped on a leaf client.
 
-The rebroadcast logic is the bulk of `RNS/Transport.py:2300-2374` and is documented separately in `forward-announce.md` (TODO).
+The rebroadcast logic is the bulk of `RNS/Transport.py:2300-2374` → `is_from_local_client =` and is documented separately in `forward-announce.md` (TODO).
 
 ---
 

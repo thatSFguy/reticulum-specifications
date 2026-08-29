@@ -47,7 +47,7 @@ data = [None, None]                                              # [wanted, have
 link.request("/get", data, response_callback=on_message_list)
 ```
 
-The propagation node's `message_get_request` handler at `LXMF/LXMRouter.py:1482-1504` walks `propagation_entries` for messages keyed to the requester's destination_hash and returns:
+The propagation node's `message_get_request` handler at `LXMF/LXMRouter.py:1482-1504` → `def message_get_request(self,` walks `propagation_entries` for messages keyed to the requester's destination_hash and returns:
 
 ```python
 [ [transient_id_1(16), size_1(int)],
@@ -76,7 +76,7 @@ link.request("/get", data, response_callback=on_message_batch)
 
 ### 6. Propagation node returns a flat list of message bodies
 
-`message_get_request` builds `response_messages = []` (`LXMF/LXMRouter.py:1523`), appends one LXMF body per served message, and returns **that list directly** (`:1555-1556`):
+`message_get_request` builds `response_messages = []` (`LXMF/LXMRouter.py:1523` → `response_messages =`), appends one LXMF body per served message, and returns **that list directly** (`:1555-1556` → `self.client_propagation_messages_served +=`):
 
 ```python
 response_messages.append(lxmf_data[:-LXStamper.STAMP_SIZE])   # :1549
@@ -87,13 +87,13 @@ return response_messages                                      # :1556
 Two things to get right here, both of which fail silently:
 
 - **There is no `[timestamp, [bodies]]` envelope.** That shape belongs to the *upload* direction only (`flows/send-propagated-lxmf.md` step 2). The retrieval response is a bare list.
-- **The propagation stamp is stripped before serving** (`:1549`). Each served body is the pre-stamp propagated form, `dest_hash(16) || ciphertext` — do not slice `STAMP_SIZE` off it again.
+- **The propagation stamp is stripped before serving** (`:1549` → `response_messages.append(lxmf_data[:-LXStamper.STAMP_SIZE])`). Each served body is the pre-stamp propagated form, `dest_hash(16) || ciphertext` — do not slice `STAMP_SIZE` off it again.
 
 Returned as a §11 RESPONSE. If the bundle fits in `link.mdu` it's a single Link DATA packet; otherwise it's a Resource (per `flows/send-resource.md`). Either way the Link layer strips the `[request_id, response]` framing before the callback fires.
 
 ### 7. Recipient processes each body and rehashes it for the purge round
 
-The recipient's `message_get_response` callback (`LXMF/LXMRouter.py:1607-1644`) iterates the response as bodies, with nothing to unwrap:
+The recipient's `message_get_response` callback (`LXMF/LXMRouter.py:1607-1644` → `def message_get_response(self,`) iterates the response as bodies, with nothing to unwrap:
 
 ```python
 # LXMF/LXMRouter.py:1624-1627
@@ -102,7 +102,7 @@ for lxmf_data in request_receipt.response:
     haves.append(RNS.Identity.full_hash(lxmf_data))
 ```
 
-`haves` is the `have_ids` list for step 8. It works because the node keyed its store on `transient_id = RNS.Identity.full_hash(lxmf_data)` computed **before** the stamp was appended (`:2494`, then `:2512`), and step 6 stripped exactly those bytes back off — so `full_hash(body_as_received)` reproduces the node's own store key.
+`haves` is the `have_ids` list for step 8. It works because the node keyed its store on `transient_id = RNS.Identity.full_hash(lxmf_data)` computed **before** the stamp was appended (`:2494`, then `:2512` → `stamped_data = lxmf_data+stamp_data`), and step 6 stripped exactly those bytes back off — so `full_hash(body_as_received)` reproduces the node's own store key.
 
 `lxmf_propagation` routes the body into `lxmf_delivery`, the same path used for opportunistic and direct receive (`flows/receive-opportunistic-lxmf.md` step 11+) — it calls `LXMessage.unpack_from_bytes`, validates the signature against the sender's known identity, runs ticket / stamp / dedup checks, and fires the application's delivery callback. **The LXMF body bytes are identical regardless of how they arrived** — opportunistic, direct over a Link, or propagated. The propagation node never touched the encrypted body.
 
@@ -127,7 +127,7 @@ After the bundle is processed, the recipient either tears down the link (`link.t
 | 3 | `RNS/Link.py` | `Link.identify`, line 454 |
 | 4-6 | `LXMF/LXMRouter.py` | `message_get_request` handler, line 1482-1561 |
 | 7 | `LXMF/LXMRouter.py` | `message_get_response`, line 1607-1644 |
-| 7 | `LXMF/LXMRouter.py` | `lxmf_propagation`, line 2487-2540 (`transient_id` at `:2494`, stamp appended at `:2512`) |
+| 7 | `LXMF/LXMRouter.py` | `lxmf_propagation`, line 2487-2540 (`transient_id` at `:2494`, stamp appended at `:2512` → `stamped_data = lxmf_data+stamp_data`) |
 | 7 | `LXMF/LXMRouter.py` | `lxmf_delivery`, line 1837 |
 | 8 | `LXMF/LXMRouter.py` | purge via `/get` `have_ids` slot, line 1508-1519 |
 | 9 | `RNS/Link.py` | `teardown`, line 662 |

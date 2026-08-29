@@ -39,7 +39,7 @@ exhausted_flag(1) [|| last_map_hash(4)] || resource_hash(32) || requested_map_ha
 
 ### 4. Sender fulfills with RESOURCE part packets
 
-For each requested map_hash, the sender (per `flows/send-resource.md` step 5) emits one Link DATA packet with `context = RESOURCE (0x01)`, body = pre-encrypted part bytes. The receiver matches each arriving part to the hashmap by recomputing its 4-byte map_hash (`Resource.receive_part`, `RNS/Resource.py:842-939`).
+For each requested map_hash, the sender (per `flows/send-resource.md` step 5) emits one Link DATA packet with `context = RESOURCE (0x01)`, body = pre-encrypted part bytes. The receiver matches each arriving part to the hashmap by recomputing its 4-byte map_hash (`Resource.receive_part`, `RNS/Resource.py:842-939` → `def receive_part(self,`).
 
 Successful match: `parts[i] = part_data`, `consecutive_completed_height` advances. The window grows by 1 each successful round (capped at `window_max`, with rate-detection upgrades to FAST or VERY_SLOW per §10.10).
 
@@ -62,7 +62,7 @@ When the receiver has consumed every map_hash in the current segment, it issues 
 
 ### 7. RESOURCE_PRF emission
 
-`Resource.prove()` (`RNS/Resource.py:765-777`) sends back:
+`Resource.prove()` (`RNS/Resource.py:765-777` → `def prove(self):`) sends back:
 
 ```
 proof_data = resource_hash(32) || full_proof(32)
