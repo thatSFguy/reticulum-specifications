@@ -1,0 +1,128 @@
+# Absorbs the mechanical half of an upstream bump, so a human only ever
+# reviews what could NOT be repaired automatically.
+#
+# Why this exists: .github/dependabot.yml opens a PR when rns/lxmf publish a
+# release, and verify.yml gates it. But a pin bump moves upstream code, and
+# every citation whose line number shifted comes back as a diff the author has
+# to eyeball. Replaying the real RNS 1.5.0 -> 1.5.2 bump, `--fix` absorbs 46
+# rewrites — 32 drifted line numbers and 14 stale "Pinned against" headers —
+# none of which carry information. That noise is what buried the citation rot
+# in #45.
+#
+# check_citations.py already separates the mechanical case from the real one,
+# and its exit code says which is which:
+#
+#   exit 0  everything was drift, and --fix rewrote it     -> no human needed
+#   exit 1  a snippet is nowhere in the pinned source      -> a human must look
+#
+# The second case is the spec asserting something upstream no longer says.
+# --fix deliberately refuses to touch it so a green run cannot mask it.
+#
+# ORDERING MATTERS. A document header reading "Pinned against **RNS x.y.z**"
+# is a claim that the document was *verified* against that version, so this
+# job runs the full verifier suite BEFORE committing anything. If a verifier
+# fails, nothing is pushed and the PR stays red — a bump that broke a
+# wire-format claim must be read by a person, not auto-stamped as verified.
+#
+# Kept separate from verify.yml on purpose: this job needs `contents: write`,
+# and there is no reason to hand that to the checks that run on every PR.
+name: resync-citations
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: resync-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resync:
+    # Only ever act on a bump PR. `upstream-sync` is the label dependabot.yml
+    # attaches; applying it by hand already requires write access to the repo.
+    # This is `pull_request`, not `pull_request_target`, so the code and the
+    # token belong to the same same-repo branch.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.actor == 'dependabot[bot]' ||
+      contains(github.event.pull_request.labels.*.name, 'upstream-sync')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The PR branch itself, not the merge commit, so a commit made here
+          # can be pushed back to it.
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned upstream
+        run: pip install -r tools/requirements.txt
+
+      # Rewrites drifted line numbers and stale pin declarations in place.
+      # Exits non-zero if anything was left unrepaired; the gate below is the
+      # decision point, so this step only records the outcome.
+      - name: Re-anchor drifted citations
+        id: fix
+        continue-on-error: true
+        run: python tools/check_citations.py --fix
+
+      # Everything below must pass before a single line is committed.
+      - name: Verify wire-format claims against the new pin
+        run: |
+          cd tools
+          fail=0
+          for f in verify_*.py; do
+            echo "::group::$f"
+            python "$f" || { echo "::error::$f FAILED"; fail=1; }
+            echo "::endgroup::"
+          done
+          exit $fail
+
+      - name: Gate on what --fix refused
+        run: python tools/check_citations.py
+
+      - name: Commit the repaired lines
+        id: commit
+        run: |
+          if git diff --quiet; then
+            echo "Nothing drifted against the new pin; no commit."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "deps: re-anchor citations and pin declarations against the new pin"
+          # A push authenticated with GITHUB_TOKEN does not retrigger workflows.
+          # That is fine here: every check this commit needs already ran above,
+          # in this job, against exactly these bytes.
+          git push
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Citation resync"
+            echo
+            if [ "${{ steps.commit.outputs.pushed }}" = "true" ]; then
+              echo "Re-anchored drifted line numbers and pin declarations, and pushed"
+              echo "a commit to this branch. Every verifier passed first."
+            elif [ "${{ steps.commit.outputs.pushed }}" = "false" ]; then
+              echo "No drift against the new pin — nothing to commit."
+            else
+              echo "Stopped before committing: a verifier or the citation gate failed."
+              echo "Nothing was auto-stamped as verified. See the log above."
+            fi
+            if [ "${{ steps.fix.outcome }}" = "failure" ]; then
+              echo
+              echo "\`--fix\` refused at least one citation: the spec asserts something"
+              echo "the pinned source does not say. That is a real upstream change,"
+              echo "not renumbering, and it needs a person."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
