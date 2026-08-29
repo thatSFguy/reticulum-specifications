@@ -82,7 +82,7 @@ self.packet.send()
 
 The LINKREQUEST is a **regular Reticulum DATA-routed packet** — `packet_type = LINKREQUEST (2)`, `destination_type = SINGLE`, addressed to the recipient's `lxmf.delivery` `dest_hash`. Per `RNS/Packet.py::pack` (`RNS/Packet.py:194-196`) `LINKREQUEST` packets are **not encrypted** — the body is `request_data` verbatim — because the responder needs to decode the public keys to perform the handshake.
 
-The link_id is set immediately on the initiator side via `set_link_id` (SPEC.md §6.3): the SHA-256-truncated-to-16 hash of `get_hashable_part(LINKREQUEST_packet)`, with trailing signalling bytes stripped via `link_id_from_lr_packet`. Since `get_hashable_part` is invariant under HEADER_1↔HEADER_2 conversion (`RNS/Packet.py:352-361`), the responder will arrive at the same link_id even if the LINKREQUEST passed through one or more relays.
+The link_id is set immediately on the initiator side via `set_link_id` (SPEC.md §6.3): the SHA-256-truncated-to-16 hash of `get_hashable_part(LINKREQUEST_packet)`, with trailing signalling bytes stripped via `link_id_from_lr_packet`. Since `get_hashable_part` is invariant under HEADER_1↔HEADER_2 conversion (`RNS/Packet.py:353-361` → `def get_hash(self):`), the responder will arrive at the same link_id even if the LINKREQUEST passed through one or more relays.
 
 The LINKREQUEST then goes through the same `Transport.outbound` path as any other DATA packet (steps 7-9 of `send-opportunistic-lxmf.md`), which means it can itself be subject to the path-table miss → path-request preamble before it leaves.
 
@@ -97,7 +97,7 @@ proof_data layout (RNS/Link.py:371):
    signature(64) || responder_X25519_pub(32) || [signalling(3)]
 ```
 
-Validation (`RNS/Link.py:410-422`):
+Validation (`RNS/Link.py:411-422` → `self.establishment_cost += len(packet.raw)`):
 
 1. Parse `signature = packet.data[:64]`, `peer_pub_bytes = packet.data[64:96]`.
 2. Read the responder's long-term Ed25519 public key from the `Destination.identity` we already had cached (from a prior announce — line 412: `self.destination.identity.get_public_key()[ECPUBSIZE//2:ECPUBSIZE]`). The Ed25519 pub is **not** sent in the LRPROOF body; it must be known locally already.
@@ -106,9 +106,9 @@ Validation (`RNS/Link.py:410-422`):
 5. On success: `link.handshake()` runs (`RNS/Link.py:348-363` → `def handshake(self)`) — ECDH with the responder's fresh X25519 pub, then HKDF over the shared secret with `salt = link_id`, derives `signing_key(32) || encrypt_key(32)` per SPEC.md §6.4. Link state transitions to `Link.ACTIVE`.
 6. The initiator's `established_callback` registered at step 2 — `LXMRouter.process_outbound` — fires, re-entering step 2 with the link now ACTIVE.
 
-A confirmed-MTU hint in the LRPROOF (length is `64+32+3 = 99` instead of `64+32 = 96`) updates `link.mtu` to the smaller of the responder's hint and the initiator's view (`RNS/Link.py:404-408`).
+A confirmed-MTU hint in the LRPROOF (length is `64+32+3 = 99` instead of `64+32 = 96`) updates `link.mtu` to the smaller of the responder's hint and the initiator's view (`RNS/Link.py:405-408` → `if self.initiator and len(packet.data)`).
 
-Immediately after step 5 succeeds — and before any application DATA leaves — the initiator MUST emit a Link Round-Trip Time packet (`context = LRRTT (0xfe)`, `RNS/Link.py:440-442`). This is **not** an informational hint; the responder uses LRRTT receipt as the sole trigger to transition its own link state from `HANDSHAKE` to `ACTIVE` and to fire the application's `link_established_callback` (per SPEC.md §6.4.2). On the LXMF responder that callback is what installs `set_resource_strategy(ACCEPT_APP)` (`LXMF/LXMRouter.py:1959`); without it, every Resource ADV the initiator sends — including any LXM body large enough to spill from packet form into Resource form — silently hits the `ACCEPT_NONE` branch on the responder and is dropped. The initiator transitions to `ACTIVE` independently on LRPROOF validation, but the responder does not.
+Immediately after step 5 succeeds — and before any application DATA leaves — the initiator MUST emit a Link Round-Trip Time packet (`context = LRRTT (0xfe)`, `RNS/Link.py:441-442` → `if self.callbacks.link_established`). This is **not** an informational hint; the responder uses LRRTT receipt as the sole trigger to transition its own link state from `HANDSHAKE` to `ACTIVE` and to fire the application's `link_established_callback` (per SPEC.md §6.4.2). On the LXMF responder that callback is what installs `set_resource_strategy(ACCEPT_APP)` (`LXMF/LXMRouter.py::delivery_link_established` → `link.set_resource_strategy(RNS.Link.ACCEPT_APP)`); without it, every Resource ADV the initiator sends — including any LXM body large enough to spill from packet form into Resource form — silently hits the `ACCEPT_NONE` branch on the responder and is dropped. The initiator transitions to `ACTIVE` independently on LRPROOF validation, but the responder does not.
 
 ### 5. Transfer the LXM body over the active link
 
