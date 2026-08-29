@@ -182,7 +182,7 @@ def advance_range_start(index, abspath, spec):
         return None
     for k in range(lo + 1, min(hi, len(lines)) + 1):
         if not RE_TRIVIAL.match(lines[k - 1]):
-            return k if k < hi else None
+            return k
     return None
 
 
@@ -237,10 +237,16 @@ def main():
         if reason == "blank or structural line":
             newlo = advance_range_start(index, abspath, spec)
             if newlo is not None:
+                nums2 = cc.parse_line_spec(spec)
+                newspec = (spec.replace(str(nums[0]), str(newlo), 1)
+                           if newlo < nums2[-1] else str(newlo))
                 snippet, _ = anchor_for(index, abspath, newlo)
                 if snippet:
-                    newspec = spec.replace(str(nums[0]), str(newlo), 1)
                     decided[(path, spec)] = (newspec, snippet)
+                    continue
+                sym, sym_snip = symbol_anchor(index, abspath, newlo)
+                if sym:
+                    decided_sym[(path, spec)] = (sym, sym_snip)
                     continue
         # Fall back to a symbol-scoped anchor, which drops the line number
         # entirely. Uniqueness only has to hold inside the function body.
