@@ -129,7 +129,7 @@ The initiator's `validate_proof(proof_data)` (`RNS/Resource.py:787-830` → `def
 
 1. Checks `len(proof_data) == 64` and `proof_data[32:] == self.expected_proof`.
 2. On match, transitions `status = COMPLETE` and fires the resource callback.
-3. If this is a multi-segment resource and `segment_index < total_segments`, **immediately advertise the next segment** — its preparation has been running in the background since step 6 of segment N (`__prepare_next_segment` at line 768).
+3. If this is a multi-segment resource and `segment_index < total_segments`, **immediately advertise the next segment** — its preparation has been running in the background since step 6 of segment N (`__prepare_next_segment` at line 777).
 
 If the proof is malformed or doesn't match, the resource is **NOT** retried — `validate_proof` simply returns and the watchdog will eventually time out and call `cancel()`.
 
@@ -195,13 +195,13 @@ Multi-segment resources insert a fresh RESOURCE_ADV after step 4 for each new se
 | Step | File | Function / line |
 |---|---|---|
 | 1 | `LXMF/LXMessage.py` | `__as_resource`, line 651 (LXMF caller) |
-| 2 | `RNS/Resource.py` | `Resource.__init__`, line 248-478 |
-| 3 | `RNS/Resource.py` | `Resource.advertise`, line 508; `__advertise_job`, line 520 |
-| 3 | `RNS/Resource.py` | `ResourceAdvertisement.pack`, line 1336 |
-| 4 | `RNS/Resource.py` | watchdog ADVERTISED branch, line 573-590 |
-| 5 | `RNS/Resource.py` | `request`, line 985-1064 |
-| 6 | `RNS/Resource.py` | `receive_part` window grow, line 902-906 |
-| 7 | `RNS/Resource.py` | hashmap update emit, line 1030-1064 |
-| 8 | `RNS/Resource.py` | `validate_proof`, line 785-829 |
-| 9 | `RNS/Resource.py` | `Resource.reject`, line 155-163; `Resource.cancel` (search) |
-| 10 | `RNS/Resource.py` | watchdog timeouts, line 126-137 |
+| 2 | `RNS/Resource.py` | `Resource.__init__`, line 249-487 |
+| 3 | `RNS/Resource.py` | `Resource.advertise`, line 517; `__advertise_job`, line 529 |
+| 3 | `RNS/Resource.py` | `ResourceAdvertisement.pack`, line 1347 |
+| 4 | `RNS/Resource.py` | watchdog ADVERTISED branch, line 582-599 |
+| 5 | `RNS/Resource.py` | `request`, line 994-1073 |
+| 6 | `RNS/Resource.py` | `receive_part` window grow, line 911-915 |
+| 7 | `RNS/Resource.py` | hashmap update emit, line 1039-1073 |
+| 8 | `RNS/Resource.py` | `validate_proof`, line 794-838 |
+| 9 | `RNS/Resource.py` | `Resource.reject`, line 156-164; `Resource.cancel` (search) |
+| 10 | `RNS/Resource.py` | watchdog timeouts, line 127-138 |

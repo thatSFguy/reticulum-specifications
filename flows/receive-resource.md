@@ -39,7 +39,7 @@ exhausted_flag(1) [|| last_map_hash(4)] || resource_hash(32) || requested_map_ha
 
 ### 4. Sender fulfills with RESOURCE part packets
 
-For each requested map_hash, the sender (per `flows/send-resource.md` step 5) emits one Link DATA packet with `context = RESOURCE (0x01)`, body = pre-encrypted part bytes. The receiver matches each arriving part to the hashmap by recomputing its 4-byte map_hash (`Resource.receive_part`, `RNS/Resource.py:833-930`).
+For each requested map_hash, the sender (per `flows/send-resource.md` step 5) emits one Link DATA packet with `context = RESOURCE (0x01)`, body = pre-encrypted part bytes. The receiver matches each arriving part to the hashmap by recomputing its 4-byte map_hash (`Resource.receive_part`, `RNS/Resource.py:842-939`).
 
 Successful match: `parts[i] = part_data`, `consecutive_completed_height` advances. The window grows by 1 each successful round (capped at `window_max`, with rate-detection upgrades to FAST or VERY_SLOW per §10.10).
 
@@ -62,7 +62,7 @@ When the receiver has consumed every map_hash in the current segment, it issues 
 
 ### 7. RESOURCE_PRF emission
 
-`Resource.prove()` (`RNS/Resource.py:756-768`) sends back:
+`Resource.prove()` (`RNS/Resource.py:765-777`) sends back:
 
 ```
 proof_data = resource_hash(32) || full_proof(32)
@@ -88,10 +88,10 @@ If `segment_index < total_segments`, the sender prepares and sends the next RESO
 |---|---|---|
 | 1 | `RNS/Link.py` | `Link.__receive` RESOURCE_ADV branch, line 1031 |
 | 2 | `RNS/Resource.py` | `Resource.accept`, `Resource.reject`, lines 155-244 |
-| 3 | `RNS/Resource.py` | `request_next`, line 933 |
-| 4 | `RNS/Resource.py` | `receive_part`, line 833 |
+| 3 | `RNS/Resource.py` | `request_next`, line 942 |
+| 4 | `RNS/Resource.py` | `receive_part`, line 842 |
 | 5 | `RNS/Link.py` | RESOURCE_HMU branch, line 1103 |
-| 6 | `RNS/Resource.py` | `assemble`, line 676 |
-| 7 | `RNS/Resource.py` | `prove`, line 756 |
-| 8 | `RNS/Resource.py` | `__prepare_next_segment`, line 770 |
+| 6 | `RNS/Resource.py` | `assemble`, line 685 |
+| 7 | `RNS/Resource.py` | `prove`, line 765 |
+| 8 | `RNS/Resource.py` | `__prepare_next_segment`, line 779 |
 | 9 | `RNS/Link.py` | RESOURCE_ICL branch, line 1112 |

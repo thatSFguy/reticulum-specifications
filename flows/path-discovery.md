@@ -45,7 +45,7 @@ Transport.path_requests[destination_hash] = time.time()
 
 The well-known dest hash `6b9f66014d9853faab220fba47d02761` is computed as `SHA256(SHA256("rnstransport.path.request")[:10])[:16]` per [`../SPEC.md`](../SPEC.md) §1.2 (the `identity=None` branch of `Destination.hash`). It is the same on every node — no per-node uniqueness — because the destination is `PLAIN` with no identity attached.
 
-The packet is `DATA` (not ANNOUNCE), `BROADCAST` transport, `HEADER_1`, and `context = NONE`. The body is **unencrypted** because the outer destination is `PLAIN` — `Packet.pack` falls through to `self.destination.encrypt(self.data)` at `RNS/Packet.py:216`, and `Destination.encrypt` returns `plaintext` unchanged for `Destination.PLAIN` (`RNS/Destination.py:592-593`).
+The packet is `DATA` (not ANNOUNCE), `BROADCAST` transport, `HEADER_1`, and `context = NONE`. The body is **unencrypted** because the outer destination is `PLAIN` — `Packet.pack` falls through to `self.destination.encrypt(self.data)` at `RNS/Packet.py:218`, and `Destination.encrypt` returns `plaintext` unchanged for `Destination.PLAIN` (`RNS/Destination.py:592-593`).
 
 Initiator records `Transport.path_requests[destination_hash] = time.time()` for `PATH_REQUEST_GATE_TIMEOUT = 120s` rate-limiting (prevents the same node from repeating identical path? requests faster than `PATH_REQUEST_MI = 20s`).
 
@@ -187,13 +187,13 @@ In the second case, the target leaf doesn't see the request at all — the relay
 
 | Step | File | Function / line |
 |---|---|---|
-| 1 | `RNS/Transport.py` | `request_path`, line 3207-3250 |
-| 2 | `RNS/Transport.py` | `_outbound` broadcast branch, line 1388-1404 |
-| 3 | `RNS/Transport.py` | path-request destination registration, line 347-348; PLAIN+DATA dispatch, line 2087 |
-| 4 | `RNS/Transport.py` | `path_request_handler`, line 3305-3342 |
-| 5 | `RNS/Transport.py` | `path_request`, line 3345-3524 (5-way dispatch) |
+| 1 | `RNS/Transport.py` | `request_path`, line 3279-3322 |
+| 2 | `RNS/Transport.py` | `_outbound` broadcast branch, line 1439-1458 |
+| 3 | `RNS/Transport.py` | path-request destination registration, line 356-357; PLAIN+DATA dispatch, line 2175 |
+| 4 | `RNS/Transport.py` | `path_request_handler`, line 3380-3417 |
+| 5 | `RNS/Transport.py` | `path_request`, line 3420-3599 (5-way dispatch) |
 | 6 | `RNS/Destination.py` | `announce(path_response=True)`, line 244-318 |
-| 7 | `RNS/Transport.py` | inbound ANNOUNCE branch, line 1712; ingress-limit bypass, line 1727-1729 |
-| 7 | `RNS/Transport.py` | announce handler dispatch (path-response filter), line 2399-2450 |
+| 7 | `RNS/Transport.py` | inbound ANNOUNCE branch, line 1803; ingress-limit bypass, line 1819-1821 |
+| 7 | `RNS/Transport.py` | announce handler dispatch (path-response filter), line 2483-2534 |
 | 8 | `LXMF/LXMRouter.py` | `process_outbound` resume after path-resolution, line 2735-2764 |
-| 9 | `RNS/Transport.py` | `discovery_path_requests` cleanup, line 815-822 |
+| 9 | `RNS/Transport.py` | `discovery_path_requests` cleanup, line 844-851 |

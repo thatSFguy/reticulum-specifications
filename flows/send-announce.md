@@ -125,6 +125,6 @@ LXMF runs this via `LXMRouter.jobs` calling `LXMRouter.announce_propagation_node
 | 5 | `RNS/Destination.py` | sign + pack, line 301-304 |
 | 6 | `RNS/Destination.py` | path_responses cache, line 306 |
 | 7 | `RNS/Destination.py` | Packet construction, line 314-315 |
-| 7 | `RNS/Packet.py` | ANNOUNCE-skips-encryption, line 191-193 |
-| 8 | `RNS/Transport.py` | `_outbound` broadcast branch, line 1388-1404 |
+| 7 | `RNS/Packet.py` | ANNOUNCE-skips-encryption, line 193-195 |
+| 8 | `RNS/Transport.py` | `_outbound` broadcast branch, line 1439-1458 |
 | 9 | `LXMF/LXMRouter.py` | jobs / re-announce cadence |

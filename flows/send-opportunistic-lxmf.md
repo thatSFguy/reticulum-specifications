@@ -99,7 +99,7 @@ Note the slice `[16:]`: the recipient's dest_hash is removed because it is impli
 `RNS/Packet.py:178-240` → `def pack(self)`. For a `SINGLE` destination, packet_type `DATA`, context `CTX_NONE`, header_type `HEADER_1`:
 
 1. **Header bytes**: `flags(1) || hops(1) || dest_hash(16) || context(1)` — SPEC.md §2.1, §2.2.
-2. **Encryption** (line 215): `self.ciphertext = self.destination.encrypt(self.data)` — calls `RNS.Destination.encrypt` which delegates to the Token construction (SPEC.md §3):
+2. **Encryption** (line 217): `self.ciphertext = self.destination.encrypt(self.data)` — calls `RNS.Destination.encrypt` which delegates to the Token construction (SPEC.md §3):
 
 ```
 ephemeral_pub(32) || iv(16) || aes_ciphertext(...) || hmac_sha256(32)
@@ -117,7 +117,7 @@ ephemeral_pub(32) || iv(16) || aes_ciphertext(...) || hmac_sha256(32)
 
 - If `path_table[dest][HOPS] > 1`: convert HEADER_1 → HEADER_2 (SPEC.md §2.3). The originator inserts `path_table[dest][NEXT_HOP]` (16-byte transport_id) at offset 2 and flips the flag bits to `HEADER_2 | TRANSPORT | (orig_low_nibble)`. Resulting wire packet is 35 + ciphertext bytes.
 - If `path_table[dest][HOPS] == 1` AND the local node is connected to a shared instance: same conversion applies (lines 1094-1105).
-- Otherwise (0 hops or destination not in path table): emit HEADER_1 unchanged. The 0-hop case relies on the receiving rnsd auto-filling the transport_id when the destination matches a local client (`for_local_client` branch at line 1451).
+- Otherwise (0 hops or destination not in path table): emit HEADER_1 unchanged. The 0-hop case relies on the receiving rnsd auto-filling the transport_id when the destination matches a local client (`for_local_client` branch at line 1505).
 
 Then `Transport.transmit(interface, raw)` is called for the chosen `outbound_interface`.
 
@@ -190,10 +190,10 @@ For a >1-hop send with a known path the originator emits `HEADER_2` instead, wit
 | 4 | `LXMF/LXMRouter.py` | `handle_outbound`, line 1746-1795 |
 | 5 | `LXMF/LXMessage.py` | `send`, line 463-508 |
 | 6 | `LXMF/LXMessage.py` | `__as_packet`, line 626-638 |
-| 7 | `RNS/Packet.py` | `pack`, line 178-240; encrypt at line 217 |
+| 7 | `RNS/Packet.py` | `pack`, line 180-242; encrypt at line 219 |
 | 7 | `RNS/Cryptography/Token.py` | Token encrypt |
-| 8 | `RNS/Transport.py` | `_outbound`, line 1302-1552 |
+| 8 | `RNS/Transport.py` | `_outbound`, line 1353-1605 |
 | 9 | `RNS/Interfaces/*.py` | per-interface KISS or HDLC framing |
-| 12 | `RNS/Transport.py` | `_outbound` receipt setup, line 1307-1324 |
+| 12 | `RNS/Transport.py` | `_outbound` receipt setup, line 1358-1375 |
 | 12 | `RNS/Packet.py` | `prove` |
 | 13 | `RNS/Destination.py` | `rotate_ratchets`, line 228-242 |

@@ -33,10 +33,26 @@ import time
 import RNS
 from RNS import Transport
 
+# The exact violation text preprocess_inbound records for the
+# announce-specific bound (RNS/Transport.py:1804 in RNS 1.5.2).
+EXCESSIVE_ANNOUNCE = "Excessive announce packet frame size"
+
 
 def fail(msg: str) -> None:
     print(f"FAIL: {msg}")
     sys.exit(1)
+
+
+def wait_for(predicate, timeout: float = 5.0, interval: float = 0.01) -> bool:
+    """Poll until `predicate()` holds. Transport.inbound hands the packet to
+    the inbound_job thread, so the assertions below read state written by
+    another thread; a fixed sleep is not a synchronisation point."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
 
 
 def init_minimal_rns():
@@ -60,8 +76,21 @@ class StubInterface:
         self.ifac_size = 0
         self.HW_MTU = 65535
         self.reports_phy_stats = False
+        self.online = True
         self.violations = []
         self.announces_received = 0
+        self.held_announces = 0
+
+    def should_ingress_limit(self):
+        # False, so preprocess_inbound carries the announce through to the
+        # dispatch path. Without this method the call raises AttributeError,
+        # Transport.inbound's bare except swallows it, and the "accepted at
+        # exactly MTU" case silently verifies nothing.
+        return False
+
+    def hold_announce(self, packet=None):
+        self.held_announces += 1
+        return None
 
     def protocol_violation(self, description=None):
         self.violations.append(description)
@@ -163,25 +192,30 @@ def verify_announce_ingress_bound(dest):
 
     iface = StubInterface()
     Transport.inbound(over_limit.raw, iface)
-    time.sleep(0.1)
-    if not iface.violations:
+    if not wait_for(lambda: bool(iface.violations)):
         fail(f"a {mtu + 1}-byte announce raised no protocol violation; "
              f"RNS 1.5.2 must refuse it")
-    if not any("announce" in (v or "").lower() for v in iface.violations):
+    # Match the specific bound, not merely the word "announce": an
+    # "Invalid announce signature" violation would otherwise satisfy this
+    # assertion and hide the removal of the size check.
+    if not any(EXCESSIVE_ANNOUNCE in (v or "") for v in iface.violations):
         fail(f"the {mtu + 1}-byte announce was refused, but not by the "
-             f"announce bound: {iface.violations}")
+             f"announce bound ({EXCESSIVE_ANNOUNCE!r}): {iface.violations}")
     if iface.announces_received:
         fail(f"the {mtu + 1}-byte announce reached received_announce; it must "
              f"be dropped before validate_announce")
 
     iface = StubInterface()
     Transport.inbound(at_limit.raw, iface)
-    time.sleep(0.1)
+    if not wait_for(lambda: iface.announces_received > 0):
+        fail(f"an announce of exactly {mtu} bytes did not reach "
+             f"received_announce within the timeout; it should be accepted "
+             f"(violations: {iface.violations}, held: {iface.held_announces})")
     if iface.violations:
         fail(f"an announce of exactly {mtu} bytes was refused: {iface.violations}")
-    if not iface.announces_received:
-        fail(f"an announce of exactly {mtu} bytes did not reach "
-             f"received_announce; it should be accepted")
+    if iface.held_announces:
+        fail(f"an announce of exactly {mtu} bytes was held by ingress "
+             f"limiting; the stub must not trigger that path")
 
     print(f"PASS §4.5 Transport.inbound refuses an announce over the "
           f"{mtu}-byte MTU as a protocol violation, accepts one at exactly {mtu}")

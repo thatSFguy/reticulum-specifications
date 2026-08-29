@@ -22,7 +22,7 @@ This flow covers the **receive + ingest** path that every Reticulum node runs (l
 
 Steps 1-6 of [`receive-opportunistic-lxmf.md`](receive-opportunistic-lxmf.md) apply unchanged:
 
-1. KISS / HDLC deframer (and RNode 2-frame split-packet reassembly per [`../SPEC.md`](../SPEC.md) §8.3 if applicable) hands the raw Reticulum packet bytes to `RNS.Transport.inbound(raw, interface)` (`RNS/Transport.py:1682-1686` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` at `:1636`).
+1. KISS / HDLC deframer (and RNode 2-frame split-packet reassembly per [`../SPEC.md`](../SPEC.md) §8.3 if applicable) hands the raw Reticulum packet bytes to `RNS.Transport.inbound(raw, interface)` (`RNS/Transport.py:1682-1686` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` at `:1753`).
 2. IFAC unmask if the interface has `ifac_identity` configured.
 3. `packet = RNS.Packet(None, raw); packet.unpack(); packet.hops += 1`.
 4. RSSI / SNR / Q stats are attached to the packet.
@@ -46,7 +46,7 @@ if interface != None and RNS.Identity.validate_announce(packet, only_validate_si
 `validate_announce(only_validate_signature=True)` runs the full body-parse and Ed25519 signature verification (steps 1-2 of SPEC.md §4.5) but **skips** the destination_hash recomputation and the cache updates. If the signature is valid the call:
 
 - Returns `True` so the wider dispatch can proceed.
-- Calls `interface.received_announce()`, which appends `time.time()` to the per-interface `ia_freq_deque` (`RNS/Interfaces/Interface.py:304-308` → `self.ia_freq_deque.append(time.time())`; called from `RNS/Transport.py:1719`). This deque feeds `incoming_announce_frequency()` and is what drives ingress-limit decisions in step 3.
+- Calls `interface.received_announce()`, which appends `time.time()` to the per-interface `ia_freq_deque` (`RNS/Interfaces/Interface.py:304-308` → `self.ia_freq_deque.append(time.time())`; called from `RNS/Transport.py:1811`). This deque feeds `incoming_announce_frequency()` and is what drives ingress-limit decisions in step 3.
 
 If the signature fails, the announce is silently dropped here without the deque update — a malformed sender can't burn through the receiver's ingress budget by spamming bad-sig announces. This is a sharp design choice and worth replicating in any clean-room implementation: **signature-checked-then-counted**, not "counted-then-validated".
 
@@ -70,11 +70,11 @@ The check runs only for **unknown-destination** announces (already-known destina
 
 Held announces are released later by `Interface.process_held_announces()` (`RNS/Interfaces/Interface.py:257-280` → `def process_held_announces(self)`), which fires every `IC_HELD_RELEASE_INTERVAL = 2s`, picks the **lowest-hop-count** held announce, and re-injects it via `Transport.inbound(announce_packet.raw, announce_packet.receiving_interface)`. The re-injection re-enters this flow at step 1, so the rate-limiter doesn't get bypassed; the held announce takes its turn in line.
 
-`held_announces` is bounded by `MAX_HELD_ANNOUNCES = 256` per interface; overflow simply drops the new announce instead of evicting an older one (`hold_announce` at `RNS/Interfaces/Interface.py:249-255`).
+`held_announces` is bounded by `MAX_HELD_ANNOUNCES = 256` per interface; overflow simply drops the new announce instead of evicting an older one (`hold_announce` at `RNS/Interfaces/Interface.py:269-275`).
 
 ### 4. Local-destination short-circuit
 
-`RNS/Transport.py:1648-1651`:
+`RNS/Transport.py:1765-1768`:
 
 ```python
 local_destination = None
@@ -83,16 +83,20 @@ with Transport.destinations_map_lock:
         local_destination = Transport.destinations_map[packet.destination_hash]
 ```
 
-If the announce's `destination_hash` matches one of our own registered destinations, this is our own announce echo — line 1650 gates the full validation pass on `local_destination == None`, so we skip both the validation and the path-table updates for self-announces. (SPEC.md §9.5 — the operator-runs-both-originator-and-transport scenario.)
+If the announce's `destination_hash` matches one of our own registered destinations, this is our own announce echo — line 2176 gates the full validation pass on `local_destination == None`, so we skip both the validation and the path-table updates for self-announces. (SPEC.md §9.5 — the operator-runs-both-originator-and-transport scenario.)
 
 ### 5. Full announce validation
 
-`RNS/Transport.py:1653`:
+`RNS/Transport.py:2176`:
 
 ```python
-if local_destination == None and RNS.Identity.validate_announce(packet):
+if local_destination == None and announce_valid:
     ...
 ```
+
+(`announce_valid` is set just above from `RNS.Identity.validate_announce(packet)`;
+earlier revisions of this document inlined the call into the condition, which is
+not what upstream reads.)
 
 `validate_announce(only_validate_signature=False)` runs the full sequence per SPEC.md §4.5:
 
@@ -198,7 +202,7 @@ so any client built on the LXMF router gets contacts/propagation-node discovery 
 
 If `RNS.Reticulum.transport_enabled() == True`, the same `Transport.inbound` dispatch then walks an additional code path that constructs a rebroadcast announce, queues it on each suitable interface (`announce_queue`), and emits it later subject to the per-interface `announce_cap` (default 2% of airtime). This entire path is skipped on a leaf client.
 
-The rebroadcast logic is the bulk of `RNS/Transport.py:2216-2290` and is documented separately in `forward-announce.md` (TODO).
+The rebroadcast logic is the bulk of `RNS/Transport.py:2300-2374` and is documented separately in `forward-announce.md` (TODO).
 
 ---
 
@@ -227,16 +231,16 @@ Without ratchet (`context_flag == 0`) the 32-byte ratchet slot is absent and `si
 
 | Step | File | Function / line |
 |---|---|---|
-| 1 | `RNS/Transport.py` | `inbound`, line 1629-1633; `preprocess_inbound`, line 1636-1804 |
-| 2 | `RNS/Identity.py` | `validate_announce(only_validate_signature=True)`, line 511-611 |
-| 2 | `RNS/Interfaces/Interface.py` | `received_announce`, line 282-286 |
-| 3 | `RNS/Interfaces/Interface.py` | `should_ingress_limit`, line 168-191; `hold_announce`, line 249-255; `process_held_announces`, line 257-280 |
-| 4 | `RNS/Transport.py` | `destinations_map` lookup, line 2087 |
-| 5 | `RNS/Identity.py` | `validate_announce` full pass, line 511-611 |
+| 1 | `RNS/Transport.py` | `inbound`, line 1682-1686; `preprocess_inbound`, line 1753-1896 |
+| 2 | `RNS/Identity.py` | `validate_announce(only_validate_signature=True)`, line 511-612 |
+| 2 | `RNS/Interfaces/Interface.py` | `received_announce`, line 302-306 |
+| 3 | `RNS/Interfaces/Interface.py` | `should_ingress_limit`, line 188-211; `hold_announce`, line 269-275; `process_held_announces`, line 277-300 |
+| 4 | `RNS/Transport.py` | `destinations_map` lookup, line 2175 |
+| 5 | `RNS/Identity.py` | `validate_announce` full pass, line 511-612 |
 | 5 | `RNS/Identity.py` | `Identity.remember`, line 101-113; `_remember_ratchet`, line 410-443 |
-| 6 | `RNS/Transport.py` | `random_blob` extraction, line 2133 |
-| 7 | `RNS/Transport.py` | path table population decision tree, line 2122-2214 |
-| 7 | `RNS/Transport.py` | `timebase_from_random_blobs`, line 3654-3660 |
-| 8 | `RNS/Transport.py` | announce handler dispatch, line 2399-2450 |
+| 6 | `RNS/Transport.py` | `random_blob` extraction, line 2217 |
+| 7 | `RNS/Transport.py` | path table population decision tree, line 2206-2298 |
+| 7 | `RNS/Transport.py` | `timebase_from_random_blobs`, line 3729-3735 |
+| 8 | `RNS/Transport.py` | announce handler dispatch, line 2483-2534 |
 | 8 | `LXMF/LXMRouter.py` | LXMF announce handler registration, line 226-227 |
-| 9 | `RNS/Transport.py` | rebroadcast queue (see `forward-announce.md`), line 2216-2290 |
+| 9 | `RNS/Transport.py` | rebroadcast queue (see `forward-announce.md`), line 2300-2374 |

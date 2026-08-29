@@ -27,7 +27,7 @@ if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.contex
 
 - `transport_enabled OR is_from_local_client` — leaf clients only forward announces that came from a local-client interface (the rare "client behind shared rnsd" case).
 - `packet.context != PATH_RESPONSE` — path-response announces are NOT rebroadcast (they go on a single specific interface back to the requester per [`path-discovery.md`](path-discovery.md) step 7).
-- `not rate_blocked` — per-interface announce-rate limits aren't tripped for this destination. A rate-blocked announce still passes the outer gate; it is logged and simply never inserted into `announce_table`, which is what suppresses the rebroadcast. `rate_blocked` is computed at `:2218-2246` against `interface.announce_rate_target`.
+- `not rate_blocked` — per-interface announce-rate limits aren't tripped for this destination. A rate-blocked announce still passes the outer gate; it is logged and simply never inserted into `announce_table`, which is what suppresses the rebroadcast. `rate_blocked` is computed at `:2302-2330` against `interface.announce_rate_target`.
 
 ### 3. Insert into `announce_table`
 
@@ -132,10 +132,10 @@ Before relay (received):                          After relay (emitted):
 | Step | File | Function / line |
 |---|---|---|
 | 1 | (this flow follows `receive-announce.md` step 7) | |
-| 2 | `RNS/Transport.py` | rebroadcast eligibility, line 2267 |
-| 3 | `RNS/Transport.py` | announce_table insert, line 2278-2289 |
-| 4 | `RNS/Transport.py` | jobs / queue drain, line 736-800 |
-| 5 | `RNS/Interfaces/Interface.py` | `process_announce_queue`, line 370-411 |
-| 6 | `RNS/Transport.py` | hops increment in `inbound`, line 1709 |
-| 7 | `RNS/Transport.py` | local-rebroadcast counter, line 2099-2109 |
-| 8 | `RNS/Transport.py` | random_blob replay check, line 2122-2214 |
+| 2 | `RNS/Transport.py` | rebroadcast eligibility, line 2351 |
+| 3 | `RNS/Transport.py` | announce_table insert, line 2362-2373 |
+| 4 | `RNS/Transport.py` | jobs / queue drain, line 765-829 |
+| 5 | `RNS/Interfaces/Interface.py` | `process_announce_queue`, line 390-431 |
+| 6 | `RNS/Transport.py` | hops increment in `inbound`, line 1800 |
+| 7 | `RNS/Transport.py` | local-rebroadcast counter, line 2183-2193 |
+| 8 | `RNS/Transport.py` | random_blob replay check, line 2206-2298 |

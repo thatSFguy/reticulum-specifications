@@ -98,7 +98,7 @@ After a successful inbound LXMF delivery, the LXMRouter on the **initiator** sid
 
 | Step | File | Function / line |
 |---|---|---|
-| 1 | `RNS/Transport.py` | LINKREQUEST dispatch, line 2456 |
+| 1 | `RNS/Transport.py` | LINKREQUEST dispatch, line 2540 |
 | 1 | `RNS/Destination.py` | `receive` LINKREQUEST branch, line 414-429 |
 | 2 | `RNS/Link.py` | `validate_request`, line 186-227 |
 | 2 | `RNS/Link.py` | `handshake`, line 348-363 |
