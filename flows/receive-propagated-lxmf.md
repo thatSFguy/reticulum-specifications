@@ -34,7 +34,7 @@ self.outbound_propagation_link = RNS.Link(
 )
 ```
 
-(`LXMF/LXMRouter.py:532`). Standard Link establishment per `flows/send-link-lxmf.md` steps 3-4.
+(`LXMF/LXMRouter.py:532` → `established_callback=msg_request_established_callback)`). Standard Link establishment per `flows/send-link-lxmf.md` steps 3-4.
 
 ### 3. Identify on the link
 

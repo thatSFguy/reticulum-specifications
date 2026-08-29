@@ -407,7 +407,7 @@ Since RNS 1.5.0 the same bound is also enforced on **emit**: `Packet.send()` ret
 > shared-instance / local-client interface (`should_apply_delta`,
 > `RNS/Transport.py:1608-1611` → `def should_apply_delta(packet,`; apply sites `:1401`, `:1421`,
 > `:1434-1435` → `if not Transport.should_apply_delta(packet, outbound_interface):`, `:1594-1597` → `if not Transport.should_apply_delta(packet, interface):`, plus the shared-instance local-client
-> emission sites `:2111` → `if Transport.local_hops_delta`, `:2159`, `:2659`, `:2739`). A HEADER_1
+> emission sites `:2111` → `if Transport.local_hops_delta`, `:2159`, `:2659`, `:2739` → `proof_for_local_client or`). A HEADER_1
 > ANNOUNCE is additionally rewritten to HEADER_2 with the transport
 > bit set and the node's own transport identity hash inserted as
 > `transport_id` (`mangle_hops(…, transport_insert=True)`,
@@ -804,7 +804,7 @@ If either matches, the signature is valid. Strict raw-only verification fails in
 > re-encode at `:758` → `packed_payload = msgpack.packb(unpacked_payload)`).
 > A **stamped** message is therefore verified against variant 2 *only*. An
 > **unstamped** one is verified against variant 1 *only*, because
-> `packed_payload` keeps the raw wire bytes read at `:751`.
+> `packed_payload` keeps the raw wire bytes read at `:751` → `lxmf_bytes[2*LXMessage.DESTINATION_LENGTH+LXMessage.SIGNATURE_LENGTH:]`.
 >
 > Trying both, as described above, is strictly more tolerant than upstream and
 > remains the right thing for a receiver to do. But a **sender** must not
@@ -1063,7 +1063,7 @@ self.propagation_destination = RNS.Destination(
 
 Per §1.2, the well-known `name_hash` is `e03a09b77ac21b22258e` (`SHA256("lxmf.propagation")[:10]`). The propagation node's identity is its own — different propagation nodes have different identity hashes and therefore different destination hashes. Receivers of `lxmf.propagation` announces filter by name_hash to surface "propagation node available" UI separately from "messageable peer available" UI per §4.4.
 
-A propagation node registers request handlers across **two** destinations, not one (`LXMRouter.py:669-676`; verified by `tools/verify_lxmf_peer_constants.py`):
+A propagation node registers request handlers across **two** destinations, not one (`LXMRouter.py:669-676` → `self.offer_request,`; verified by `tools/verify_lxmf_peer_constants.py`):
 
 | Path | Constant | Destination | Allow | Purpose |
 |---|---|---|---|---|
@@ -1243,7 +1243,7 @@ Receivers parse this via `pn_announce_data_is_valid` (`LXMF/LXMF.py:224-250` →
 |---|---|
 | `LXMF/LXMRouter.py:190` → `self.propagation_destination =` | propagation_destination construction |
 | `LXMF/LXMRouter.py:324-336` → `def get_propagation_node_app_data(self):` | propagation announce app_data shape |
-| `LXMF/LXMRouter.py:669-670` | `/offer` and `/get` handler registration |
+| `LXMF/LXMRouter.py:669-670` → `self.offer_request,` | `/offer` and `/get` handler registration |
 | `LXMF/LXMRouter.py:1482-1561` → `def message_get_request(self,` | `message_get_request` handler (client `/get`); `:1523` → `response_messages =`, `:1549` → `response_messages.append(lxmf_data[:-LXStamper.STAMP_SIZE])`, `:1555-1556` → `self.client_propagation_messages_served +=` are the flat-list response and the stamp strip |
 | `LXMF/LXMRouter.py:1607-1644` → `def message_get_response(self,` | `message_get_response` — client side; `:1624-1627` → `for lxmf_data in` iterates bodies and rehashes them for the purge round |
 | `LXMF/LXMRouter.py:2487-2540` → `def lxmf_propagation(self,` | `lxmf_propagation` — ingest; `LXMF/LXMRouter.py::lxmf_propagation` → `transient_id =` derives `transient_id` pre-stamp, `:2512` → `stamped_data = lxmf_data+stamp_data` appends the stamp for storage |
@@ -2227,7 +2227,7 @@ When branch 2 fires (transit relay answering on behalf of a remote destination),
 
 Branch 1 (local destination answers) fires immediately with no grace, since the leaf is the authoritative source for its own destination — there's no point waiting for someone else to potentially answer faster.
 
-Local-client originators also bypass the grace period (`Transport.py:3417-3422`): a relay answering for a destination that lives on a local-client interface can send back the cached announce instantly because the answer doesn't need to compete with peer-mesh announces.
+Local-client originators also bypass the grace period (`Transport.py:3495-3497` → `if Transport.is_local_client_interface(`): a relay answering for a destination that lives on a local-client interface can send back the cached announce instantly because the answer doesn't need to compete with peer-mesh announces.
 
 #### 7.2.6 Minimum responsibility for a leaf
 
@@ -3176,7 +3176,7 @@ self.file.write(data)
 self.file.close()
 ```
 
-No seek, and no use of `i` for placement. `i` is read at `Resource.py:201` → `resource.meta_storagepath` and thereafter used **only** to decide whether this is the final segment (`:700` → `self.data = decompressor.decompress(data,` for the metadata prefix, `:729` and `:793` for conclusion) — never to order the data.
+No seek, and no use of `i` for placement. `i` is read at `Resource.py:201` → `resource.meta_storagepath` and thereafter used **only** to decide whether this is the final segment (`:700` → `self.data = decompressor.decompress(data,` for the metadata prefix, `Resource.py::assemble` → `if self.segment_index` and `Resource.py::validate_proof` → `if self.segment_index` for conclusion) — never to order the data.
 
 Upstream's reassembly is correct only because the sequential-send rule above happens to guarantee ordering. §10.11 states that rule as a sender-side memory measure; the receiver **depends** on it. The failure mode is silent: out-of-order segments each pass their own `h` check, the body assembles in the wrong order, and nothing detects it — the per-segment hash is the only integrity check there is, and there is no hash over the reassembled whole. Indexing by `i` is strictly more tolerant and diverges from upstream in a way that never shows up on a conformant link.
 
@@ -3209,7 +3209,7 @@ The sweep runs every `CLEAN_INTERVAL = 15*60` seconds (`Reticulum.py:159` → `C
 > and any absolute ceiling must exceed the worst-case **single-segment**
 > transfer time, not the whole transfer's.
 
-The `.meta` sidecar written for a metadata-carrying first segment (`Resource.py:704-706` → `RNS.log(f"Decompressed`) is unlinked when the final segment concludes (`:737`), but it is **not** swept: `__clean_caches` only considers filenames of exactly `(HASHLENGTH//8)*2 = 64` characters (`Reticulum.py:1238` → `# Clean resource`), and `{o.hex()}.meta` is 69. An abandoned multi-segment transfer leaves its metadata file behind permanently.
+The `.meta` sidecar written for a metadata-carrying first segment (`Resource.py:704-706` → `RNS.log(f"Decompressed`) is unlinked when the final segment concludes (`:746` → `try: os.unlink(self.meta_storagepath)`), but it is **not** swept: `__clean_caches` only considers filenames of exactly `(HASHLENGTH//8)*2 = 64` characters (`Reticulum.py:1238` → `# Clean resource`), and `{o.hex()}.meta` is 69. An abandoned multi-segment transfer leaves its metadata file behind permanently.
 
 **4. `l` is unbounded on the wire, and so is the number of concurrent assemblies.** Nothing in `Resource.accept` (`Resource.py:168-246` → `def accept(advertisement_packet,`) bounds `l`, and nothing bounds how many distinct `o` values one link may have open. Upstream is unbothered because it spends **disk**, not RAM, and the 24 h sweep eventually reclaims it.
 
@@ -3777,7 +3777,7 @@ Unlike the path_table forwarding in §12.2 — which strips `transport_id` (`HEA
 
 #### 12.5.3 PROOF receipt forwarding via `reverse_table`
 
-`Transport.py:2670-2679`. When a PROOF arrives whose `dest_hash` is in `reverse_table` (i.e. an opportunistic-DATA proof being routed back to its originator), the relay pops the entry, checks the proof arrived on the correct outbound interface (`receiving_interface == reverse_entry[IDX_RT_OUTB_IF]`), and forwards on the originally-receiving interface:
+`Transport.py:2735` → `reverse_entry = Transport.reverse_table.pop(packet.destination_hash)`. When a PROOF arrives whose `dest_hash` is in `reverse_table` (i.e. an opportunistic-DATA proof being routed back to its originator), the relay pops the entry, checks the proof arrived on the correct outbound interface (`receiving_interface == reverse_entry[IDX_RT_OUTB_IF]`), and forwards on the originally-receiving interface:
 
 ```python
 new_raw = packet.raw[0:1] + struct.pack("!B", packet.hops) + packet.raw[2:]
@@ -3807,7 +3807,7 @@ Then forwards the path? to every other **online** interface (offline interfaces 
 
 #### 12.6.2 `tunnels`
 
-A tunnel is an interface-level path mechanism for handling temporarily-disconnected interfaces (e.g. a mobile peer that comes and goes). The `tunnels[interface_tunnel_id]` state lets the relay reconstruct paths through the interface when it reconnects, without requiring all paths to be re-discovered from scratch. The shape (`Transport.py:2826` → `tunnel_entry = [tunnel_id, interface, paths, expires]`, indices at `:4083-4086`):
+A tunnel is an interface-level path mechanism for handling temporarily-disconnected interfaces (e.g. a mobile peer that comes and goes). The `tunnels[interface_tunnel_id]` state lets the relay reconstruct paths through the interface when it reconnects, without requiring all paths to be re-discovered from scratch. The shape (`Transport.py:2826` → `tunnel_entry = [tunnel_id, interface, paths, expires]`, indices at `:4158-4161` → `IDX_TT_TUNNEL_ID = 0`):
 
 ```
 [ tunnel_id,                                 # 0  IDX_TT_TUNNEL_ID

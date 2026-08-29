@@ -114,6 +114,47 @@ def anchor_for(index, abspath, lineno):
     return None, "no unambiguous snippet under the length cap"
 
 
+# A fragment worth anchoring on looks like code. Without this, substring
+# search happily picks English out of the middle of a log string — "transport
+# link", "request. The" — which is unique today and meaningless tomorrow.
+RE_CODEISH = re.compile(r"[=()\[\]{}._+*]|->|:$|,$")
+
+
+def substring_anchor(index, abspath, lineno):
+    """Shortest unique fragment of `lineno`, not just a prefix.
+
+    find_snippet matches by containment, so any run of tokens works. This
+    rescues the long lines whose distinguishing part arrives late: a 186-char
+    `MDU = math.floor(...)` needs only the fragment that differs from its
+    siblings, not the whole statement.
+    """
+    lines = index.lines(abspath)
+    if lineno > len(lines):
+        return None
+    raw = lines[lineno - 1]
+    if RE_TRIVIAL.match(raw) or RE_UNINFORMATIVE.match(raw) or "`" in raw:
+        return None
+    full = cc.norm(raw)
+    spans = [m.span() for m in re.finditer(r"\S+", full)]
+    best = None
+    for i in range(len(spans)):
+        for j in range(i, len(spans)):
+            frag = full[spans[i][0]:spans[j][1]]
+            if len(frag) < MIN_ANCHOR:
+                continue
+            if len(frag) > MAX_ANCHOR:
+                break
+            if not RE_CODEISH.search(frag):
+                continue
+            if cc.Checker.looks_like_citation(frag):
+                continue
+            if cc.find_snippet(index, abspath, frag) == [lineno]:
+                if best is None or len(frag) < len(best):
+                    best = frag
+                break
+    return best
+
+
 def symbol_anchor(index, abspath, lineno):
     """(symbol, snippet) for `lineno`, scoped to its innermost function.
 
@@ -250,6 +291,10 @@ def main():
                     continue
         # Fall back to a symbol-scoped anchor, which drops the line number
         # entirely. Uniqueness only has to hold inside the function body.
+        frag = substring_anchor(index, abspath, nums[0])
+        if frag:
+            decided[(path, spec)] = (spec, frag)
+            continue
         sym, sym_snip = symbol_anchor(index, abspath, nums[0])
         if sym:
             decided_sym[(path, spec)] = (sym, sym_snip)
