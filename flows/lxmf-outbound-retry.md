@@ -43,7 +43,7 @@ A full single-message retry budget for DIRECT or PROPAGATED is therefore **5 att
 
 ## Per-message state machine
 
-States from `LXMF/LXMessage.py:13-22`:
+States from `LXMF/LXMessage.py:14-22` → `class LXMessage:`:
 
 | State | Value | When |
 |---|---|---|
@@ -56,7 +56,7 @@ States from `LXMF/LXMessage.py:13-22`:
 | `CANCELLED` | `0xFE` | Sender called `LXMessage.cancel` while still queued |
 | `FAILED` | `0xFF` | `MAX_DELIVERY_ATTEMPTS` exhausted, or unrecoverable error |
 
-The valid-method enum is `LXMessage.OPPORTUNISTIC = 0x01`, `DIRECT = 0x02`, `PROPAGATED = 0x03`, `PAPER = 0x05` (`LXMF/LXMessage.py:29-32`).
+The valid-method enum is `LXMessage.OPPORTUNISTIC = 0x01`, `DIRECT = 0x02`, `PROPAGATED = 0x03`, `PAPER = 0x05` (`LXMF/LXMessage.py:30-32` → `OPPORTUNISTIC = 0x01`).
 
 ---
 

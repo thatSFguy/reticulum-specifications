@@ -70,7 +70,7 @@ for dest_hash, entry in announce_table.items():
     entry[RETRIES] -= 1
 ```
 
-The actual code is in `Transport.py:736-800` (the `jobs` drain) and `:2090-2290` → `link_entry = [ now,` (the inbound announce path); the structure above is a simplification for the spec.
+The actual code is in `Transport.py:737-800` → `Transport.links_last_checked =` (the `jobs` drain) and `:2090-2290` → `link_entry = [ now,` (the inbound announce path); the structure above is a simplification for the spec.
 
 ### 5. Per-interface `announce_queue` drain
 

@@ -117,7 +117,7 @@ The path-response announce is itself a regular ANNOUNCE packet, broadcast-routed
 - Step 2: signature-only quick check, increment per-interface ingress-frequency deque.
 - Step 3: ingress-rate limit check — but **path-responses bypass ingress limiting** because the destination is in `Transport.path_requests` (recently-requested-by-us) or `Transport.discovery_path_requests` (recently-requested-on-behalf-of). See `Transport.py:1819-1821` → `if packet.destination_hash in Transport.path_requests or packet.destination_hash in Transport.discovery_path_requests:`.
 - Step 5: full `validate_announce` — same signature, dest_hash, collision checks as any announce.
-- Step 7: path table population. **The hop count is whatever the cached announce stored** (`Transport.py:3345-3524`: `packet.hops = path_table[dest_hash][IDX_PT_HOPS]` if served from cache by Branch 2); for Branch 1 responses, hops counts up naturally as the announce traverses back.
+- Step 7: path table population. **The hop count is whatever the cached announce stored** (`Transport.py:3346-3524` → `def remote_path_handler(path,`: `packet.hops = path_table[dest_hash][IDX_PT_HOPS]` if served from cache by Branch 2); for Branch 1 responses, hops counts up naturally as the announce traverses back.
 - Step 8: announce handler fan-out. **Path-response announces are filtered OUT of regular handler dispatch by default** (`Transport.py:2486-2537` → `for handler in Transport.announce_handlers:`):
   ```python
   if packet.context == RNS.Packet.PATH_RESPONSE:

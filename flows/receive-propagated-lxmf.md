@@ -34,7 +34,7 @@ self.outbound_propagation_link = RNS.Link(
 )
 ```
 
-(`LXMF/LXMRouter.py:532`). Standard Link establishment per `flows/send-link-lxmf.md` steps 3-4.
+(`LXMF/LXMRouter.py:532` → `established_callback=msg_request_established_callback)`). Standard Link establishment per `flows/send-link-lxmf.md` steps 3-4.
 
 ### 3. Identify on the link
 
@@ -102,7 +102,7 @@ for lxmf_data in request_receipt.response:
     haves.append(RNS.Identity.full_hash(lxmf_data))
 ```
 
-`haves` is the `have_ids` list for step 8. It works because the node keyed its store on `transient_id = RNS.Identity.full_hash(lxmf_data)` computed **before** the stamp was appended (`:2494`, then `:2512` → `stamped_data = lxmf_data+stamp_data`), and step 6 stripped exactly those bytes back off — so `full_hash(body_as_received)` reproduces the node's own store key.
+`haves` is the `have_ids` list for step 8. It works because the node keyed its store on `transient_id = RNS.Identity.full_hash(lxmf_data)` computed **before** the stamp was appended (`LXMF/LXMRouter.py::lxmf_propagation` → `transient_id =`, then `:2512` → `stamped_data = lxmf_data+stamp_data`), and step 6 stripped exactly those bytes back off — so `full_hash(body_as_received)` reproduces the node's own store key.
 
 `lxmf_propagation` routes the body into `lxmf_delivery`, the same path used for opportunistic and direct receive (`flows/receive-opportunistic-lxmf.md` step 11+) — it calls `LXMessage.unpack_from_bytes`, validates the signature against the sender's known identity, runs ticket / stamp / dedup checks, and fires the application's delivery callback. **The LXMF body bytes are identical regardless of how they arrived** — opportunistic, direct over a Link, or propagated. The propagation node never touched the encrypted body.
 
@@ -127,7 +127,7 @@ After the bundle is processed, the recipient either tears down the link (`link.t
 | 3 | `RNS/Link.py` | `Link.identify`, line 454 |
 | 4-6 | `LXMF/LXMRouter.py` | `message_get_request` handler, line 1482-1561 |
 | 7 | `LXMF/LXMRouter.py` | `message_get_response`, line 1607-1644 |
-| 7 | `LXMF/LXMRouter.py` | `lxmf_propagation`, line 2487-2540 (`transient_id` at `:2494`, stamp appended at `:2512` → `stamped_data = lxmf_data+stamp_data`) |
+| 7 | `LXMF/LXMRouter.py` | `lxmf_propagation`, line 2487-2540 (`transient_id` at `LXMF/LXMRouter.py::lxmf_propagation` → `transient_id =`, stamp appended at `:2512` → `stamped_data = lxmf_data+stamp_data`) |
 | 7 | `LXMF/LXMRouter.py` | `lxmf_delivery`, line 1837 |
 | 8 | `LXMF/LXMRouter.py` | purge via `/get` `have_ids` slot, line 1508-1519 |
 | 9 | `RNS/Link.py` | `teardown`, line 662 |
