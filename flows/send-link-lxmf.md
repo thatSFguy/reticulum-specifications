@@ -2,7 +2,7 @@
 
 What happens chronologically when an app calls `LXMRouter.handle_outbound(lxm)` for an `LXMessage` whose `desired_method == DIRECT` (or whose payload exceeds the opportunistic single-packet content limit and is downgraded from `OPPORTUNISTIC` to `DIRECT` at pack time). The `DIRECT` method runs the LXMF body over an established Reticulum Link rather than a single Reticulum DATA packet.
 
-Pinned against **RNS 1.5.0 / LXMF 1.1.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.5.2 / LXMF 1.1.1**. Line numbers below are from those versions.
 
 Out of scope: opportunistic delivery (see [`send-opportunistic-lxmf.md`](send-opportunistic-lxmf.md)), propagation-node delivery (`PROPAGATED`), and paper messages (`PAPER`).
 
@@ -80,9 +80,9 @@ self.start_watchdog()                                            # 60s establish
 self.packet.send()
 ```
 
-The LINKREQUEST is a **regular Reticulum DATA-routed packet** — `packet_type = LINKREQUEST (2)`, `destination_type = SINGLE`, addressed to the recipient's `lxmf.delivery` `dest_hash`. Per `RNS/Packet.py::pack` (`RNS/Packet.py:192-194`) `LINKREQUEST` packets are **not encrypted** — the body is `request_data` verbatim — because the responder needs to decode the public keys to perform the handshake.
+The LINKREQUEST is a **regular Reticulum DATA-routed packet** — `packet_type = LINKREQUEST (2)`, `destination_type = SINGLE`, addressed to the recipient's `lxmf.delivery` `dest_hash`. Per `RNS/Packet.py::pack` (`RNS/Packet.py:194-196`) `LINKREQUEST` packets are **not encrypted** — the body is `request_data` verbatim — because the responder needs to decode the public keys to perform the handshake.
 
-The link_id is set immediately on the initiator side via `set_link_id` (SPEC.md §6.3): the SHA-256-truncated-to-16 hash of `get_hashable_part(LINKREQUEST_packet)`, with trailing signalling bytes stripped via `link_id_from_lr_packet`. Since `get_hashable_part` is invariant under HEADER_1↔HEADER_2 conversion (`RNS/Packet.py:348-353`), the responder will arrive at the same link_id even if the LINKREQUEST passed through one or more relays.
+The link_id is set immediately on the initiator side via `set_link_id` (SPEC.md §6.3): the SHA-256-truncated-to-16 hash of `get_hashable_part(LINKREQUEST_packet)`, with trailing signalling bytes stripped via `link_id_from_lr_packet`. Since `get_hashable_part` is invariant under HEADER_1↔HEADER_2 conversion (`RNS/Packet.py:352-361`), the responder will arrive at the same link_id even if the LINKREQUEST passed through one or more relays.
 
 The LINKREQUEST then goes through the same `Transport.outbound` path as any other DATA packet (steps 7-9 of `send-opportunistic-lxmf.md`), which means it can itself be subject to the path-table miss → path-request preamble before it leaves.
 
@@ -209,16 +209,16 @@ Per SPEC.md §6.5 the receiver of any CTX_NONE DATA packet on the link MUST emit
 | 1 | `LXMF/LXMessage.py` | `pack`, line 352 |
 | 2 | `LXMF/LXMRouter.py` | `process_outbound` DIRECT branch, line 2599 |
 | 3 | `RNS/Link.py` | `Link.__init__` initiator branch, line 308 |
-| 3 | `RNS/Packet.py` | `pack` LINKREQUEST not-encrypted, line 192 |
+| 3 | `RNS/Packet.py` | `pack` LINKREQUEST not-encrypted, line 194 |
 | 3 | `RNS/Link.py` | `set_link_id` / `link_id_from_lr_packet`, line 340 |
-| 3 | `RNS/Packet.py` | `get_hashable_part`, line 354 |
+| 3 | `RNS/Packet.py` | `get_hashable_part`, line 362 |
 | 4 | `RNS/Link.py` | `validate_proof`, line 396 |
 | 4 | `RNS/Link.py` | `handshake`, line 353 |
 | 5 | `LXMF/LXMessage.py` | `send` DIRECT branch, line 471 |
 | 5 | `LXMF/LXMessage.py` | `__as_packet` DIRECT, line 632 |
 | 5 | `RNS/Packet.py` | Link-destination encrypt path |
 | 5 | `RNS/Cryptography/Token.py` | Token encrypt (no eph_pub prefix for Link) |
-| 6 | `RNS/Transport.py` | `outbound`, line 1031 |
+| 6 | `RNS/Transport.py` | `outbound`, line 1060 |
 | 7 | `RNS/Packet.py` | `prove` |
 | 8 | `RNS/Resource.py` | RESOURCE machinery (not yet in SPEC.md) |
 | 9 | `LXMF/LXMRouter.py` | backchannel identify, line 2532 |

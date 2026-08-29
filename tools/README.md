@@ -66,7 +66,7 @@ error, so the list can't rot.
 
 ## Status
 
-Populated against RNS 1.5.0 / LXMF 1.1.1 (all 20 scripts re-run green at this pin):
+Populated against RNS 1.5.2 / LXMF 1.1.1 (all 21 scripts re-run green at this pin):
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|
@@ -89,6 +89,7 @@ Populated against RNS 1.5.0 / LXMF 1.1.1 (all 20 scripts re-run green at this pi
 | `verify_propagation_get.py` | §5.8.3 — the `/get` retrieval response is a flat list of bodies (not the `[timestamp, [bodies]]` upload envelope), each stripped of its propagation stamp, and `full_hash(body_as_received)` reproduces the node's `transient_id` so the `have_ids` purge round closes | ✅ |
 | `verify_resource_sizing.py` | §10.2 step 6, §10.4, §5.7.4 — which Resource quantities follow the negotiated link MTU vs. which are fixed class constants; that upstream still imposes no receive-time part-size check; and the `stamp_cost` `1..254` range with its `< 1 → None` / `>= 255` refused rules | ✅ |
 | `verify_ratchet_dedup.py` | §7.3 / §4.5 step 6.3 — confirms replay defence is keyed on `random_blob`, NOT on `(dest_hash, ratchet_pub)` | ✅ |
+| `verify_ingress_bounds.py` | §2.2, §4.5 — receive-side ingress bounds added in RNS 1.5.2: `Packet.unpack` rejects a zero-length data field (HEADER_1 and HEADER_2), and `Transport.inbound` refuses an ANNOUNCE over the 500-byte `Reticulum.MTU` as a protocol violation before `validate_announce` runs, while accepting one at exactly the MTU | ✅ |
 | `verify_resource_segment_store.py` | §10.11.1 — receiver-side multi-segment store: `storagepath` keyed on the advertised `o` alone (per-node, shared across links), segments concatenated in **arrival** order rather than by `i`, and the 24 h idle `RESOURCE_CACHE` / 15 min sweep / 64-char filename filter | ✅ |
 | `regen_identities.py` | regenerates `test-vectors/identities.json` | ✅ |
 | `regen_announces.py` | regenerates `test-vectors/announces.json` (deterministic announce wire bytes, with and without ratchet) | ✅ |

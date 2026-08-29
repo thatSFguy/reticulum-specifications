@@ -1,6 +1,6 @@
 # Flow: receive an LXMF message over a Reticulum Link
 
-The inverse of [`send-link-lxmf.md`](send-link-lxmf.md), covering both halves of the responder side: accepting the inbound LINKREQUEST, sending the LRPROOF, then handling LXMF DATA on the established link. Pinned against **RNS 1.5.0 / LXMF 1.1.1**; cross-references [`../SPEC.md`](../SPEC.md) §6 (Link), §6.5 (PROOF), §6.6 (signalling), §6.7 (KEEPALIVE/teardown), §10 (Resource).
+The inverse of [`send-link-lxmf.md`](send-link-lxmf.md), covering both halves of the responder side: accepting the inbound LINKREQUEST, sending the LRPROOF, then handling LXMF DATA on the established link. Pinned against **RNS 1.5.2 / LXMF 1.1.1**; cross-references [`../SPEC.md`](../SPEC.md) §6 (Link), §6.5 (PROOF), §6.6 (signalling), §6.7 (KEEPALIVE/teardown), §10 (Resource).
 
 ---
 
@@ -14,7 +14,7 @@ A Reticulum DATA packet with `packet_type = LINKREQUEST (2)`, addressed to the r
 initiator_X25519_pub(32) || initiator_Ed25519_pub(32) || [signalling(3)]
 ```
 
-`Transport.inbound` (`RNS/Transport.py:2456` → `elif packet.packet_type == RNS.Packet.LINKREQUEST and not link_request_handled:`) recognizes `packet_type == LINKREQUEST + destination_type == SINGLE`, looks up the destination in `destinations_map`, and calls `Destination.receive(packet)` which routes to `Destination.incoming_link_request(data, packet)` per `RNS/Destination.py:414-435` (`receive` at 414 → `if packet.packet_type == RNS.Packet.LINKREQUEST:`, dispatching to `incoming_link_request` at `:431`):
+`Transport.inbound` (`RNS/Transport.py:2540` → `elif packet.packet_type == RNS.Packet.LINKREQUEST and not link_request_handled:`) recognizes `packet_type == LINKREQUEST + destination_type == SINGLE`, looks up the destination in `destinations_map`, and calls `Destination.receive(packet)` which routes to `Destination.incoming_link_request(data, packet)` per `RNS/Destination.py:414-435` (`receive` at 414 → `if packet.packet_type == RNS.Packet.LINKREQUEST:`, dispatching to `incoming_link_request` at `:431`):
 
 ```python
 def receive(self, packet):
@@ -98,7 +98,7 @@ After a successful inbound LXMF delivery, the LXMRouter on the **initiator** sid
 
 | Step | File | Function / line |
 |---|---|---|
-| 1 | `RNS/Transport.py` | LINKREQUEST dispatch, line 2456 |
+| 1 | `RNS/Transport.py` | LINKREQUEST dispatch, line 2540 |
 | 1 | `RNS/Destination.py` | `receive` LINKREQUEST branch, line 414-429 |
 | 2 | `RNS/Link.py` | `validate_request`, line 186-227 |
 | 2 | `RNS/Link.py` | `handshake`, line 348-363 |

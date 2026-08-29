@@ -2,7 +2,7 @@
 
 The inverse of [`send-opportunistic-lxmf.md`](send-opportunistic-lxmf.md). What happens chronologically on the recipient when wire bytes for an opportunistic LXMF DATA packet arrive at one of its interfaces.
 
-Pinned against **RNS 1.5.0 / LXMF 1.1.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.5.2 / LXMF 1.1.1**. Line numbers below are from those versions.
 
 Out of scope: receiving a packet over an established Reticulum Link (DIRECT method), receiving propagated messages from a propagation node, and receiving an announce / path-request / link-request. Each gets its own flow document.
 
@@ -25,17 +25,17 @@ For RNode KISS specifically, `CMD_STAT_RSSI = 0x23` and `CMD_STAT_SNR = 0x24` si
 
 ### 2. `Transport.inbound(raw, interface)` entry point
 
-`RNS/Transport.py:1629-1633` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` (`:1636-1804`). The single entry point for any inbound packet on any interface. The function is gated by `Transport.ready` — packets arriving before transport startup are dropped with a warning.
+`RNS/Transport.py:1682-1686` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` (`:1753-1896`). The single entry point for any inbound packet on any interface. The function is gated by `Transport.ready` — packets arriving before transport startup are dropped with a warning.
 
 ### 3. IFAC unmask (Interface Authentication Codes)
 
-`RNS/Transport.py:1648-1696` → `if not ifac_handled`. If the interface has an `ifac_identity` configured, the high bit of `raw[0]` must be set; the IFAC bytes at `raw[2:2+ifac_size]` are then used to derive an HKDF mask, the rest of the packet is unmasked in place, and the IFAC is verified against `ifac_identity.sign(unmasked_raw)[-ifac_size:]`. Mismatch drops the packet silently.
+`RNS/Transport.py:1766-1814` → `if not ifac_handled`. If the interface has an `ifac_identity` configured, the high bit of `raw[0]` must be set; the IFAC bytes at `raw[2:2+ifac_size]` are then used to derive an HKDF mask, the rest of the packet is unmasked in place, and the IFAC is verified against `ifac_identity.sign(unmasked_raw)[-ifac_size:]`. Mismatch drops the packet silently.
 
 If the interface has no IFAC and the high bit IS set, the packet is dropped (an unexpected IFAC).
 
 ### 4. Packet parse and physical-layer stats
 
-`RNS/Transport.py:1703-1709` → `packet = RNS.Packet(None, raw)`:
+`RNS/Transport.py:1793-1799` → `packet = RNS.Packet(None, raw)`:
 
 ```python
 packet = RNS.Packet(None, raw)
@@ -46,20 +46,20 @@ packet.hops += 1
 
 `packet.unpack` reads the header byte fields per SPEC.md §2.1, sets `packet.header_type`, `packet.packet_type`, `packet.destination_type`, `packet.destination_hash`, `packet.context`, and slices `packet.data` from the remainder. Importantly, **hops is incremented by 1 here**, so even on a leaf-endpoint receive the local `packet.hops` is one more than what flew on the wire — flow logic that treats `packet.hops == 0` as "originator on this interface" must use the wire byte before this increment.
 
-RSSI / SNR / Q link-quality stats are attached to `packet` if the interface exposed them (`RNS/Transport.py:1703-1709`).
+RSSI / SNR / Q link-quality stats are attached to `packet` if the interface exposed them (`RNS/Transport.py:1793-1800`).
 
 ### 5. Hop fix-up for shared-instance and local-client interfaces
 
-`RNS/Transport.py:1698-1701` → `if Transport.identity == None: return`. If the receiving interface is to a local shared instance or a local-client TCP socket, the +1 increment from step 4 is undone — the shared-instance path doesn't count as a real network hop.
+`RNS/Transport.py:1788-1791` → `if Transport.identity == None: return`. If the receiving interface is to a local shared instance or a local-client TCP socket, the +1 increment from step 4 is undone — the shared-instance path doesn't count as a real network hop.
 
 ### 6. Dedup, then dispatch by packet_type / destination_type
 
-`RNS/Transport.py:1705` → `if not Transport.packet_filter(packet): return interface.packet_filter_hit()`. `Transport.packet_filter` checks `packet.packet_hash` against `Transport.packet_hashlist` to drop replays. Hashes are added to the dedup list except for two cases that must be deferred:
+`RNS/Transport.py:1795` → `if not Transport.packet_filter(packet): return interface.packet_filter_hit()`. `Transport.packet_filter` checks `packet.packet_hash` against `Transport.packet_hashlist` to drop replays. Hashes are added to the dedup list except for two cases that must be deferred:
 
 - packet whose `destination_hash` is in `Transport.link_table` — the dedup decision is left to the link itself,
 - LRPROOF packets — these may legitimately arrive on multiple interfaces during routing-fork chaos and the dedup list is updated only after the LRPROOF is validated.
 
-Then the function fans out by `(packet_type, destination_type)`. For an opportunistic LXMF DATA packet — `packet_type == DATA`, `destination_type == SINGLE` — control reaches `RNS/Transport.py:2517-2531` → `destination = Transport.destinations_map[packet.destination_hash]`:
+Then the function fans out by `(packet_type, destination_type)`. For an opportunistic LXMF DATA packet — `packet_type == DATA`, `destination_type == SINGLE` — control reaches `RNS/Transport.py:1465-1479` → `destination = Transport.destinations_map[packet.destination_hash]`:
 
 ```python
 destination = Transport.destinations_map.get(packet.destination_hash)
@@ -97,7 +97,7 @@ For `lxmf.delivery` destinations, `self.callbacks.packet` was set at `LXMF/LXMRo
 
 ### 8. `Destination.decrypt` → `Identity.decrypt` — Token decode with ratchet ring
 
-`RNS/Destination.py:622-664` (`def decrypt(self, ciphertext)`) delegates to `RNS/Identity.py:849-905` (`def decrypt(self, ciphertext_token`). The packet body is the Token form from SPEC.md §3.1: `ephemeral_pub(32) || iv(16) || aes_ciphertext || hmac_sha256(32)`.
+`RNS/Destination.py:622-664` (`def decrypt(self, ciphertext)`) delegates to `RNS/Identity.py:852-908` (`def decrypt(self, ciphertext_token`). The packet body is the Token form from SPEC.md §3.1: `ephemeral_pub(32) || iv(16) || aes_ciphertext || hmac_sha256(32)`.
 
 ```python
 peer_pub_bytes = ciphertext_token[:32]                     # sender's ephemeral X25519 pub
@@ -224,15 +224,15 @@ Step 9 re-prepends `packet.destination.hash` so step 10 can parse with the same 
 | Step | File | Function / line |
 |---|---|---|
 | 1 | `RNS/Interfaces/*.py` | per-interface KISS / HDLC deframer |
-| 2 | `RNS/Transport.py` | `inbound`, line 1327 |
-| 3 | `RNS/Transport.py` | IFAC unmask, line 1338 |
-| 4 | `RNS/Transport.py` | parse + hops, line 1391 |
+| 2 | `RNS/Transport.py` | `inbound`, line 1378 |
+| 3 | `RNS/Transport.py` | IFAC unmask, line 1389 |
+| 4 | `RNS/Transport.py` | parse + hops, line 1442 |
 | 4 | `RNS/Packet.py` | `unpack` |
-| 5 | `RNS/Transport.py` | hop fix-up, line 1419 |
-| 6 | `RNS/Transport.py` | dedup + dispatch, line 1424; DATA/SINGLE branch line 2087 |
+| 5 | `RNS/Transport.py` | hop fix-up, line 1473 |
+| 6 | `RNS/Transport.py` | dedup + dispatch, line 1478; DATA/SINGLE branch line 2175 |
 | 7 | `RNS/Destination.py` | `receive`, line 403 |
 | 8 | `RNS/Destination.py` | `decrypt`, line 611 |
-| 8 | `RNS/Identity.py` | `decrypt`, line 818 |
+| 8 | `RNS/Identity.py` | `decrypt`, line 821 |
 | 8 | `RNS/Cryptography/Token.py` | `Token.decrypt` |
 | 9 | `LXMF/LXMRouter.py` | `delivery_packet`, line 1819 |
 | 10 | `LXMF/LXMessage.py` | `unpack_from_bytes`, line 736 |
