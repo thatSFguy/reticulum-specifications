@@ -74,7 +74,7 @@ The actual code is in `Transport.py:737-800` → `Transport.links_last_checked =
 
 ### 5. Per-interface `announce_queue` drain
 
-Each interface independently throttles its outbound announces against `interface.announce_cap` (default `Reticulum.ANNOUNCE_CAP = 2.0` = 2% airtime). `Interface.process_announce_queue` (`RNS/Interfaces/Interface.py:370-411` → `min_hops = min(entry["hops"] for entry in self.announce_queue)`) drains the queue at a rate the cap permits, **picking the lowest-hop-count entry first** so closer destinations propagate before further ones:
+Each interface independently throttles its outbound announces against `interface.announce_cap` (default `Reticulum.ANNOUNCE_CAP = 2.0` = 2% airtime). `Interface.process_announce_queue` (`RNS/Interfaces/Interface.py:390-431` → `min_hops = min(entry["hops"] for entry in self.announce_queue)`) drains the queue at a rate the cap permits, **picking the lowest-hop-count entry first** so closer destinations propagate before further ones:
 
 ```python
 min_hops = min(e["hops"] for e in self.announce_queue)

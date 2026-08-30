@@ -66,9 +66,9 @@ if not packet.destination_hash in Transport.path_table:
 
 The check runs only for **unknown-destination** announces (already-known destinations are throttled by their own re-announce rate limiter, not the ingress limiter).
 
-`should_ingress_limit()` (`RNS/Interfaces/Interface.py:168-191` → `def should_ingress_limit(self)`) trips into a "burst-active" state when `incoming_announce_frequency()` exceeds `IC_BURST_FREQ_NEW = 6 Hz` (interfaces younger than 2 hours, `IC_NEW_TIME`) or `IC_BURST_FREQ = 35 Hz` (older interfaces). Once in burst mode, every unknown-destination announce gets parked in the interface's `held_announces` dict until the rate drops below the threshold AND `IC_BURST_HOLD = 60s` has elapsed.
+`should_ingress_limit()` (`RNS/Interfaces/Interface.py:188-211` → `def should_ingress_limit(self)`) trips into a "burst-active" state when `incoming_announce_frequency()` exceeds `IC_BURST_FREQ_NEW = 6 Hz` (interfaces younger than 2 hours, `IC_NEW_TIME`) or `IC_BURST_FREQ = 35 Hz` (older interfaces). Once in burst mode, every unknown-destination announce gets parked in the interface's `held_announces` dict until the rate drops below the threshold AND `IC_BURST_HOLD = 60s` has elapsed.
 
-Held announces are released later by `Interface.process_held_announces()` (`RNS/Interfaces/Interface.py:257-280` → `def process_held_announces(self)`), which fires every `IC_HELD_RELEASE_INTERVAL = 2s`, picks the **lowest-hop-count** held announce, and re-injects it via `Transport.inbound(announce_packet.raw, announce_packet.receiving_interface)`. The re-injection re-enters this flow at step 1, so the rate-limiter doesn't get bypassed; the held announce takes its turn in line.
+Held announces are released later by `Interface.process_held_announces()` (`RNS/Interfaces/Interface.py:277-300` → `def process_held_announces(self)`), which fires every `IC_HELD_RELEASE_INTERVAL = 2s`, picks the **lowest-hop-count** held announce, and re-injects it via `Transport.inbound(announce_packet.raw, announce_packet.receiving_interface)`. The re-injection re-enters this flow at step 1, so the rate-limiter doesn't get bypassed; the held announce takes its turn in line.
 
 `held_announces` is bounded by `MAX_HELD_ANNOUNCES = 256` per interface; overflow simply drops the new announce instead of evicting an older one (`hold_announce` at `RNS/Interfaces/Interface.py:269-275` → `def hold_announce(self,`).
 
@@ -124,7 +124,7 @@ The trailing 5 bytes of `random_blob` are the emission timestamp (SPEC.md §4.1)
 
 ### 7. Path table population
 
-`RNS/Transport.py:2122-2214` → `should_add = False`. The full decision tree for whether and how to update `path_table[destination_hash]` is roughly:
+`RNS/Transport.py:2206-2298` → `should_add = False`. The full decision tree for whether and how to update `path_table[destination_hash]` is roughly:
 
 ```
 local_and_hops_condition := (packet.hops < PATHFINDER_M+1)   # default 128
