@@ -87,6 +87,37 @@ jobs:
       - name: Gate on what --fix refused
         run: python tools/check_citations.py
 
+      # check_citations.py cannot see a citation that drifted onto DIFFERENT
+      # code: a line-only citation is bounds-checked, and an anchored range is
+      # satisfied by its anchor appearing anywhere inside it. On the RNS 1.5.0
+      # -> 1.5.2 bump that hid 52 broken citations behind a green check. This
+      # compares each citation against the base branch at the OLD pin and
+      # requires the source text to be unchanged.
+      - name: Install the previous pin for comparison
+        id: oldpin
+        run: |
+          git fetch --depth=1 origin "${{ github.base_ref || github.ref_name }}"
+          mkdir -p /tmp/baseline
+          git archive FETCH_HEAD SPEC.md flows | tar -x -C /tmp/baseline
+          git show FETCH_HEAD:tools/requirements.txt > /tmp/old-requirements.txt
+          if diff -q /tmp/old-requirements.txt tools/requirements.txt >/dev/null; then
+            echo "Pin unchanged; nothing to compare."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python -m venv /tmp/oldpin
+          /tmp/oldpin/bin/pip install -q -r /tmp/old-requirements.txt
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "site=$(/tmp/oldpin/bin/python -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Gate on citations that moved onto different code
+        if: steps.oldpin.outputs.changed == 'true'
+        run: |
+          python tools/check_citation_drift.py \
+            --baseline /tmp/baseline \
+            --old-src "${{ steps.oldpin.outputs.site }}" \
+            --new-src "$(python -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')"
+
       - name: Commit the repaired lines
         id: commit
         run: |

@@ -97,6 +97,8 @@ That distinction is what lets a pin bump separate the two cases a bare line numb
 - upstream **moved** the code → `--fix` re-anchors it, and [`.github/workflows/resync-citations.yml`](.github/workflows/resync-citations.yml) commits that back to the bump PR before anyone reads it
 - upstream **changed** the code → hard error, `--fix` refuses to touch it, and a person looks
 
+Neither check can see a citation that has drifted onto *different* code — a line-only citation is only bounds-checked, and an anchored range is satisfied by its anchor appearing anywhere inside it. [`tools/check_citation_drift.py`](tools/check_citation_drift.py) closes that gap at bump time by comparing every citation against the previous pin and requiring the source text it points at to be unchanged. It runs in the same workflow, before anything is committed.
+
 So a citation that merely drifted is usually repaired before you ever see it. What survives to review is the spec asserting something upstream no longer says — that is worth an issue or PR. The goal is to track the de-facto wire spec as it actually behaves, not as it was at any single snapshot.
 
 ## Contributing
