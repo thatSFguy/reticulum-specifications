@@ -85,7 +85,7 @@ Tagless requests are dropped. Otherwise the handler builds `unique_tag = destina
 
 ### 5. Each peer: dispatch in `Transport.path_request`
 
-`Transport.py:3345-3524` → `def path_request(destination_hash, is_from_local_client, attached_interface`, also documented in [`../SPEC.md`](../SPEC.md) §7.2.3. Five mutually-exclusive branches:
+`Transport.py:3420-3599` → `def path_request(destination_hash,`, also documented in [`../SPEC.md`](../SPEC.md) §7.2.3. Five mutually-exclusive branches:
 
 - **Branch 1 — local destination (the responder we want):** `destination_hash` is in `Transport.destinations_map`. Call `local_destination.announce(path_response=True, tag=tag, attached_interface=...)`. **Goto step 6.**
 - **Branch 2 — transit relay knows the path:** `transport_enabled` AND `dest_hash` in `path_table`. Pull the cached announce packet from `path_table[dest_hash][IDX_PT_PACKET]`, queue it for rebroadcast on the receiving interface with `PATH_REQUEST_GRACE = 0.4s` delay (or `+1.5s` on roaming-mode interfaces). Out of scope for this flow doc — see Tier 3 todo.

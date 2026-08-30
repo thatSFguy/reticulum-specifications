@@ -25,11 +25,11 @@ Branch by `resource_strategy`:
 - **`ACCEPT_APP`** → run the application callback `link.callbacks.resource(adv)`. If it returns truthy, `RNS.Resource.accept(...)`; otherwise reject.
 - **`ACCEPT_ALL`** → unconditional `RNS.Resource.accept(...)`.
 
-`Resource.accept` (`RNS/Resource.py:167-243` → `def accept(advertisement_packet`) constructs a receiver-side Resource object, copies fields from the advertisement, sets `status = TRANSFERRING`, and queues the first request.
+`Resource.accept` (`RNS/Resource.py:168-244` → `def accept(advertisement_packet`) constructs a receiver-side Resource object, copies fields from the advertisement, sets `status = TRANSFERRING`, and queues the first request.
 
 ### 3. Receiver issues the first RESOURCE_REQ
 
-`Resource.request_next()` (`RNS/Resource.py:933-982` → `def request_next(self)`) builds the request body per §10.5:
+`Resource.request_next()` (`RNS/Resource.py:942-991` → `def request_next(self)`) builds the request body per §10.5:
 
 ```
 exhausted_flag(1) [|| last_map_hash(4)] || resource_hash(32) || requested_map_hashes(N × 4)
@@ -49,7 +49,7 @@ When the receiver has consumed every map_hash in the current segment, it issues 
 
 ### 6. `Resource.assemble()` reassembles, validates, decrypts
 
-`Resource.py:676-753` → `def assemble(self)`:
+`Resource.py:685-762` → `def assemble(self):`:
 
 1. `stream = b"".join(self.parts)` — concatenate every part.
 2. `data = link.decrypt(stream)` — single Link Token decrypt of the whole blob (§10.12: encryption was applied to the whole concatenated body before splitting).

@@ -96,7 +96,7 @@ Note the slice `[16:]`: the recipient's dest_hash is removed because it is impli
 
 ### 7. `RNS.Packet.pack()` encrypts and frames
 
-`RNS/Packet.py:178-240` → `def pack(self)`. For a `SINGLE` destination, packet_type `DATA`, context `CTX_NONE`, header_type `HEADER_1`:
+`RNS/Packet.py:180-242` → `def pack(self)`. For a `SINGLE` destination, packet_type `DATA`, context `CTX_NONE`, header_type `HEADER_1`:
 
 1. **Header bytes**: `flags(1) || hops(1) || dest_hash(16) || context(1)` — SPEC.md §2.1, §2.2.
 2. **Encryption** (line 217): `self.ciphertext = self.destination.encrypt(self.data)` — calls `RNS.Destination.encrypt` which delegates to the Token construction (SPEC.md §3):
@@ -113,7 +113,7 @@ ephemeral_pub(32) || iv(16) || aes_ciphertext(...) || hmac_sha256(32)
 
 ### 8. `Transport.outbound(packet)` — path-table-aware framing
 
-`RNS/Transport.py:1302-1552` → `def _outbound(packet)`. Verified by [`../tools/verify_packet_header.py`](../tools/verify_packet_header.py).
+`RNS/Transport.py:1353-1605` → `def _outbound(packet)`. Verified by [`../tools/verify_packet_header.py`](../tools/verify_packet_header.py).
 
 - If `path_table[dest][HOPS] > 1`: convert HEADER_1 → HEADER_2 (SPEC.md §2.3). The originator inserts `path_table[dest][NEXT_HOP]` (16-byte transport_id) at offset 2 and flips the flag bits to `HEADER_2 | TRANSPORT | (orig_low_nibble)`. Resulting wire packet is 35 + ciphertext bytes.
 - If `path_table[dest][HOPS] == 1` AND the local node is connected to a shared instance: same conversion applies (lines 1094-1105).
