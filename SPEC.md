@@ -706,36 +706,61 @@ These are not wire-spec MUST rules but most working clients implement them; with
 Reticulum Relay Chat hubs announce a destination on the `rrc.hub`
 aspect — `name_hash = SHA256("rrc.hub")[:10] = ac9fd3a81e4036f86e1d`.
 Unlike §4.3 (LXMF delivery), the `app_data` is **not** a msgpack
-`[name, cost]` array, and the two hub implementations disagree on
-its shape:
+`[name, cost]` array.
 
-- **`rrcd`** — the Python reference hub. `app_data` is a **CBOR**
-  (RFC 8949) map: `{"proto": "rrc", "v": 1, "hub": <hub_name>}` —
-  CBOR, *not* msgpack, because RRC's wire codec (`rrcd/codec.py`,
-  Python `cbor2`) is CBOR throughout. The human hub name is the
-  `"hub"` key's value (a text string); `"proto"` is always `"rrc"`
-  and `"v"` is the app_data schema version (`1`). Source: `rrcd`
-  `service.py` — `app_data = encode({"proto": "rrc", "v": 1, "hub":
-  self.config.hub_name})`, where `encode` is the CBOR encoder.
-- **`reticulum-relay-chat`** — the Go hub. `app_data` is the hub name
-  as **plain UTF-8 bytes**, unwrapped. Source:
-  `internal/service/service.go` — `BuildAnnounce(id, "rrc.hub",
-  []byte(s.cfg.Hub.Name), ...)`.
+A hub MUST emit `app_data` as a **CBOR** (RFC 8949) map:
+
+```
+{"proto": "rrc", "v": 1, "hub": <hub_name>}
+```
+
+CBOR, *not* msgpack, because RRC's wire codec is CBOR throughout. The
+human hub name is the `"hub"` key's value (a text string); `"proto"`
+is always `"rrc"` and `"v"` is the app_data schema version (`1`). Key
+order is not significant — a CBOR map is unordered, and the two
+producers below emit different orders.
+
+Both hub implementations now agree on this:
+
+- **`rrcd`** — the Python reference hub. `rrcd` `service.py` —
+  `app_data = encode({"proto": "rrc", "v": 1, "hub":
+  self.config.hub_name})`, where `encode` is the CBOR encoder
+  (`rrcd/codec.py`, Python `cbor2`).
+- **`reticulum-relay-chat`** — the Go hub. `internal/rrc/appdata.go`
+  → `func HubAppData(`, called from `internal/service/service.go` →
+  `func (s *Service) buildAnnounce(`.
 
 > ⚠️ **CBOR-vs-msgpack gotcha.** A CBOR 3-entry map begins with byte
 > `0xa3`. In msgpack `0xa3` is `fixstr` of length 3 — so a client that
-> blindly msgpack-decodes the `rrcd` app_data reads the next three
-> bytes (`0x65 0x70 0x72`, the CBOR text-string header of `"proto"`
-> plus its first two characters) as the 3-character string `"epr"`.
-> Decode `rrc.hub` app_data with a CBOR decoder, keyed on the
-> `rrc.hub` name_hash — do not feed it to the LXMF (msgpack) app_data
-> parser.
+> blindly msgpack-decodes the app_data reads the next three bytes
+> (`0x65 0x70 0x72`, the CBOR text-string header of `"proto"` plus its
+> first two characters) as the 3-character string `"epr"`. Decode
+> `rrc.hub` app_data with a CBOR decoder, keyed on the `rrc.hub`
+> name_hash — do not feed it to the LXMF (msgpack) app_data parser.
 
-A client listing RRC hubs should resolve the name as: the `"hub"`
-value when `app_data` CBOR-decodes to a map; else a bare UTF-8 string
-(the Go hub's shape); else a generic "RRC hub" label. The same name
-is also delivered authoritatively in the RRC `WELCOME` body key
-`B_WELCOME_HUB` once a session is established.
+**Legacy bare-UTF-8 form (receivers only).** Before 2026-08-31 the Go
+hub announced the hub name as plain UTF-8 bytes, unwrapped. Deployed
+hubs that have not been upgraded still do, so a client listing RRC
+hubs should resolve the name as: the `"hub"` value when `app_data`
+CBOR-decodes **completely** to a map; else a CBOR text string; else a
+bare UTF-8 string; else a generic "RRC hub" label.
+
+> ⚠️ **The fallback only works if the CBOR attempt actually fails.** A
+> decoder that stops at the first item and ignores trailing bytes — the
+> default for Python `cbor2.loads` — consumes the *first letter* of a
+> bare name as an item header and returns a plausible truncation with
+> no error raised. `"Michmesh RRC Hub"` begins `0x4d`, a byte string of
+> length 13, and decodes to `b"ichmesh RRC H"`; `"Nederlandse
+> Kanalen"` begins `0x4e` and decodes to `b"ederlandse Kan"`. Only
+> names whose first byte implies a length that overruns the buffer
+> (`"thatSFguy"`, `0x74` = text string of length 20 in 9 bytes) fail
+> loudly. A receiver MUST therefore reject leftover bytes before
+> accepting a CBOR decode of `rrc.hub` app_data. Observed live
+> 2026-08-31: `reticulum-mobile-app` listed a hub as "ichmesh RRC H"
+> for exactly this reason.
+
+The same name is also delivered authoritatively in the RRC `WELCOME`
+body key `B_WELCOME_HUB` once a session is established.
 
 ---
 
