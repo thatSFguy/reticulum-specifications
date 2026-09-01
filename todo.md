@@ -133,6 +133,51 @@ to remove their markers:
       A citation whose anchor is a bare `RNS.log(...)` or a comment is the
       signal to look for; there are 8 such today.
 
+- [ ] **Install `tools/requirements-docs.txt` in `verify.yml` so §11.6's
+      citations are actually checked.** `check_citations.py` already
+      supports NomadNet — it tries `import nomadnet` alongside RNS and
+      LXMF (`tools/check_citations.py:118`) and reads
+      `requirements-docs.txt` for the pin declaration (`:476`). But
+      `verify.yml` installs only `tools/requirements.txt`, so nomadnet is
+      never importable in CI and every §11.6 citation lands in the
+      "skipped (source not in the pinned install)" bucket — 21 of them in
+      the run on #53. The section is informational and gets no verifier by
+      design (`agent.md` §0), but that is an argument about *normative
+      weight*, not about whether its line numbers resolve. Nothing catches
+      the difference today: §11.6.8 cited `Browser.py:67` for `DEFAULT_PATH`
+      from the day the section was written, while §11.6.1 cited `:73` two
+      hundred lines above it, and CI was green throughout (fixed in #54).
+      Expect the first run to surface more of the same.
+
+- [ ] **Check every pin declaration, not just the header one.** SPEC.md
+      declares the NomadNet pin twice — line 5 and again in §11.6's own
+      preamble — and `check_citations.py` only knows about line 5. On #53
+      that is exactly what happened: `resync-citations --fix` rewrote the
+      header to 1.2.9, CI went green, and the declaration a reader of
+      §11.6 actually sees still said 1.2.8. The check should scan for
+      every `NomadNet X.Y.Z` (and `RNS X.Y.Z` / `LXMF X.Y.Z`) occurrence
+      and require them to agree with `tools/`. Same shape of bug as the
+      12 flow docs that sat on a stale pin declaration above.
+
+- [ ] **Make the resync drift gate fire on a docs-pin bump.** The
+      "Install the previous pin for comparison" step in
+      `resync-citations.yml` diffs `tools/requirements.txt` only, so a
+      `requirements-docs.txt` bump reports "Pin unchanged; nothing to
+      compare" and `check_citation_drift.py` never runs. Combined with the
+      two items above, a NomadNet bump currently gets no citation checking
+      of any kind — the failure mode #50/#51 were built to prevent, in the
+      one corner those PRs did not cover. #53 was safe by luck: the 1.2.8
+      → 1.2.9 delta is two hunks (`Browser.py:1761-1768`, `Node.py:217`),
+      neither inside a cited range, and both files keep identical line
+      counts. Verified by hand off the sdists, which is precisely the work
+      this gate exists to stop a human from having to do.
+
+- [ ] **Anchor §11.6's citations once they resolve in CI.** All ~21 are
+      bare `file:line`, the weakest form, and they are pinned to a package
+      whose internals move faster than RNS's. Blocked on the
+      `requirements-docs.txt` item above; once that lands,
+      `tools/anchor_citations.py` can run over the section unchanged.
+
 - [x] **Re-anchor the 12 flow docs still declaring the pre-1.5.0 pin.**
       Done — all 12 re-read against `rns==1.5.0` / `lxmf==1.1.1`, every line
       citation corrected, the load-bearing ones anchored per `agent.md` §1, and
