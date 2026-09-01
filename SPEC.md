@@ -3533,6 +3533,7 @@ A micron link's `target` string (the second component of `[label`target]` or thi
 | `lxmf@<32hex>` / `lxmf.delivery@<32hex>` | Open a conversation in the LXMF (messaging) layer, NOT a page fetch. | 206-215, 308-310 |
 | `#<name>` / bare `#` | In-document anchor jump. No request is sent. | 271-275 |
 | `p:<id>[:<id>…]` | Refresh the named partial placeholders in place (§11.6.7). No navigation. | 288-291 |
+| `rrc://<32hex>[:<dest_name>]/<room>` | A room on an RRC hub — handed to the RRC client, not the page fetcher. Also reachable as `rrc@…` / `rrc.hub.session@…`. | 277-280, 312-314, 426-461 |
 
 The last two are **local actions, not destinations**, and both are dispatched *before* the target is parsed as a destination and before any collected form data would be sent (`Browser.py:271-291`). A client that runs its destination parser first sees `#rules` as a malformed hash and reports a broken link on what is a working page.
 
@@ -3550,7 +3551,46 @@ The last two are **local actions, not destinations**, and both are dispatched *b
             return destination_type
 ```
 
-The `rrc` shorthand hands the target to a NomadNet-internal handler rather than the page fetcher; its target grammar is a NomadNet/hub concern and is out of scope here. It is quoted only so the function above is the pinned version verbatim rather than a two-branch paraphrase of it.
+##### The `rrc` target grammar
+
+`rrc` does not name a page. Both spellings hand their payload to
+`handle_rrc_link` (`Browser.py:426-461`), which parses:
+
+```python
+rest = link_target.strip()
+if rest.startswith("/"): rest = rest[1:]
+hub_part, _, room = rest.partition("/")
+hex_part, _, dest = hub_part.partition(":")
+dest = dest.strip() or None
+hub_hash = bytes.fromhex(hex_part)      # must be 16 bytes
+room = room.strip().lstrip("#").strip()
+```
+
+Three things in that are easy to get wrong, and each has produced a real
+divergence:
+
+- **The room segment is literal.** There is no percent-decoding, so a
+  client that encodes it joins a room whose name contains a literal
+  `%20`. Everything after the *first* `/` is the name, to the end of the
+  token.
+- **`:<dest_name>` names the hub's aspect**, defaulting to `rrc.hub`
+  (`nomadnet/RRC.py:97` — `DEFAULT_DEST_NAME = "rrc.hub"`). A client
+  that hardcodes the aspect must reject a link naming another one rather
+  than dial `rrc.hub` regardless; the link names a different destination.
+- **`rrc.hub.session` is not an aspect.** `expand_shorthands` returns it,
+  but it is the label `handle_link` switches on, never a destination
+  name. The aspect is `rrc.hub`.
+
+The strictness note below applies here too, and more strongly than
+upstream applies it to itself: `bytes.fromhex` accepts variants a
+16-byte length check does not exclude, so a reader should require
+exactly 32 hex characters. Being stricter than the grammar costs no
+interop — a link a strict reader rejects is one no writer should have
+produced.
+
+RRC itself (the hub protocol these links address) is specified outside
+this document, at `rrc.kc1awv.net`, with a reference implementation at
+`kc1awv/rrcd`; only the link syntax NomadNet parses is in scope here.
 
 Implementations should normalize hash hex to lower case before keying any cache / repo lookup, and reject inputs with embedded separators (`dead:beef:…`) — the wire form is plain bytes, accepting forgiving variants creates aliases for the same destination and risks cache-poisoning.
 
@@ -3634,6 +3674,8 @@ One `key=value` entry is reserved: `pid=<id>` names the placeholder so a `p:<id>
 | Partial refresh links (`p:<id>`) | `Browser.py:288-291`; `pid=` at `MicronParser.py:178-183` |
 | `field_` / `var_` env-var mapping | `nomadnet/Node.py:109-111` |
 | Shorthand expansion (`nnn`/`lxmf`/`rrc`) | `Browser.py:206-214` |
+| RRC link grammar (`rrc://` and `rrc@`) | `Browser.py:277-280`, `:312-314`, `:426-461` |
+| RRC default hub aspect | `nomadnet/RRC.py:97` |
 | Cross-node link routing | `Browser.py:271-323` |
 | Identify-on-connect | `Browser.py:1454-1461` |
 | Cache-TTL header `#!c=N` | `Browser.py:1524-1531` |
