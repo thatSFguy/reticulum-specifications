@@ -3509,7 +3509,7 @@ if hasattr(w, "field_name") and (all_fields or w.field_name in link_fields):
 → {"var_action": "submit", "field_username": "…", "field_password": "…"}
 ```
 
-This is not an obscure corner: naming widgets individually is the rarer style in practice, because `*` is what a page author writes once and never revisits when the form grows a field. **A client that implements only the two bullets above, and treats `*` as a widget name that happens not to exist, posts the `var_` params and nothing the user typed** — the request still succeeds, the server still answers, and every form on such a page silently does nothing. The failure has no error at any layer to point at it.
+This is not an edge case a reader can defer: `*` is what a page author writes once and never has to revisit as the form grows fields, so it costs an author strictly less than naming each widget. **A client that implements only the two bullets above, and treats `*` as a widget name that happens not to exist, posts the `var_` params and nothing the user typed** — the request still succeeds, the server still answers, and every form on such a page silently does nothing. The failure has no error at any layer to point at it.
 
 ##### Checkbox semantics (Browser.py:255-266)
 
@@ -3626,7 +3626,7 @@ One `key=value` entry is reserved: `pid=<id>` names the placeholder so a `p:<id>
 
 | Concept | Upstream Python file:line |
 |---|---|
-| Default path | `nomadnet/ui/textui/Browser.py:67` |
+| Default path | `nomadnet/ui/textui/Browser.py:73` |
 | Form-field collection | `Browser.py:219-269` |
 | `*` all-fields wildcard | `Browser.py:222` (submit), `Browser.py:769` (partials) |
 | In-document anchor jump (`#name`) | `Browser.py:271-275`, `Browser.py:324-357` |

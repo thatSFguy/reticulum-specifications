@@ -194,7 +194,7 @@ Each entry: date, one-line symptom, spec section that governs it, one-line fix, 
 ### 2026-09-01 — NomadNet form posts arrive with no fields (the `*` wildcard)
 
 - **Symptom:** A page's login / post form submits, the server answers, and nothing the user typed has any effect — the same page comes back with the form blank. No error at any layer. Other NomadNet clients log in against the same page fine.
-- **Spec section:** §11.6.2. A form link's field list is `key=value` params, widget names, **and** a bare `*` meaning "every widget on the page". `` `[Login`:/page/login.mu`action=submit|*] `` — the widely-used shape — names no widget at all, so a client that only understands the first two forms posts `var_action=submit` and not one character of the form.
+- **Spec section:** §11.6.2. A form link's field list is `key=value` params, widget names, **and** a bare `*` meaning "every widget on the page". `` `[Login`:/page/login.mu`action=submit|*] `` — the shape the page in question used — names no widget at all, so a client that only understands the first two forms posts `var_action=submit` and not one character of the form.
 - **Fix:** Treat `*` anywhere in the list as "include every widget", composed with (not instead of) the `=` params in the same list. Same rule for a partial's field list (§11.6.7).
 - **Lesson:** A wire bug whose failure mode is "the request succeeds and the answer is wrong" leaves no log line to grep for. When a feature works elsewhere and silently no-ops here, diff the *input grammar* you accept against upstream's, not the bytes you emit.
 
