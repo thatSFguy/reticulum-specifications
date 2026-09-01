@@ -3554,32 +3554,56 @@ The last two are **local actions, not destinations**, and both are dispatched *b
 ##### The `rrc` target grammar
 
 `rrc` does not name a page. Both spellings hand their payload to
-`handle_rrc_link` (`Browser.py:426-461`), which parses:
+`handle_rrc_link` (`Browser.py:426-461`), whose parse and validation is
+`Browser.py:430-446` verbatim:
 
 ```python
-rest = link_target.strip()
-if rest.startswith("/"): rest = rest[1:]
-hub_part, _, room = rest.partition("/")
-hex_part, _, dest = hub_part.partition(":")
-dest = dest.strip() or None
-hub_hash = bytes.fromhex(hex_part)      # must be 16 bytes
-room = room.strip().lstrip("#").strip()
+            rest = link_target.strip()
+            if rest.startswith("/"):
+                rest = rest[1:]
+            hub_part, _, room = rest.partition("/")
+            hex_part, _, dest = hub_part.partition(":")
+            hex_part = hex_part.strip()
+            dest = dest.strip() or None
+            try:
+                hub_hash = bytes.fromhex(hex_part)
+            except Exception:
+                raise ValueError("invalid hub hash")
+            expected_len = RNS.Reticulum.TRUNCATED_HASHLENGTH // 8
+            if len(hub_hash) != expected_len:
+                raise ValueError("hub hash must be "+str(expected_len)+" bytes")
+
+            room = room.strip().lstrip("#").strip()
+            room_norm = room.lower() if room else None
 ```
 
-Three things in that are easy to get wrong, and each has produced a real
-divergence:
+Three things in that are easy to get wrong, and each produces a link
+that resolves to the wrong thing rather than failing:
 
-- **The room segment is literal.** There is no percent-decoding, so a
-  client that encodes it joins a room whose name contains a literal
-  `%20`. Everything after the *first* `/` is the name, to the end of the
-  token.
-- **`:<dest_name>` names the hub's aspect**, defaulting to `rrc.hub`
-  (`nomadnet/RRC.py:97` — `DEFAULT_DEST_NAME = "rrc.hub"`). A client
-  that hardcodes the aspect must reject a link naming another one rather
-  than dial `rrc.hub` regardless; the link names a different destination.
-- **`rrc.hub.session` is not an aspect.** `expand_shorthands` returns it,
-  but it is the label `handle_link` switches on, never a destination
-  name. The aspect is `rrc.hub`.
+- **The room segment is not decoded, but it is folded.** There is no
+  percent-decoding, so a client that encodes the name joins a room whose
+  name contains a literal `%20`. Everything after the *first* `/` is the
+  name, to the end of the token. It is then stripped, has any leading
+  `#` removed, and — the part easily missed, because it is one line
+  below where the parse looks finished — is **lower-cased**. It is
+  `room_norm`, not `room`, that is handed on (`Browser.py:455`, `:461`),
+  so room names match case-insensitively and a client that compares them
+  case-sensitively will miss a room it was linked to.
+- **`:<dest_name>` names the hub's destination**, defaulting to `rrc.hub`
+  (`nomadnet/RRC.py:97` — `DEFAULT_DEST_NAME = "rrc.hub"`). It is a full
+  destination name, not an aspect: `RRC.py:379` splits it with
+  `RNS.Destination.app_and_aspects_from_name(self.dest_name)`, making
+  app_name `rrc` and aspect `hub` — the same shape as `nomadnetwork.node`
+  and `lxmf.delivery` in the table above. A client that hardcodes it must
+  **reject** a link naming a different one rather than dial `rrc.hub`
+  regardless, because the link names a different destination. Upstream
+  fails closed here: `RRC.py:388` refuses the hub when the name it was
+  given does not hash to the hash it was given.
+- **`rrc.hub.session` is not a destination name.** `expand_shorthands`
+  returns it, and it looks like one, which is the trap. It is only the
+  label `handle_link` switches on to pick the handler
+  (`Browser.py:312-314`); nothing ever dials it. The destination name is
+  `dest_name`, default `rrc.hub`.
 
 The strictness note below applies here too, and more strongly than
 upstream applies it to itself: `bytes.fromhex` accepts variants a
@@ -3588,9 +3612,9 @@ exactly 32 hex characters. Being stricter than the grammar costs no
 interop — a link a strict reader rejects is one no writer should have
 produced.
 
-RRC itself (the hub protocol these links address) is specified outside
-this document, at `rrc.kc1awv.net`, with a reference implementation at
-`kc1awv/rrcd`; only the link syntax NomadNet parses is in scope here.
+Only the link syntax NomadNet's browser parses is in scope here. What
+happens after a link resolves is RRC's own hub protocol, which is
+specified outside this document and out of scope for it (§17.5).
 
 Implementations should normalize hash hex to lower case before keying any cache / repo lookup, and reject inputs with embedded separators (`dead:beef:…`) — the wire form is plain bytes, accepting forgiving variants creates aliases for the same destination and risks cache-poisoning.
 
@@ -3675,7 +3699,8 @@ One `key=value` entry is reserved: `pid=<id>` names the placeholder so a `p:<id>
 | `field_` / `var_` env-var mapping | `nomadnet/Node.py:109-111` |
 | Shorthand expansion (`nnn`/`lxmf`/`rrc`) | `Browser.py:206-214` |
 | RRC link grammar (`rrc://` and `rrc@`) | `Browser.py:277-280`, `:312-314`, `:426-461` |
-| RRC default hub aspect | `nomadnet/RRC.py:97` |
+| RRC room-name folding (`lower()`) | `Browser.py:446`, used at `:455`, `:461` |
+| RRC default hub destination name | `nomadnet/RRC.py:97`; split at `RRC.py:379`, enforced at `:388` |
 | Cross-node link routing | `Browser.py:271-323` |
 | Identify-on-connect | `Browser.py:1454-1461` |
 | Cache-TTL header `#!c=N` | `Browser.py:1524-1531` |
