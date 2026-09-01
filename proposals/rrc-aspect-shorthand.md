@@ -1,127 +1,64 @@
 # Proposal: register `rrc` as a NomadNet link-target aspect shorthand
 
-**Status:** Draft for discussion
-**Author:** [@thatSFguy](https://github.com/thatSFguy)
-**Date:** 2026-08-29
-
-> This proposes **no wire change**. It asks that one shorthand string be
-> written down, so that a convention several implementations would
-> otherwise each invent differently is instead invented once.
+**Status:** **WITHDRAWN — the shorthand already existed.**
+**Author:** [thatSFguy](https://github.com/thatSFguy)
+**Date:** 2026-08-29 · **Withdrawn:** 2026-09-01
 
 ---
 
-## 1. Summary
+## Why this was withdrawn
 
-`SPEC §11.6.3` documents the link-target syntax NomadNet's browser
-parses, and the `expand_shorthands` table that gives it two aliases:
+This proposal asked that `rrc` be registered as a link-target aspect
+shorthand alongside `nnn` and `lxmf`, expanding to `rrc.hub`, with a
+`:/room/<percent-encoded>` path convention. It argued that without a
+registered shorthand, implementations *"will each invent a different
+something — some a `rrc://` URI, some a bare hash"* and links would not
+survive being pasted between clients.
 
-```python
-def expand_shorthands(self, destination_type):
-    if destination_type == "nnn":   return "nomadnetwork.node"
-    elif destination_type == "lxmf": return "lxmf.delivery"
-    else: return destination_type
-```
+That was already the situation, in the direction the proposal did not
+check. NomadNet 1.2.8 — released **2026-07-24**, five weeks before this
+was written — ships a full RRC client and had already claimed both
+spellings, with a **different payload grammar**:
 
-The grammar around it — `[aspect@]<32hex>[:/path]` — is not specific to
-pages. It is a general way to write down *a destination and something on
-it*, it is the only such convention this ecosystem has, and it is
-already readable by every NomadNet user.
+- `rrc://<32hex>[:<dest_name>]/<room>` — `Browser.py:277-280`
+- `rrc@…`, via `expand_shorthands` mapping `rrc` to `rrc.hub.session`
+  and `handle_link` dispatching that to the same parser —
+  `Browser.py:206-214`, `:312-314`
+- the parser itself — `Browser.py:426-461`
 
-**This proposal registers one more shorthand:**
+So there was nothing to register: the shorthand existed, and this
+proposal's `:/room/` path convention was the parallel invention it set
+out to prevent. The two do not fail cleanly against each other — a
+`:/room/ops` link resolves the right hub and yields a room named
+`room/ops`, which a hub creates without complaint.
 
-| Shorthand | Expands to | Names |
-|---|---|---|
-| `nnn` | `nomadnetwork.node` | a page-serving node *(exists)* |
-| `lxmf` | `lxmf.delivery` | a conversation *(exists)* |
-| **`rrc`** | **`rrc.hub`** | **a room on an RRC hub** *(this)* |
+`SPEC §11.6.3` now documents what NomadNet actually parses, which is
+what this proposal should have been from the start: a description, not a
+request.
 
-```
-rrc@43c8adb1172377a76b8f9ba41bb85e5c:/room/lobby
-```
+## What is worth keeping from it
 
-`rrc.hub` is the aspect an RRC (Reticulum Relay Chat) hub registers.
+Two arguments survive and are folded into §11.6.3:
 
----
+- **Strictness.** §11.6.3's existing warning about forgiving hash
+  parsing — reject embedded separators, require exactly 32 hex
+  characters, lower-case before use — applies to this shorthand as it
+  does to the others, and is stricter than upstream's own
+  `bytes.fromhex` length check. Being stricter than the grammar costs no
+  interop.
+- **A shorthand table is a registry, not a closed enumeration.** That
+  framing was right; it just did not need a new row, because the row was
+  already there. The table in §11.6.3 has been corrected to quote the
+  pinned function verbatim rather than a two-branch condensation of it,
+  so the next reader sees every shorthand upstream defines.
 
-## 2. Why this is worth writing down
+## The lesson, for the next proposal
 
-RRC has no way to express "this room, on this hub". Room names are not
-unique across hubs and nothing spoken aloud carries which hub was meant,
-so an RRC room is not shareable at all today.
+The failure here was not "did not check upstream" — this proposal cites
+`SPEC §11.6.3` and quotes `expand_shorthands`. It was checking
+upstream's convention for a *neighbouring* problem (page links) and
+generalising it, without checking whether upstream already had an answer
+for *this* problem. It did, in a module the same package ships.
 
-The gap is worst where it hurts most. An RRC hub that notifies an absent
-member over LXMF produces a message that lands in the recipient's
-ordinary messaging app, tells them they were named in `#ops`, and offers
-no way to get there.
-
-Any implementation solving that will invent something. Without a
-registered shorthand they will each invent a *different* something —
-some a `rrc://` URI, some a bare hash, some a JSON blob — and links will
-not survive being pasted between clients, which is the only thing a link
-is for. One line in `expand_shorthands` prevents that.
-
----
-
-## 3. Path convention
-
-Namespaced, as `/page/` and `/file/` are, so later targets can be added
-without ambiguity:
-
-```
-/room/<segment>       a room; segment is the room name
-```
-
-RRC room names are arbitrary UTF-8, and a link is a whitespace-delimited
-token pasted out of a message body, so `<segment>` is percent-encoded
-over UTF-8 bytes escaping everything outside the RFC 3986 unreserved set
-— stricter than a typical path encoder, which would leave `:` and `@`
-alone. Both are structural in this grammar.
-
-A link with no path names a hub and no particular room.
-
----
-
-## 4. What implementations should do
-
-Nothing is required of anyone. A client that does not implement this
-renders the token as text, and a person can copy it — which is the
-property that makes a text convention the right shape here, rather than
-a new message type.
-
-A client that does implement it should, on activation: connect to
-`rrc.hub` at the given destination hash and `JOIN` the named room.
-
-**Strictness follows §11.6.3's existing warning**, which applies to this
-shorthand exactly as to the others: reject embedded separators, require
-exactly 32 hex characters, lower-case before use. Forgiving hash parsing
-creates aliases for one destination and risks cache poisoning.
-
----
-
-## 5. Prior art in this document set
-
-`SPEC §11.6.3` is marked informational rather than normative, since
-NomadNet is not an admissible source for a normative claim per
-[`agent.md`](../agent.md) §0. This proposal does not change that: it
-asks that the shorthand table be treated as a **registry** — a list
-anyone may add to, with the same informational standing the rest of
-§11.6 has — rather than as a closed enumeration of what NomadNet
-happens to implement.
-
-If that framing is accepted, the concrete change is one row in the
-§11.6.3 table and one line of prose noting that the list is open.
-
----
-
-## 6. Reference implementation
-
-`thatSFguy/reticulum-relay-chat`:
-
-- `internal/hub/rrclink.go` — parser and renderer
-- `internal/hub/rrclink_test.go` — conformance cases: every accepted
-  form, the strictness rules, and round trips over room names
-  containing spaces, `:`, `@`, `/`, `%` and non-Latin scripts
-- `docs/rrc-room-links.md` — the client-facing convention
-
-Emitted in offline mention notifications, and by a `/link [room]`
-command.
+Before proposing a convention for a protocol some upstream client
+already speaks, grep that client for the protocol's name first.
