@@ -74,6 +74,7 @@ Populated against RNS 1.5.2 / LXMF 1.1.1 (all 21 scripts re-run green at this pi
 | `verify_packet_header.py` | §2.1, §2.2, §2.3 — flag byte layout, HEADER_1/HEADER_2 form, originator HEADER_1→HEADER_2 conversion via upstream `Transport.outbound` | ✅ |
 | `verify_token_crypto.py` | §3 — Token encrypt/decrypt, HKDF salt = identity_hash, HMAC-then-AES order, PKCS#7 padding | ✅ |
 | `verify_announce_app_data.py` | §4.3 — LXMF announce app_data 2-element form, parser tolerance | ✅ |
+| `verify_app_data_dispatch.py` | §4.6 — app_data is opaque to RNS; LXMF's first-byte dispatch on non-LXMF payloads | ✅ |
 | `verify_announce_roundtrip.py` | §4.1, §4.2, §4.5 — announce body layout, signature, dest_hash recompute, tamper rejection | ✅ |
 | `verify_lxmf_opportunistic.py` | §5.1, §5.2, §5.5, §5.6 — full identity → encrypt → decrypt → parse round-trip | ✅ |
 | `verify_canonical_msgpack.py` | §5.6, §5.6.1 — canonical msgpack is a MUST for stamped messages and a SHOULD otherwise; round-trips a non-canonical integer envelope through upstream both ways and reads its verdict, including the unstamped control case | ✅ |
