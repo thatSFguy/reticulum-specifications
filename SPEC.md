@@ -10,6 +10,7 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
 <summary><b>Contents</b> — click to expand the per-section table of contents (regenerate with <code>python tools/_gen_toc.py</code>)</summary>
 
 <!-- TOC: regenerate via `python tools/_gen_toc.py` -->
+## Contents
 
 - [1. Identity and destination hashes](#1-identity-and-destination-hashes)
   - [1.1 Identity composition](#11-identity-composition)
@@ -34,7 +35,7 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
   - [4.3 `app_data` format for LXMF delivery destinations](#43-app_data-format-for-lxmf-delivery-destinations)
   - [4.4 Announce filtering by `name_hash`](#44-announce-filtering-by-name_hash)
   - [4.5 Announce validation rules (receive side)](#45-announce-validation-rules-receive-side)
-  - [4.6 `rrc.hub` announce app_data (Reticulum Relay Chat)](#46-rrchub-announce-app_data-reticulum-relay-chat)
+  - [4.6 `app_data` is not always msgpack](#46-app_data-is-not-always-msgpack)
 - [5. LXMF wire format](#5-lxmf-wire-format)
   - [5.1 Opportunistic delivery (single Reticulum DATA packet)](#51-opportunistic-delivery-single-reticulum-data-packet)
   - [5.2 Direct delivery (over an established Reticulum Link)](#52-direct-delivery-over-an-established-reticulum-link)
@@ -154,8 +155,6 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
   - [17.5 Application protocols layered over Reticulum](#175-application-protocols-layered-over-reticulum)
 - [18. Test vectors](#18-test-vectors)
 - [19. Source map](#19-source-map)
-<!-- /TOC -->
-
 <!-- /TOC -->
 
 </details>
@@ -701,68 +700,46 @@ These are not wire-spec MUST rules but most working clients implement them; with
 | `RNS/Interfaces/Interface.py:60-245` → `IA_FREQ_SAMPLES =` | ingress-limit constants, `should_ingress_limit`, `hold_announce`, `process_held_announces` |
 | `RNS/Packet.py:83` → `PATH_RESPONSE = 0x0B` | `PATH_RESPONSE = 0x0B` context constant |
 
-### 4.6 `rrc.hub` announce app_data (Reticulum Relay Chat)
+### 4.6 `app_data` is not always msgpack
 
-Reticulum Relay Chat hubs announce a destination on the `rrc.hub`
-aspect — `name_hash = SHA256("rrc.hub")[:10] = ac9fd3a81e4036f86e1d`.
-Unlike §4.3 (LXMF delivery), the `app_data` is **not** a msgpack
-`[name, cost]` array.
+§4.3's `[name, stamp_cost, [flags]]` array is **LXMF's** convention for
+its own delivery destinations, not an RNS rule. To RNS, `app_data` is
+opaque bytes: `Destination.announce` appends whatever it is handed
+without examining it (`RNS/Destination.py:304` → `if app_data != None: announce_data += app_data`),
+and `validate_announce` slices it back out to the end of the packet and
+stores it unparsed (`RNS/Identity.py:532` → `app_data = packet.data[keysize+name_hash_len+10+sig_len+ratchetsize:]`,
+recalled as bytes at `RNS/Identity.py:171-172` → `return app_data`).
+Application protocols layered over Reticulum (§17.5) announce on their
+own aspects and encode `app_data` however their own specs say — those
+encodings are documented there, not here.
 
-A hub MUST emit `app_data` as a **CBOR** (RFC 8949) map:
+A client that listens promiscuously therefore receives announces whose
+`app_data` is not msgpack at all. **Key the parser on `name_hash`
+(§4.4), never on the shape of the bytes.** The reason to be strict
+about that is the next box: the shape does not tell you, and asking it
+does not fail loudly.
 
-```
-{"proto": "rrc", "v": 1, "hub": <hub_name>}
-```
+> ⚠️ **LXMF's parser dispatches on the first byte, and a non-LXMF
+> payload does not reliably raise.** `display_name_from_app_data`
+> (`LXMF/LXMF.py:151-153` → `def display_name_from_app_data(app_data=None):`)
+> takes its msgpack branch for a leading `0x90`–`0x9f` or `0xdc`, and
+> otherwise assumes the whole payload is a raw UTF-8 name. Fed something
+> else it does one of three things, and two of them look like success
+> (all three verified by `tools/verify_app_data_dispatch.py`):
+>
+> | Leading byte | Result |
+> |---|---|
+> | not UTF-8-decodable — e.g. `0xa3`, a CBOR 3-entry map | raises `UnicodeDecodeError` |
+> | UTF-8-decodable — e.g. `0x67`, a CBOR 7-character text string | returns the name **with the header byte glued on as a character**: `67 "hubname"` parses as `"ghubname"` |
+> | inside `0x90`–`0x9f` — e.g. `0x90`, a CBOR array of 16 items | msgpack branch is taken and returns `None`, as though the announce carried no name |
 
-CBOR, *not* msgpack, because RRC's wire codec is CBOR throughout. The
-human hub name is the `"hub"` key's value (a text string); `"proto"`
-is always `"rrc"` and `"v"` is the app_data schema version (`1`). Key
-order is not significant — a CBOR map is unordered, and the two
-producers below emit different orders.
-
-Both hub implementations now agree on this:
-
-- **`rrcd`** — the Python reference hub. `rrcd` `service.py` —
-  `app_data = encode({"proto": "rrc", "v": 1, "hub":
-  self.config.hub_name})`, where `encode` is the CBOR encoder
-  (`rrcd/codec.py`, Python `cbor2`).
-- **`reticulum-relay-chat`** — the Go hub. `internal/rrc/appdata.go`
-  → `func HubAppData(`, called from `internal/service/service.go` →
-  `func (s *Service) buildAnnounce(`.
-
-> ⚠️ **CBOR-vs-msgpack gotcha.** A CBOR 3-entry map begins with byte
-> `0xa3`. In msgpack `0xa3` is `fixstr` of length 3 — so a client that
-> blindly msgpack-decodes the app_data reads the next three bytes
-> (`0x65 0x70 0x72`, the CBOR text-string header of `"proto"` plus its
-> first two characters) as the 3-character string `"epr"`. Decode
-> `rrc.hub` app_data with a CBOR decoder, keyed on the `rrc.hub`
-> name_hash — do not feed it to the LXMF (msgpack) app_data parser.
-
-**Legacy bare-UTF-8 form (receivers only).** Before 2026-08-31 the Go
-hub announced the hub name as plain UTF-8 bytes, unwrapped. Deployed
-hubs that have not been upgraded still do, so a client listing RRC
-hubs should resolve the name as: the `"hub"` value when `app_data`
-CBOR-decodes **completely** to a map; else a CBOR text string; else a
-bare UTF-8 string; else a generic "RRC hub" label.
-
-> ⚠️ **The fallback only works if the CBOR attempt actually fails.** A
-> decoder that stops at the first item and ignores trailing bytes — the
-> default for Python `cbor2.loads` — consumes the *first letter* of a
-> bare name as an item header and returns a plausible truncation with
-> no error raised. `"Michmesh RRC Hub"` begins `0x4d`, a byte string of
-> length 13, and decodes to `b"ichmesh RRC H"`; `"Nederlandse
-> Kanalen"` begins `0x4e` and decodes to `b"ederlandse Kan"`. Only
-> names whose first byte implies a length that overruns the buffer
-> (`"thatSFguy"`, `0x74` = text string of length 20 in 9 bytes) fail
-> loudly. A receiver MUST therefore reject leftover bytes before
-> accepting a CBOR decode of `rrc.hub` app_data. Observed live
-> 2026-08-31: `reticulum-mobile-app` listed a hub as "ichmesh RRC H"
-> for exactly this reason.
-
-The same name is also delivered authoritatively in the RRC `WELCOME`
-body key `B_WELCOME_HUB` once a session is established.
-
----
+> ⚠️ **Probing with a decoder does not identify the encoding either.** A
+> decoder that stops after the first item and ignores trailing bytes
+> returns a plausible truncation rather than an error, so "it decoded,
+> therefore it was that format" is unsound. In CBOR the 11 bytes
+> `example hub` begin `0x65`, a text string of length 5, and decode to
+> the 5-character string `"xampl"` with 5 bytes left over. Any such
+> probe MUST reject leftover bytes before believing its own answer.
 
 ## 5. LXMF wire format
 
@@ -4476,6 +4453,7 @@ Reticulum is a transport substrate; user-facing features are *application protoc
 | RRC depends on | Sections in this spec |
 |---|---|
 | Hub destination (`rrc.hub` aspect) + client identity | §1.1, §1.2, §9.8 |
+| Announce `app_data` on a non-LXMF aspect | §4.6 — why the LXMF parser must not be pointed at it; RRC's own `app_data` shape is in RRC's spec |
 | Identity hash as the canonical sender id (RRC envelope key 4, "opaque, do not re-encode") | §1.1; §9.1 — the identity-hash-vs-destination-hash pitfall RRC's rule guards against |
 | All traffic over a single Reticulum Link | §6.1–§6.4, §6.7 |
 | Single-packet CBOR frames sized to the link MTU | §2.1–§2.2, §2.4, §6.6 (MTU is *negotiated* — see note below) |
