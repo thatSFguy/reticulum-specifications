@@ -25,4 +25,4 @@
 # the new version and update the version named in §11.6's preamble. No
 # verifier runs against it, so nothing here can fail CI.
 
-nomadnet==1.2.8
+nomadnet==1.2.9
