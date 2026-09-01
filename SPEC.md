@@ -3483,7 +3483,33 @@ if data != None and isinstance(data, dict):
 The `field_` vs `var_` distinction is purely cosmetic on the wire (both become env vars), but in micron syntax they have separate origins:
 
 - **Form fields** (`field_<name>`) come from `<flags|name`value>` widgets that render as text inputs / checkboxes / radios. The Browser collects current widget state into a dict at submit time.
-- **URL parameters** (`var_<name>`) come from `key=value` entries in the third backtick component of a link: `` `[label`/page/foo.mu`username=alice|active=true|message] `` produces `{"var_username": "alice", "var_active": "true", ...}` PLUS `field_message` from a widget named `message` (`Browser.py:224-228`). Entries with `=` are var-params; entries without are field-widget names whose current values get included.
+- **URL parameters** (`var_<name>`) come from `key=value` entries in the third backtick component of a link: `` `[label`/page/foo.mu`username=alice|active=true|message] `` produces `{"var_username": "alice", "var_active": "true", ...}` PLUS `field_message` from a widget named `message` (`Browser.py:224-228`). Entries with `=` are var-params; entries without are field-widget names whose current values get included — **or the `*` wildcard, below, which is neither.**
+
+##### The `*` wildcard — "every widget on the page"
+
+One entry in that list is neither a `key=value` param nor a widget name. A bare `*` anywhere in it means **submit every form widget the page declares**, not just the ones named:
+
+```python
+all_fields = True if "*" in link_data else False
+```
+
+(`Browser.py:222`.) The widget walk then admits a widget when the wildcard is set OR the widget is named:
+
+```python
+if hasattr(w, "field_name") and (all_fields or w.field_name in link_fields):
+```
+
+(`Browser.py:246`.)
+
+`*` composes with `=` params in the same list — the two are read in one pass, so `` `action=submit|* `` submits `var_action` **and** every widget:
+
+```
+`[  → Login  `:/page/login.mu`action=submit|*]
+
+→ {"var_action": "submit", "field_username": "…", "field_password": "…"}
+```
+
+This is not an edge case a reader can defer: `*` is what a page author writes once and never has to revisit as the form grows fields, so it costs an author strictly less than naming each widget. **A client that implements only the two bullets above, and treats `*` as a widget name that happens not to exist, posts the `var_` params and nothing the user typed** — the request still succeeds, the server still answers, and every form on such a page silently does nothing. The failure has no error at any layer to point at it.
 
 ##### Checkbox semantics (Browser.py:255-266)
 
@@ -3505,15 +3531,26 @@ A micron link's `target` string (the second component of `[label`target]` or thi
 | `<32hex>:/page/x.mu` | Cross-node nav with explicit path. | 292-306 |
 | `nnn@<32hex>[:/path]` | Same as bare-hash form; `nnn` is a shorthand for `nomadnetwork.node`. | 206-215, 285-287 |
 | `lxmf@<32hex>` / `lxmf.delivery@<32hex>` | Open a conversation in the LXMF (messaging) layer, NOT a page fetch. | 206-215, 308-310 |
+| `#<name>` / bare `#` | In-document anchor jump. No request is sent. | 271-275 |
+| `p:<id>[:<id>…]` | Refresh the named partial placeholders in place (§11.6.7). No navigation. | 288-291 |
 
-`expand_shorthands` (`Browser.py:206-215`):
+The last two are **local actions, not destinations**, and both are dispatched *before* the target is parsed as a destination and before any collected form data would be sent (`Browser.py:271-291`). A client that runs its destination parser first sees `#rules` as a malformed hash and reports a broken link on what is a working page.
+
+`expand_shorthands` (`Browser.py:206-214`):
 
 ```python
-def expand_shorthands(self, destination_type):
-    if destination_type == "nnn":   return "nomadnetwork.node"
-    elif destination_type == "lxmf": return "lxmf.delivery"
-    else: return destination_type
+    def expand_shorthands(self, destination_type):
+        if destination_type == "nnn":
+            return "nomadnetwork.node"
+        elif destination_type == "lxmf":
+            return "lxmf.delivery"
+        elif destination_type == "rrc":
+            return "rrc.hub.session"
+        else:
+            return destination_type
 ```
+
+The `rrc` shorthand hands the target to a NomadNet-internal handler rather than the page fetcher; its target grammar is a NomadNet/hub concern and is out of scope here. It is quoted only so the function above is the pinned version verbatim rather than a two-branch paraphrase of it.
 
 Implementations should normalize hash hex to lower case before keying any cache / repo lookup, and reject inputs with embedded separators (`dead:beef:…`) — the wire form is plain bytes, accepting forgiving variants creates aliases for the same destination and risks cache-poisoning.
 
@@ -3570,14 +3607,33 @@ A micron page may embed `` `{<path>[`<refresh_seconds>[`<fields>]]} `` placehold
 
 Implementation reference: `Browser.py:707-835` (`__load_partial`, `start_partial_updater`). Partials are how live "chat tail" / "status" panels work on real NomadNet community pages. A client without partial support sees the literal placeholder text and the page renders as a static snapshot.
 
+**A partial's `<fields>` list obeys §11.6.2 in full, `*` included.** `__get_partial_request_data` is the same collection pass as the form-submit one, on the same widget tree:
+
+```python
+    def __get_partial_request_data(self, partial):
+        request_data = None
+        if partial["fields"] != None:
+            link_data = partial["fields"]
+```
+
+(`Browser.py:766-811` — `__get_partial_request_data`; the wildcard test is at `Browser.py:769`, the widget walk at `Browser.py:793`.)
+
+So a partial is not restricted to static `key=value` params: it can carry the live value of a widget elsewhere on the page, re-read on every refresh. That is how a page scopes a chat-tail panel by a nickname box the reader typed into.
+
+One `key=value` entry is reserved: `pid=<id>` names the placeholder so a `p:<id>` link (§11.6.3) can refresh it without reloading the page (`MicronParser.py:178-183`).
+
 #### 11.6.8 Source map (NomadNet ↔ wire)
 
 | Concept | Upstream Python file:line |
 |---|---|
-| Default path | `nomadnet/ui/textui/Browser.py:67` |
+| Default path | `nomadnet/ui/textui/Browser.py:73` |
 | Form-field collection | `Browser.py:219-269` |
+| `*` all-fields wildcard | `Browser.py:222` (submit), `Browser.py:769` (partials) |
+| In-document anchor jump (`#name`) | `Browser.py:271-275`, `Browser.py:324-357` |
+| Anchor declarations + heading auto-slugs | `MicronParser.py:71-81`, `:308-311`, `:657-668` |
+| Partial refresh links (`p:<id>`) | `Browser.py:288-291`; `pid=` at `MicronParser.py:178-183` |
 | `field_` / `var_` env-var mapping | `nomadnet/Node.py:109-111` |
-| Shorthand expansion (`nnn`/`lxmf`) | `Browser.py:206-215` |
+| Shorthand expansion (`nnn`/`lxmf`/`rrc`) | `Browser.py:206-214` |
 | Cross-node link routing | `Browser.py:271-323` |
 | Identify-on-connect | `Browser.py:1454-1461` |
 | Cache-TTL header `#!c=N` | `Browser.py:1524-1531` |
