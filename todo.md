@@ -133,7 +133,7 @@ to remove their markers:
       A citation whose anchor is a bare `RNS.log(...)` or a comment is the
       signal to look for; there are 8 such today.
 
-- [ ] **Install `tools/requirements-docs.txt` in `verify.yml` so §11.6's
+- [x] **Install `tools/requirements-docs.txt` in `verify.yml` so §11.6's
       citations are actually checked.** `check_citations.py` already
       supports NomadNet — it tries `import nomadnet` alongside RNS and
       LXMF (`tools/check_citations.py:118`) and reads
