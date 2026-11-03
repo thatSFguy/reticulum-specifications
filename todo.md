@@ -114,18 +114,31 @@ to remove their markers:
       citations, so making it the CI gate would not lock this in — that needs a
       separate line-only ceiling check.
 
-- [ ] **Audit the anchors for semantic correctness.**
-      Anchoring cements, it does not verify: an anchor generated from a line that
-      was already wrong anchors the wrong place. Partly done on the RNS 1.5.7 bump
-      branch — every anchor on a bare `RNS.log(...)` or comment was reviewed (five
-      re-pointed, block-opening comments left), and the drift gate now repairs
-      ranges whose anchor stayed inside while the start moved. Found along the way:
-      §11.6 cited the env-var mapping at a log line, a flow cited the ANNOUNCE
-      branch for a LINKREQUEST claim, and §2.3 cited `outbound`'s range for code
-      in `_outbound`. Still open: anchored *ranges* whose anchor is not on the
-      first cited line (e.g. `Browser.py:219-269` → `if link_data != None:` at
-      221) — `--fix` derives drift from the anchor, so these shift correctly, but
-      nothing confirms the range frames what the prose describes.
+- [x] **Audit the anchors for semantic correctness.**
+      Done. Every anchor on a bare `RNS.log(...)` or comment was reviewed in #66;
+      the 11 anchored ranges whose snippet is not on the first cited line were
+      reviewed here — 8 frame the right code, 3 did not and were fixed (the
+      opportunistic → DIRECT downgrade cited the later PLAIN-only `raise`; the
+      DIRECT representation range sat in the OPPORTUNISTIC branch; the
+      path-response cache was described as active when upstream marks it unused).
+      Doing it surfaced a regression in #66's drift repair, which matched range
+      endpoints by text and wrote inverted / collapsed ranges onto repeated lines
+      (`LXMRouter.py:2989-2893`, `LXMessage.py:421-421`); `check_citation_drift.py`
+      now maps lines through a source diff, and `check_citations.py` rejects
+      inverted ranges.
+
+- [ ] **Rewrite `flows/lxmf-outbound-retry.md` for LXMF 1.2's retry scheduling.**
+      LXMF 1.2 replaced the fixed schedule the flow describes. Retry waits now
+      come from `schedule_attempt`, scaled to the destination's round-trip time
+      (`max(DELIVERY_RETRY_WAIT, round_trip)` plus airtime jitter); the attempt
+      limit is per message (`attempt_limit`, shrinking below
+      `MAX_DELIVERY_ATTEMPTS` on slow paths); `request_path` is debounced
+      (`PATH_REQUEST_DEBOUNCE` on interfaces below `SLOW_INTERFACE_BITRATE`);
+      and `slow_path_held` keeps one message in flight per slow destination. Not
+      a wire change, but the flow's timings and attempt counts are LXMF 1.1's.
+      `path-discovery.md` and SPEC §7.1's retry paragraph cite the same code
+      and want the same pass. Missed on the bump because the text-matching
+      drift gate paired the old `else:` with a new `elif` of identical text.
 
 - [x] **Install `tools/requirements-docs.txt` in `verify.yml` so §11.6's
       citations are actually checked.** `check_citations.py` already

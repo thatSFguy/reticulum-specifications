@@ -1,6 +1,6 @@
 """
 Bump-time gate: after a pin change, does every citation still point at the
-same upstream text it pointed at before?
+same upstream code it pointed at before?
 
 check_citations.py cannot answer this, by construction:
 
@@ -15,24 +15,37 @@ line numbers and 15 anchored ranges kept stale starts, with a green check on
 every one. `Transport.py:133` was `PATH_REQUEST_GRACE = 0.4` in 1.5.0 and is a
 blank line in 1.5.2.
 
-This compares the SAME citation across two installs:
+How it decides
+--------------
+Each cited upstream file is diffed between the two installs, which maps every
+unchanged old line to exactly one new line. A cited line number must move
+through that map: old line L becomes M(L), and nothing else is correct.
 
-    old docs @ old pin  ->  source text at the cited line
-    new docs @ new pin  ->  source text at the cited line
+This replaced comparing the *text* at the two line numbers. Text comparison
+is fooled by repeated lines — `else:`, `return False`,
+`self.fail_message(lxmessage)` — and on the RNS 1.5.7 / LXMF 1.2.1 bump that
+let a text-matching repair write `LXMRouter.py:2989-2893` (an inverted range)
+and `LXMessage.py:421-421` (a seven-line range collapsed to one), both passing
+this gate. A diff map cannot confuse two identical lines, because it maps
+positions, not contents.
 
-and requires the two to be identical. A citation that was correct before and is
-correct after must satisfy this; one that was silently left behind cannot.
+A cited line that upstream CHANGED has no image under the map. That is
+reported for a person: the code the spec cites is not the code it cited.
 
-Citations are paired positionally within each document, which is exact because
-`check_citations.py --fix` only ever rewrites numbers in place — it never adds
-or removes a citation. A document whose citation *count* changed is reported
-rather than guessed at: that means a human edited it, and the pairing is no
-longer meaningful.
+Pairing citations across the two versions of a document is done the same way:
+the documents are diffed with every citation number masked, so lines that
+only had numbers rewritten pair up, and a line a person edited is reported
+rather than mis-paired. (Pairing used to be positional over the whole
+document, which gave up on any document with a hand edit anywhere.)
 
-  python tools/check_citation_drift.py \
-      --baseline <dir of pre-bump docs> \
-      --old-src  <site-packages of the old pin> \
-      --new-src  <site-packages of the new pin>
+  python tools/check_citation_drift.py \\
+      --baseline <dir of pre-bump docs> \\
+      --old-src  <site-packages of the old pin> \\
+      --new-src  <site-packages of the new pin> [--fix]
+
+--fix rewrites each citation to its image under the map. An endpoint on a
+changed line takes the shift of the nearest unchanged line inside the same
+range, and is still reported, so a person confirms it.
 
 Exit 0 when every citation survived the bump, 1 otherwise.
 """
@@ -40,6 +53,7 @@ Exit 0 when every citation survived the bump, 1 otherwise.
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import re
 import sys
@@ -51,87 +65,42 @@ REPO_ROOT = cc.REPO_ROOT
 
 RE_CITE = re.compile(r"`(?P<path>[A-Za-z_][\w/]*\.py)?:(?P<lines>\d[\d,\s-]*)`")
 RE_FENCE_CITE = re.compile(
-    r"^\s*#\s*(?P<path>[A-Za-z_][\w/]*\.py):(?P<lines>\d[\d,\s-]*)\s*$")
+    r"^(?P<pre>\s*#\s*)(?P<path>[A-Za-z_][\w/]*\.py):(?P<lines>\d[\d,\s-]*)\s*$")
 
 
-def citations(text, positions=False):
-    """Ordered (path, linespec) for one document, continuations resolved.
+RE_VERSION = re.compile(r"\b(RNS|LXMF|NomadNet)\s+`?\d+\.\d+\.\d+`?")
 
-    With positions=True each entry also carries (line_index, start, end) of
-    the linespec inside the document, so --fix can rewrite it in place."""
+
+def doc_citations(text):
+    """Per document line: list of (path, linespec, start, end), with
+    continuation paths resolved from the most recent explicit path."""
     out, last = [], None
-    for i, raw in enumerate(text.splitlines()):
+    for raw in text.split("\n"):
+        row = []
         fm = RE_FENCE_CITE.match(raw)
         if fm:
             last = fm.group("path")
-            out.append((last, fm.group("lines").strip(),
-                        (i, fm.start("lines"), fm.end("lines"))))
-            continue
-        for m in RE_CITE.finditer(raw):
-            path = m.group("path") or last
-            if m.group("path"):
-                last = m.group("path")
-            if path:
-                out.append((path, m.group("lines").strip(),
-                            (i, m.start("lines"), m.end("lines"))))
-    return out if positions else [(p, s) for p, s, _ in out]
-
-
-# A line this short ("else:", "return False", blank) occurs all over a file,
-# so finding it near the old position proves nothing. Such endpoints borrow
-# the shift of a distinctive endpoint in the same citation instead.
-TRIVIAL_LEN = 12
-SEARCH_WINDOW = 400
-
-
-def repair(old_tree, new_tree, path, n_old, n_new):
-    """New line numbers that put every cited line back on the text it cited
-    at the old pin, or None if that cannot be done unambiguously."""
-    ap = new_tree.resolve(path)
-    if ap is None:
-        return None
-    new_lines = [cc.norm(l) for l in new_tree.lines(ap)]
-    out, deltas = [None] * len(n_old), {}
-    for i, (a, b) in enumerate(zip(n_old, n_new)):
-        t_old = old_tree.text_at(path, a)
-        if t_old is None:
-            return None
-        if len(t_old) < TRIVIAL_LEN:
-            continue
-        hits = [j for j in range(max(1, b - SEARCH_WINDOW),
-                                 min(len(new_lines), b + SEARCH_WINDOW) + 1)
-                if new_lines[j - 1] == t_old]
-        if not hits:
-            return None
-        hits.sort(key=lambda j: abs(j - b))
-        if len(hits) > 1 and abs(hits[0] - b) == abs(hits[1] - b):
-            return None                  # equidistant: ambiguous
-        out[i] = hits[0]
-        deltas[i] = hits[0] - b
-    for i, (a, b) in enumerate(zip(n_old, n_new)):
-        if out[i] is not None:
-            continue
-        t_old = old_tree.text_at(path, a)
-        if deltas:
-            near = min(deltas, key=lambda k: abs(k - i))
-            cand = b + deltas[near]
-            if 1 <= cand <= len(new_lines) and new_lines[cand - 1] == t_old:
-                out[i] = cand
-                continue
-        hits = [j for j in range(max(1, b - 3), min(len(new_lines), b + 3) + 1)
-                if new_lines[j - 1] == t_old]
-        hits.sort(key=lambda j: abs(j - b))
-        if not hits or (len(hits) > 1 and
-                        abs(hits[0] - b) == abs(hits[1] - b)):
-            return None
-        out[i] = hits[0]
+            row.append((last, fm.group("lines").strip(),
+                        fm.start("lines"), fm.end("lines")))
+        else:
+            for m in RE_CITE.finditer(raw):
+                path = m.group("path") or last
+                if m.group("path"):
+                    last = m.group("path")
+                if path:
+                    row.append((path, m.group("lines").strip(),
+                                m.start("lines"), m.end("lines")))
+        out.append(row)
     return out
 
 
-def respec(spec, numbers):
-    """Rewrite the numbers in a linespec in order: '151-153' -> '152-154'."""
-    it = iter(numbers)
-    return re.sub(r"\d+", lambda _m: str(next(it)), spec)
+def masked(line):
+    """The document line with citation numbers hidden, for pairing."""
+    line = RE_FENCE_CITE.sub(lambda m: f"{m.group('pre')}{m.group('path')}:#", line)
+    line = RE_CITE.sub(lambda m: f"`{m.group('path') or ''}:#`", line)
+    # check_citations.py --fix rewrites pin claims ("in RNS 1.5.7") on a bump
+    # too; that is not a hand edit.
+    return RE_VERSION.sub(lambda m: f"{m.group(1)} #", line)
 
 
 class Tree:
@@ -167,14 +136,32 @@ class Tree:
                 self._files[abspath] = f.read().splitlines()
         return self._files[abspath]
 
-    def text_at(self, path, lineno):
-        ap = self.resolve(path)
-        if ap is None:
-            return None
-        ls = self.lines(ap)
-        if lineno > len(ls):
-            return None
-        return cc.norm(ls[lineno - 1])
+
+class LineMap:
+    """old line number -> new line number, for lines unchanged by the bump."""
+
+    def __init__(self, old_lines, new_lines):
+        self.n_old, self.n_new = len(old_lines), len(new_lines)
+        self.map = {}
+        sm = difflib.SequenceMatcher(None, [l.rstrip() for l in old_lines],
+                                     [l.rstrip() for l in new_lines],
+                                     autojunk=False)
+        for tag, i1, i2, j1, _j2 in sm.get_opcodes():
+            if tag == "equal":
+                for k in range(i2 - i1):
+                    self.map[i1 + k + 1] = j1 + k + 1
+
+    def image(self, a, lo, hi):
+        """(new line, exact?) for old line a cited in the range lo..hi.
+        A changed line borrows the shift of the nearest unchanged line inside
+        the range; None if the whole range changed."""
+        if a in self.map:
+            return self.map[a], True
+        for d in range(1, hi - lo + 1):
+            for c in (a + d, a - d):
+                if lo <= c <= hi and c in self.map:
+                    return self.map[c] - c + a, False
+        return None, False
 
 
 def main():
@@ -188,100 +175,109 @@ def main():
     ap.add_argument("--new-src", required=True,
                     help="site-packages of the NEW pin")
     ap.add_argument("--fix", action="store_true",
-                    help="rewrite each drifted citation to the line numbers "
-                         "that carry the text it cited at the old pin, where "
-                         "that is unambiguous; report the rest")
+                    help="rewrite each citation to its image under the "
+                         "old->new source diff")
     args = ap.parse_args()
 
     old_tree, new_tree = Tree(args.old_src), Tree(args.new_src)
+    maps = {}
+
+    def line_map(path):
+        if path not in maps:
+            a, b = old_tree.resolve(path), new_tree.resolve(path)
+            maps[path] = (LineMap(old_tree.lines(a), new_tree.lines(b))
+                          if a and b else None)
+        return maps[path]
 
     docs = ["SPEC.md"] + sorted(
         "flows/" + f for f in os.listdir(os.path.join(REPO_ROOT, "flows"))
         if f.endswith(".md"))
 
-    errors, skipped, checked, unpaired = [], 0, 0, []
-    fixed_total = 0
+    moved, changed, unpaired, inverted = [], [], [], []
+    checked = skipped = fixed_total = 0
     for doc in docs:
         base_path = os.path.join(args.baseline, doc)
         if not os.path.isfile(base_path):
             continue                     # new document; nothing to compare to
         with open(base_path, encoding="utf-8") as f:
-            before = citations(f.read())
+            old_text = f.read()
         with open(os.path.join(REPO_ROOT, doc), encoding="utf-8") as f:
-            doc_text = f.read()
-        after_pos = citations(doc_text, positions=True)
-        after = [(p, sp) for p, sp, _ in after_pos]
+            new_text = f.read()
+        old_lines, new_lines = old_text.split("\n"), new_text.split("\n")
+        old_cites, new_cites = doc_citations(old_text), doc_citations(new_text)
+
+        sm = difflib.SequenceMatcher(None, [masked(l) for l in old_lines],
+                                     [masked(l) for l in new_lines],
+                                     autojunk=False)
+        pairs = []
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "equal":
+                pairs.extend((i1 + k, j1 + k) for k in range(i2 - i1))
+            else:
+                for j in range(j1, j2):
+                    if new_cites[j]:
+                        unpaired.append((doc, j + 1))
+
         rewrites = []
-
-        # Positional pairing is only exact when nothing but --fix touched the
-        # document. Any change to the sequence of cited PATHS means a human
-        # edited it, and every comparison after that point would be measuring
-        # the edit rather than the bump.
-        if len(before) != len(after):
-            unpaired.append((doc, f"{len(before)} citations",
-                             f"{len(after)} citations"))
-            continue
-        if [p for p, _ in before] != [p for p, _ in after]:
-            unpaired.append((doc, "path sequence A", "path sequence B"))
-            continue
-
-        for k, ((p_old, s_old), (p_new, s_new)) in enumerate(zip(before, after)):
-            if p_old != p_new:
-                unpaired.append((doc, p_old, p_new))
-                break
-            n_old = cc.parse_line_spec(s_old)
-            n_new = cc.parse_line_spec(s_new)
-            if len(n_old) != len(n_new):
-                errors.append((doc, p_old, s_old, s_new,
-                               "line-count changed", ""))
-                continue
-            if args.fix and any(
-                    old_tree.text_at(p_old, a) is not None
-                    and old_tree.text_at(p_old, a) != new_tree.text_at(p_new, b)
-                    for a, b in zip(n_old, n_new)):
-                fixed = repair(old_tree, new_tree, p_new, n_old, n_new)
-                if fixed is not None:
-                    rewrites.append((after_pos[k][2], respec(s_new, fixed)))
-                    n_new = fixed
-            for a, b in zip(n_old, n_new):
-                t_old = old_tree.text_at(p_old, a)
-                t_new = new_tree.text_at(p_new, b)
-                if t_old is None or t_new is None:
+        for i, j in pairs:
+            for (p_old, s_old, _, _), (p_new, s_new, st, en) in zip(
+                    old_cites[i], new_cites[j]):
+                n_old = cc.parse_line_spec(s_old)
+                n_new = cc.parse_line_spec(s_new)
+                lm = line_map(p_new) if p_old == p_new else None
+                if lm is None or len(n_old) != len(n_new):
                     skipped += 1
                     continue
-                checked += 1
-                if t_old != t_new:
-                    errors.append((doc, p_old, f"{a}", f"{b}",
-                                   t_old[:70], t_new[:70]))
-
-        if rewrites:
-            doc_lines = doc_text.split("\n")
-            # Right to left within a line, so earlier offsets stay valid.
-            for (li, st, en), new_spec in sorted(rewrites, reverse=True):
-                doc_lines[li] = doc_lines[li][:st] + new_spec + doc_lines[li][en:]
+                lo, hi = min(n_old), max(n_old)
+                want, exact_all = [], True
+                for a in n_old:
+                    b, exact = lm.image(a, lo, hi)
+                    want.append(b)
+                    exact_all &= exact
+                if None in want:
+                    changed.append((doc, j + 1, p_new, s_old, s_new, "whole range changed upstream"))
+                    continue
+                checked += len(n_old)
+                if any(x > y for x, y in zip(want, want[1:])) and "-" in s_new:
+                    inverted.append((doc, j + 1, p_new, s_new))
+                if want != n_new:
+                    new_spec = re.sub(r"\d+", lambda _m, it=iter(want): str(next(it)), s_new)
+                    moved.append((doc, j + 1, p_new, s_new, new_spec))
+                    if args.fix:
+                        rewrites.append((j, st, en, new_spec))
+                if not exact_all:
+                    changed.append((doc, j + 1, p_new, s_old, s_new,
+                                    "a cited line was changed upstream"))
+        if args.fix and rewrites:
+            for j, st, en, new_spec in sorted(rewrites, reverse=True):
+                new_lines[j] = new_lines[j][:st] + new_spec + new_lines[j][en:]
             with open(os.path.join(REPO_ROOT, doc), "w", encoding="utf-8") as f:
-                f.write("\n".join(doc_lines))
+                f.write("\n".join(new_lines))
             fixed_total += len(rewrites)
 
     if args.fix:
-        print(f"--fix re-pointed {fixed_total} citation(s) at the text they "
-              f"cited before the bump; run check_citations.py to confirm.")
-    for doc, a, b in unpaired:
-        print(f"  UNPAIRED {doc}: citation sequence changed ({a} -> {b}). "
-              f"A human edited this document; re-check it by hand.")
-    for doc, path, a, b, t_old, t_new in errors:
-        print(f"  DRIFT {doc}: `{path}:{a}` -> `{b}`")
-        print(f"        was: {t_old}")
-        print(f"        now: {t_new}")
+        print(f"--fix re-pointed {fixed_total} citation(s) through the "
+              f"old->new source diff")
+        moved = []                       # repaired; re-run to confirm
+    for doc, n, path, spec in inverted:
+        print(f"  INVERTED {doc}:{n}: `{path}:{spec}`")
+    for doc, n, path, cur, want in moved:
+        print(f"  MOVED   {doc}:{n}: `{path}:{cur}` should be `{want}`")
+    for doc, n, path, s_old, s_new, why in changed:
+        print(f"  CHANGED {doc}:{n}: `{path}:{s_new}` (was `{s_old}`) — {why}; "
+              f"a person must confirm the citation still fits")
+    for doc, n in unpaired:
+        print(f"  EDITED  {doc}:{n}: line edited by hand, citations not "
+              f"compared; check it against the new pin")
 
-    print(f"\n{checked} citation line(s) compared across the pin change; "
-          f"{skipped} unresolvable in one install; "
-          f"{len(errors)} drifted, {len(unpaired)} unpaired")
-    if errors or unpaired:
-        print("FAIL: a citation points at different upstream text than it did "
-              "before the bump. --fix cannot see this; it needs a person.")
+    print(f"\n{checked} cited line(s) compared across the pin change; "
+          f"{skipped} unresolvable; {len(moved)} moved, {len(changed)} on "
+          f"changed upstream code, {len(unpaired)} on hand-edited lines")
+    if moved or changed or unpaired or inverted:
+        print("FAIL: a citation does not point at the code it cited before "
+              "the bump. MOVED is fixable with --fix; the rest need a person.")
         return 1
-    print("PASS: every citation still points at the text it cited before.")
+    print("PASS: every citation still points at the code it cited before.")
     return 0
 
 

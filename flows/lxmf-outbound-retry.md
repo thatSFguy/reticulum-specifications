@@ -141,12 +141,12 @@ The `set_link_established_callback(self.process_outbound)` re-entry is what lets
 
 `fail_message` runs at line 2671-2673 once `delivery_attempts > MAX_DELIVERY_ATTEMPTS`.
 
-### PROPAGATED branch (`LXMF/LXMRouter.py:2989-2893` → `elif lxmessage.method == LXMessage.PROPAGATED`)
+### PROPAGATED branch (`LXMF/LXMRouter.py:2989-3051` → `elif lxmessage.method == LXMessage.PROPAGATED`)
 
 Structurally mirrors DIRECT but against `outbound_propagation_link` / `outbound_propagation_node` instead of per-recipient direct links. Two early failures:
 
 - `outbound_propagation_node == None` → immediate `fail_message` (`:2992-2994` → `if self.outbound_propagation_node == None`). LXMF will not attempt PROPAGATED without an explicitly configured node — there is **no automatic fallback** from DIRECT/OPPORTUNISTIC to PROPAGATED. Sideband configures one via `LXMRouter.set_outbound_propagation_node` at startup; a clean-room client must do the same before the user picks PROPAGATED.
-- All `MAX_DELIVERY_ATTEMPTS` exhausted → `fail_message` (`:3045-3047` → `RNS.log("Max delivery attempts reached for propagated`).
+- All `MAX_DELIVERY_ATTEMPTS` exhausted → `fail_message` (`:3049-3051` → `RNS.log("Max delivery attempts reached for propagated`).
 
 Otherwise the link-state branching is identical to DIRECT: ACTIVE → send / CLOSED → drop and retry / no-link → establish-or-path-request.
 

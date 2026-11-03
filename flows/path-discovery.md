@@ -81,7 +81,7 @@ data[16:32]  requesting_transport_instance OR tag_bytes (depending on length)
 data[32:..]  tag_bytes              — only present when len(data) > 32
 ```
 
-Tagless requests are dropped. Otherwise the handler builds `unique_tag = destination_hash || tag_bytes[:16]` and consults `discovery_pr_tags` to dedup (see §7.2.2). Duplicate requests are silently ignored without further processing — important because the broadcast in step 2 will reach the same relay via multiple interfaces in a meshy topology.
+Tagless requests are dropped. Otherwise `unique_tag = destination_hash || tag_bytes[:16]` is checked against `discovery_pr_tags` to dedup (see §7.2.2). Since RNS 1.5.0 that check runs at ingress, in `Transport.preprocess_inbound`, before the handler is ever called (`RNS/Transport.py::preprocess_inbound` → `if not unique_tag in Transport.discovery_pr_tags`). Duplicate requests are silently ignored without further processing — important because the broadcast in step 2 will reach the same relay via multiple interfaces in a meshy topology.
 
 ### 5. Each peer: dispatch in `Transport.path_request`
 
@@ -106,7 +106,7 @@ For a leaf client only Branches 1 and 5 matter. Branches 2-4 are transport-node 
    ```
    This is the only wire-byte difference between a path response and a regular re-announce.
 
-2. **`tag` parameter caches the body for `PR_TAG_WINDOW = 30s`** (`Destination.py:260-279` → `announce_data = self.path_responses[tag][1]`). If multiple relays forward the same `path?` to this leaf in quick succession, the leaf serves the **same announce bytes** to all of them — same `random_hash`, same `signature`, identical wire bytes — so transit-relay dedup logic (path-table `random_blobs` cache, see [`../SPEC.md`](../SPEC.md) §4.5 step 6.3) treats the multiple incoming responses as one.
+2. **`tag` parameter caches the body for `PR_TAG_WINDOW = 30s`** (`Destination.py:260-279` → `announce_data = self.path_responses[tag][1]`). A repeat of the same tag within the window would get the **same announce bytes** back — same `random_hash`, same `signature`. In current RNS that branch is never reached: Transport drops a repeated tag in its own dedup (step 4) before it gets to the destination, and upstream says so at the branch (`Destination.py:270` → `# This code is currently not used, since Transport will block duplicate`). The cache is there for future multi-path support; an implementation can omit it (see [`../SPEC.md`](../SPEC.md) §7.2.4 and §7.2.6).
 
 The path-response announce is sent on `attached_interface` only (the interface the request arrived on), not broadcast on all interfaces — so the response travels back along the same path the request came in on.
 
