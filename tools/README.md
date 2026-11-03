@@ -60,6 +60,14 @@ python tools/check_citations.py --strict   # warnings become errors
 touch is a citation whose snippet is nowhere in the new upstream — i.e. a
 behaviour that actually changed, which is exactly what needs a human.
 
+**Pin claims are checked too, not just headers.** Besides the `Pinned against
+**…**` / `**Last verified against:**` headers, every inline claim about the pinned
+version must name the current pin: `… in RNS 1.5.7`, `(LXMF 1.2.1)`, `verified
+against RNS 1.5.7`, `upstream LXMF 1.2.1 …`. `--fix` rewrites them along with the
+headers. To describe an **older** version on purpose, write it as history —
+`since`, `through`, `as of`, `≥`, `Changed in`, `New in` — which the check does
+not match.
+
 `tools/citations-exempt.txt` grandfathers documents whose pin declaration is
 known-stale. It is a countdown: an entry that is no longer needed is itself an
 error, so the list can't rot.
