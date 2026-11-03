@@ -16,8 +16,8 @@ pip install -r requirements.txt
 ```
 
 `requirements-docs.txt` is a separate, **docs-only** pin (currently NomadNet)
-used to re-anchor the informational §11.6 citations. CI does not install it and
-no verifier imports it — see the comments in that file for why it is kept out of
+used to re-anchor the informational §11.6 citations. CI installs it only so
+`check_citations.py` can resolve those citations; no verifier imports it — see the comments in that file for why it is kept out of
 this environment.
 
 The scripts read `RNS.__version__` at startup and print it in their output so a future reader can tell which RNS version a verification ran against.
@@ -66,7 +66,7 @@ error, so the list can't rot.
 
 ## Status
 
-Populated against RNS 1.5.2 / LXMF 1.1.1 (all 21 scripts re-run green at this pin):
+Populated against RNS 1.5.7 / LXMF 1.2.1 (all 22 scripts re-run green at this pin):
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|

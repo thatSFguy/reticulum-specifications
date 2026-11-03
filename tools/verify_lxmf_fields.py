@@ -88,6 +88,7 @@ EXPECTED_PN_META = {
     "PN_META_SYNC_THROTTLE": 0x03,
     "PN_META_AUTH_BAND":     0x04,
     "PN_META_UTIL_PRESSURE": 0x05,
+    "PN_META_IMPL_NAME":     0xFE,
     "PN_META_CUSTOM":        0xFF,
 }
 
@@ -155,6 +156,37 @@ def verify_no_unknown_field_constants() -> None:
     print("  (no unknown FIELD_/AM_/RENDERER_/PN_META_/SF_ constants)")
 
 
+def verify_pn_announce_metadata() -> None:
+    """§5.9.5: what a propagation node actually puts in announce element [6].
+
+    Since LXMF 1.2 every PN announce carries PN_META_IMPL_NAME and
+    PN_META_VERSION as msgpack *str*, while PN_META_NAME stays *bytes*.
+    A receiver that assumes one value type for the whole map breaks on
+    whichever key it did not expect."""
+    import types
+    from LXMF import LXMRouter as RouterClass  # the class; LXMF re-exports it
+    from LXMF._version import __version__ as lxmf_version
+
+    print("== PN announce metadata (announce element [6]) ==")
+    build = RouterClass.get_propagation_node_announce_metadata
+    named = build(types.SimpleNamespace(name="node-1"))
+    anon = build(types.SimpleNamespace(name=None))
+    want = {
+        LXMF_consts.PN_META_IMPL_NAME: "lxmd",
+        LXMF_consts.PN_META_VERSION: str(lxmf_version),
+        LXMF_consts.PN_META_NAME: b"node-1",
+    }
+    if named != want:
+        fail(f"named PN metadata is {named!r}, spec §5.9.5 says {want!r}")
+    for k, v in want.items():
+        print(f"  0x{k:02x} -> {type(v).__name__:5s} {v!r}  (matches spec)")
+    if LXMF_consts.PN_META_NAME in anon:
+        fail("PN_META_NAME emitted for a node with no name; §5.9.5 says it is omitted")
+    if set(anon) != {LXMF_consts.PN_META_IMPL_NAME, LXMF_consts.PN_META_VERSION}:
+        fail(f"unnamed PN metadata keys are {sorted(anon)}, expected 0x00 and 0xfe only")
+    print("  unnamed node: 0x01 omitted, 0x00 and 0xfe still present  (matches spec)")
+
+
 def main() -> None:
     verify_group("FIELD_* (top-level fields dict keys)", EXPECTED_FIELDS)
     verify_group("AM_* (FIELD_AUDIO mode bytes)", EXPECTED_AUDIO_MODES)
@@ -165,6 +197,7 @@ def main() -> None:
     verify_group("COMMENT_* (FIELD_COMMENT dict indices)", EXPECTED_COMMENT)
     verify_group("CONTINUATION_* (FIELD_CONTINUATION dict indices)", EXPECTED_CONTINUATION)
     verify_no_unknown_field_constants()
+    verify_pn_announce_metadata()
     print()
     print("PASS")
 

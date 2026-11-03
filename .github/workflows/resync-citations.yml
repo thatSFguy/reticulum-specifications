@@ -51,18 +51,18 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # The PR branch itself, not the merge commit, so a commit made here
           # can be pushed back to it.
           ref: ${{ github.head_ref || github.ref_name }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install pinned upstream
-        run: pip install -r tools/requirements.txt
+        run: pip install -r tools/requirements.txt -r tools/requirements-docs.txt
 
       # Rewrites drifted line numbers and stale pin declarations in place.
       # Exits non-zero if anything was left unrepaired; the gate below is the
@@ -100,15 +100,35 @@ jobs:
           mkdir -p /tmp/baseline
           git archive FETCH_HEAD SPEC.md flows | tar -x -C /tmp/baseline
           git show FETCH_HEAD:tools/requirements.txt > /tmp/old-requirements.txt
-          if diff -q /tmp/old-requirements.txt tools/requirements.txt >/dev/null; then
+          git show FETCH_HEAD:tools/requirements-docs.txt > /tmp/old-requirements-docs.txt
+          if diff -q /tmp/old-requirements.txt tools/requirements.txt >/dev/null &&
+             diff -q /tmp/old-requirements-docs.txt tools/requirements-docs.txt >/dev/null; then
             echo "Pin unchanged; nothing to compare."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           python -m venv /tmp/oldpin
-          /tmp/oldpin/bin/pip install -q -r /tmp/old-requirements.txt
+          /tmp/oldpin/bin/pip install -q -r /tmp/old-requirements.txt -r /tmp/old-requirements-docs.txt
           echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "site=$(/tmp/oldpin/bin/python -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')" >> "$GITHUB_OUTPUT"
+
+      # An anchored range passes check_citations.py as long as its anchor is
+      # anywhere inside it, so --fix above leaves a range whose start moved by
+      # a line or two alone. This uses both installs to put each cited line
+      # back on the text it cited at the old pin, where that is unambiguous.
+      # Whatever it cannot place is left for the gate below to report.
+      - name: Re-point ranges that drifted inside their anchor
+        if: steps.oldpin.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          python tools/check_citation_drift.py --fix \
+            --baseline /tmp/baseline \
+            --old-src "${{ steps.oldpin.outputs.site }}" \
+            --new-src "$(python -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')"
+
+      - name: Re-check citations after the range repair
+        if: steps.oldpin.outputs.changed == 'true'
+        run: python tools/check_citations.py
 
       - name: Gate on citations that moved onto different code
         if: steps.oldpin.outputs.changed == 'true'

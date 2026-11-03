@@ -1,6 +1,6 @@
 # Flow: send an announce
 
-What happens chronologically when a node emits an announce — the periodic broadcast that lets the rest of the mesh discover or refresh a path to this destination. Pinned against **RNS 1.5.2**.
+What happens chronologically when a node emits an announce — the periodic broadcast that lets the rest of the mesh discover or refresh a path to this destination. Pinned against **RNS 1.5.7**.
 
 Out of scope: the relay-side rebroadcast (`forward-announce.md` — see [`../SPEC.md`](../SPEC.md) §12.3) and path-response announces (already covered in [`path-discovery.md`](path-discovery.md)).
 

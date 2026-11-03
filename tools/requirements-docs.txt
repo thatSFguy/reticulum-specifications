@@ -1,5 +1,6 @@
-# Documentation-only pins. NOT installed by CI, and NOT imported by any
-# verifier — `tools/requirements.txt` is the verifier environment.
+# Documentation-only pins. Installed by CI only so check_citations.py can
+# resolve §11.6's citations; NOT imported by any verifier —
+# `tools/requirements.txt` is the verifier environment.
 #
 # Why this file is separate from tools/requirements.txt:
 #
@@ -23,6 +24,6 @@
 #
 # Bumping this is a docs-only change: re-anchor §11.6's citations against
 # the new version and update the version named in §11.6's preamble. No
-# verifier runs against it, so nothing here can fail CI.
+# verifier runs against it; the only CI gate is citation resolution.
 
-nomadnet==1.2.9
+nomadnet==1.4.4

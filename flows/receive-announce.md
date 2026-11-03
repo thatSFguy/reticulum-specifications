@@ -2,7 +2,7 @@
 
 What happens chronologically on a node when an `ANNOUNCE` packet arrives on one of its interfaces. Without this flow working, nothing else does — no peer is ever known, every outbound message fails at `Identity.recall(dest_hash)`, and no path table entry exists for routing.
 
-Pinned against **RNS 1.5.2**. Line numbers below are from that version.
+Pinned against **RNS 1.5.7**. Line numbers below are from that version.
 
 This flow covers the **receive + ingest** path that every Reticulum node runs (leaf clients and transport nodes alike). The **rebroadcast** logic that transport nodes additionally run is covered separately in `forward-announce.md` (TODO — Tier 3 in `../todo.md`).
 
@@ -46,7 +46,7 @@ if interface != None and RNS.Identity.validate_announce(packet, only_validate_si
 `validate_announce(only_validate_signature=True)` runs the full body-parse and Ed25519 signature verification (steps 1-2 of SPEC.md §4.5) but **skips** the destination_hash recomputation and the cache updates. If the signature is valid the call:
 
 - Returns `True` so the wider dispatch can proceed.
-- Calls `interface.received_announce()`, which appends `time.time()` to the per-interface `ia_freq_deque` (`RNS/Interfaces/Interface.py:304-308` → `self.ia_freq_deque.append(time.time())`; called from `RNS/Transport.py:1811` → `elif packet.receiving_interface !=`). This deque feeds `incoming_announce_frequency()` and is what drives ingress-limit decisions in step 3.
+- Calls `interface.received_announce()`, which appends `time.time()` to the per-interface `ia_freq_deque` (`RNS/Interfaces/Interface.py:305-309` → `self.ia_freq_deque.append(time.time())`; called from `RNS/Transport.py:1811` → `elif packet.receiving_interface !=`). This deque feeds `incoming_announce_frequency()` and is what drives ingress-limit decisions in step 3.
 
 If the signature fails, the announce is silently dropped here without the deque update — a malformed sender can't burn through the receiver's ingress budget by spamming bad-sig announces. This is a sharp design choice and worth replicating in any clean-room implementation: **signature-checked-then-counted**, not "counted-then-validated".
 
@@ -66,11 +66,11 @@ if not packet.destination_hash in Transport.path_table:
 
 The check runs only for **unknown-destination** announces (already-known destinations are throttled by their own re-announce rate limiter, not the ingress limiter).
 
-`should_ingress_limit()` (`RNS/Interfaces/Interface.py:188-211` → `def should_ingress_limit(self)`) trips into a "burst-active" state when `incoming_announce_frequency()` exceeds `IC_BURST_FREQ_NEW = 6 Hz` (interfaces younger than 2 hours, `IC_NEW_TIME`) or `IC_BURST_FREQ = 35 Hz` (older interfaces). Once in burst mode, every unknown-destination announce gets parked in the interface's `held_announces` dict until the rate drops below the threshold AND `IC_BURST_HOLD = 60s` has elapsed.
+`should_ingress_limit()` (`RNS/Interfaces/Interface.py:189-212` → `def should_ingress_limit(self)`) trips into a "burst-active" state when `incoming_announce_frequency()` exceeds `IC_BURST_FREQ_NEW = 6 Hz` (interfaces younger than 2 hours, `IC_NEW_TIME`) or `IC_BURST_FREQ = 35 Hz` (older interfaces). Once in burst mode, every unknown-destination announce gets parked in the interface's `held_announces` dict until the rate drops below the threshold AND `IC_BURST_HOLD = 60s` has elapsed.
 
-Held announces are released later by `Interface.process_held_announces()` (`RNS/Interfaces/Interface.py:277-300` → `def process_held_announces(self)`), which fires every `IC_HELD_RELEASE_INTERVAL = 2s`, picks the **lowest-hop-count** held announce, and re-injects it via `Transport.inbound(announce_packet.raw, announce_packet.receiving_interface)`. The re-injection re-enters this flow at step 1, so the rate-limiter doesn't get bypassed; the held announce takes its turn in line.
+Held announces are released later by `Interface.process_held_announces()` (`RNS/Interfaces/Interface.py:278-301` → `def process_held_announces(self)`), which fires every `IC_HELD_RELEASE_INTERVAL = 2s`, picks the **lowest-hop-count** held announce, and re-injects it via `Transport.inbound(announce_packet.raw, announce_packet.receiving_interface)`. The re-injection re-enters this flow at step 1, so the rate-limiter doesn't get bypassed; the held announce takes its turn in line.
 
-`held_announces` is bounded by `MAX_HELD_ANNOUNCES = 256` per interface; overflow simply drops the new announce instead of evicting an older one (`hold_announce` at `RNS/Interfaces/Interface.py:269-275` → `def hold_announce(self,`).
+`held_announces` is bounded by `MAX_HELD_ANNOUNCES = 256` per interface; overflow simply drops the new announce instead of evicting an older one (`hold_announce` at `RNS/Interfaces/Interface.py:270-276` → `def hold_announce(self,`).
 
 ### 4. Local-destination short-circuit
 
@@ -189,7 +189,7 @@ Three details that bite implementers:
 2. **`PATH_RESPONSE` is filtered OUT by default.** A handler must opt in via `handler.receive_path_responses = True` to see path-response announces; otherwise it sees only periodic re-announces. The path-table update in step 7 still happens regardless.
 3. **The handler is called in a fresh daemon thread.** A slow handler doesn't block subsequent inbound packets, but it also can't assume serialised execution — two announces from the same destination arriving back-to-back will run two handler threads concurrently. Handlers that mutate shared state need their own locks. (`RNS/Transport.py:2512` → `threading.Thread(target=job, daemon=True).start()`.)
 
-LXMF registers two handlers at `LXMF/LXMRouter.py:226-227` → `RNS.Transport.register_announce_handler(LXMFDeliveryAnnounceHandler(self))`:
+LXMF registers two handlers at `LXMF/LXMRouter.py:234-235` → `RNS.Transport.register_announce_handler(LXMFDeliveryAnnounceHandler(self))`:
 
 ```python
 RNS.Transport.register_announce_handler(LXMFDeliveryAnnounceHandler(self))   # aspect = "lxmf.delivery"

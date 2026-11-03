@@ -235,6 +235,9 @@ def find_snippet(index: SourceIndex, abspath: str, snippet: str, scope=None):
     return hits
 
 
+SPAN_LIMIT = 200  # max physical lines apply_fixes searches for one fix
+
+
 def logical_lines(lines):
     """Yield (first_lineno, text) with wrapped citations rejoined.
 
@@ -461,9 +464,20 @@ class Checker:
             with open(abs_doc, "r", encoding="utf-8") as f:
                 lines = f.read().splitlines(keepends=True)
             for fix in fixes:
-                idx = fix.doc_line - 1
-                if fix.old in lines[idx]:
-                    lines[idx] = lines[idx].replace(fix.old, fix.new, 1)
+                # fix.doc_line is the FIRST physical line of a logical line
+                # (see logical_lines), which can span many physical lines when
+                # prose holds an unbalanced backtick, e.g. micron's
+                # [label`target]. Search forward through that span; a fix that
+                # lands nowhere must not be reported as applied.
+                start = fix.doc_line - 1
+                for idx in range(start, min(start + SPAN_LIMIT, len(lines))):
+                    if fix.old in lines[idx]:
+                        lines[idx] = lines[idx].replace(fix.old, fix.new, 1)
+                        break
+                else:
+                    raise RuntimeError(
+                        f"{doc}:{fix.doc_line}: --fix could not find "
+                        f"{fix.old!r} to rewrite")
             with open(abs_doc, "w", encoding="utf-8") as f:
                 f.writelines(lines)
         return len(self.fixes)
@@ -535,13 +549,20 @@ def check_pins(checker: Checker, relpath, pins, exempt):
 
 
 
+# The "good" cases need a real line number, and a hard-coded one breaks on
+# every LXMF bump that moves LXMessage.py. {T} is replaced at run time with
+# the line SELFTEST_ANCHOR occupies in the pinned install, {T-1} with the
+# line before it.
+SELFTEST_FILE = "LXMF/LXMessage.py"
+SELFTEST_ANCHOR = "truncated_hash(self.outbound_ticket+self.message_id)"
+
 SELFTESTS = [
     # (name, markdown, expected error substring or None for "must pass")
     ("anchor absent from upstream",
-     "See (`LXMF/LXMessage.py:300` -> `SHA256(ticket || message_id)[:32]`).",
+     "See (`LXMF/LXMessage.py:{T}` -> `SHA256(ticket || message_id)[:32]`).",
      "anchor snippet not present"),
     ("drifted line number",
-     "See (`LXMF/LXMessage.py:299` -> "
+     "See (`LXMF/LXMessage.py:{T-1}` -> "
      "`truncated_hash(self.outbound_ticket+self.message_id)`).",
      "drifted"),
     ("missing symbol",
@@ -555,7 +576,7 @@ SELFTESTS = [
      "`lxmf_data[:-LXStamper.STAMP_SIZE]`.",
      "drifted"),
     ("good anchor",
-     "See (`LXMF/LXMessage.py:300` -> "
+     "See (`LXMF/LXMessage.py:{T}` -> "
      "`truncated_hash(self.outbound_ticket+self.message_id)`).",
      None),
     ("good symbol",
@@ -565,7 +586,7 @@ SELFTESTS = [
      "`RNS/Destination.py:611-645` -> `RNS/Identity.py:848-904`. Token decode.",
      None),
     ("anchor wrapped across a blockquote continuation",
-     "> the derivation (`LXMF/LXMessage.py:300` ->\n"
+     "> the derivation (`LXMF/LXMessage.py:{T}` ->\n"
      "> `truncated_hash(self.outbound_ticket+self.message_id)`) is 16 bytes.",
      None),
 ]
@@ -574,7 +595,16 @@ SELFTESTS = [
 def run_selftest(index):
     """Every failure mode the checker claims to catch must actually fail it."""
     failures = 0
+    abspath = index.resolve(SELFTEST_FILE)
+    hits = [i for i, l in enumerate(index.lines(abspath) if abspath else [], 1)
+            if SELFTEST_ANCHOR in l]
+    if len(hits) != 1:
+        print(f"  FAIL selftest setup: {SELFTEST_ANCHOR!r} occurs {len(hits)} "
+              f"time(s) in the pinned {SELFTEST_FILE}; pick a new anchor")
+        return 1
+    t = hits[0]
     for name, markdown, expected in SELFTESTS:
+        markdown = markdown.replace("{T-1}", str(t - 1)).replace("{T}", str(t))
         checker = Checker(index)
         checker.check_document("<selftest>", markdown.split("\n"))
         errors = [f for f in checker.findings if f.kind == "error"]

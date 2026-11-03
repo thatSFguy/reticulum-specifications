@@ -2,7 +2,7 @@
 
 What happens chronologically when an app calls `LXMRouter.handle_outbound(lxm)` for an `LXMessage` whose `desired_method == OPPORTUNISTIC` and whose payload fits in a single Reticulum packet.
 
-Pinned against **RNS 1.5.2 / LXMF 1.1.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.5.7 / LXMF 1.2.1**. Line numbers below are from those versions.
 
 Out of scope: messages that need a Reticulum Link (`DIRECT` method, larger payloads), propagation-node delivery (`PROPAGATED`), and paper messages (`PAPER`). Each gets its own flow document.
 
@@ -36,7 +36,7 @@ router.handle_outbound(lxm)
 
 ### 2. `LXMessage.pack()` builds the body and signs it
 
-`LXMF/LXMessage.py:355-461` → `def pack(self, payload_updated=False)`. Runs once per message. Constructs the LXMF body that will eventually become the Reticulum packet payload after Token encryption.
+`LXMF/LXMessage.py:362-468` → `def pack(self, payload_updated=False)`. Runs once per message. Constructs the LXMF body that will eventually become the Reticulum packet payload after Token encryption.
 
 ```
 payload      = msgpack.packb([timestamp_double, title_bytes, content_bytes, fields_dict])
@@ -51,7 +51,7 @@ The dual `payload` packing (once for the hash, then again with optional `stamp` 
 
 ### 3. Method and representation are fixed
 
-`LXMF/LXMessage.py:397-411` → `raise TypeError(f"LXMessage desired opportunistic delivery method`. With `desired_method == OPPORTUNISTIC`:
+`LXMF/LXMessage.py:411-418` → `raise TypeError(f"LXMessage desired opportunistic delivery method`. With `desired_method == OPPORTUNISTIC`:
 
 - If the payload size exceeds `ENCRYPTED_PACKET_MAX_CONTENT`, the router **silently downgrades** to `DIRECT` (Link) and the rest of this flow does not apply — see `send-link-lxmf.md` (TODO).
 - Otherwise, `self.method = OPPORTUNISTIC`, `self.representation = PACKET`, `self.__delivery_destination = self.__destination`.
@@ -72,7 +72,7 @@ When this preamble fires the message is queued, not sent — control returns; se
 
 ### 5. `LXMessage.send()` chooses the wire path
 
-`LXMF/LXMessage.py:463-508` → `def send(self)`. For `OPPORTUNISTIC`:
+`LXMF/LXMessage.py:470-506` → `def send(self)`. For `OPPORTUNISTIC`:
 
 ```python
 self.determine_transport_encryption()
@@ -86,7 +86,7 @@ self.state = LXMessage.SENT
 
 ### 6. `__as_packet()` constructs the `RNS.Packet`
 
-`LXMF/LXMessage.py:626-638` → `def __as_packet(self)`:
+`LXMF/LXMessage.py:648-660` → `def __as_packet(self)`:
 
 ```python
 RNS.Packet(self.__delivery_destination, self.packed[LXMessage.DESTINATION_LENGTH:])
