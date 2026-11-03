@@ -4,12 +4,6 @@ Outstanding work for the spec repo.
 
 ## Outreach
 
-- [ ] **File a community-documentation issue on `markqvist/Reticulum`.**
-      Link this repo as a community-maintained byte-level spec. Ask
-      whether the maintainer would like to bless / link from the
-      official Reticulum manual. Frame it as a complement to (not a
-      replacement for) the existing operator-focused docs.
-
 - [x] **File a `random_hash` interop issue on `attermann/microReticulum`.**
       Filed as [attermann/microReticulum#48](https://github.com/attermann/microReticulum/issues/48)
       on 2026-05-04. Documents the missing 5-byte timestamp half of
