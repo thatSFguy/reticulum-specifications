@@ -51,9 +51,10 @@ The dual `payload` packing (once for the hash, then again with optional `stamp` 
 
 ### 3. Method and representation are fixed
 
-`LXMF/LXMessage.py:411-418` → `raise TypeError(f"LXMessage desired opportunistic delivery method`. With `desired_method == OPPORTUNISTIC`:
+`LXMF/LXMessage.py:404-418` → `Falling back to link-based delivery.`. With `desired_method == OPPORTUNISTIC`:
 
-- If the payload size exceeds `ENCRYPTED_PACKET_MAX_CONTENT`, the router **silently downgrades** to `DIRECT` (Link) and the rest of this flow does not apply — see `send-link-lxmf.md` (TODO).
+- If the destination is `SINGLE` and the payload size exceeds `ENCRYPTED_PACKET_MAX_CONTENT`, `pack` **silently downgrades** to `DIRECT` (Link) and the rest of this flow does not apply — see [`send-link-lxmf.md`](send-link-lxmf.md).
+- If the destination is `PLAIN` and the payload exceeds `PLAIN_PACKET_MAX_CONTENT`, there is no downgrade: `pack` raises `TypeError` (`:411-418` → `raise TypeError(f"LXMessage desired opportunistic delivery method`).
 - Otherwise, `self.method = OPPORTUNISTIC`, `self.representation = PACKET`, `self.__delivery_destination = self.__destination`.
 
 ### 4. Path preamble (conditional)
@@ -72,7 +73,7 @@ When this preamble fires the message is queued, not sent — control returns; se
 
 ### 5. `LXMessage.send()` chooses the wire path
 
-`LXMF/LXMessage.py:470-506` → `def send(self)`. For `OPPORTUNISTIC`:
+`LXMF/LXMessage.py:470-524` → `def send(self)`. For `OPPORTUNISTIC`:
 
 ```python
 self.determine_transport_encryption()

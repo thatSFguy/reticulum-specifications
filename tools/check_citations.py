@@ -317,11 +317,22 @@ class Checker:
         source text; it never contains a citation of its own."""
         return bool(re.search(r"[\w/]+\.py::?\d*", snippet))
 
+    def check_range_order(self, doc, n, path, spec):
+        """`2989-2893` is not a range. Nothing downstream rejects it: the
+        anchor search simply covers no lines, or the bounds check passes."""
+        for part in (spec or "").split(","):
+            lo, sep, hi = part.strip().partition("-")
+            if sep and lo.strip().isdigit() and hi.strip().isdigit() \
+                    and int(lo) > int(hi):
+                self.err(doc, n, f"`{path}:{spec}` — inverted range "
+                                 f"{lo.strip()}-{hi.strip()}")
+
     def check_anchored(self, doc, n, path, lines_spec, symbol, snippet, display):
         """Resolve one anchored citation. `display` is the exact backticked
         left-hand side as written, so --fix can rewrite it in place."""
         if self.looks_like_citation(snippet):
             return
+        self.check_range_order(doc, n, path, lines_spec)
         abspath = self.index.resolve(path)
         if abspath is None:
             self.counts["skipped"] += 1
@@ -387,6 +398,7 @@ class Checker:
                              f"pinned source")
 
     def check_lines(self, doc, n, path, spec, kind="line"):
+        self.check_range_order(doc, n, path, spec)
         abspath = self.index.resolve(path)
         if abspath is None:
             self.counts["skipped"] += 1
@@ -598,6 +610,10 @@ SELFTESTS = [
      "See (`LXMF/LXMessage.py:{T-1}` -> "
      "`truncated_hash(self.outbound_ticket+self.message_id)`).",
      "drifted"),
+    ("inverted range",
+     "See (`LXMF/LXMessage.py:{T}-{T-1}` -> "
+     "`truncated_hash(self.outbound_ticket+self.message_id)`).",
+     "inverted range"),
     ("missing symbol",
      "See `RNS/Resource.py::no_such_method` for details.",
      "symbol not found"),

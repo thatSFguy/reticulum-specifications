@@ -91,8 +91,8 @@ jobs:
       # code: a line-only citation is bounds-checked, and an anchored range is
       # satisfied by its anchor appearing anywhere inside it. On the RNS 1.5.0
       # -> 1.5.2 bump that hid 52 broken citations behind a green check. This
-      # compares each citation against the base branch at the OLD pin and
-      # requires the source text to be unchanged.
+      # diffs each cited upstream file between the OLD and NEW pin and requires
+      # every cited line number to have moved exactly as that diff moves it.
       - name: Install the previous pin for comparison
         id: oldpin
         run: |
@@ -114,9 +114,10 @@ jobs:
 
       # An anchored range passes check_citations.py as long as its anchor is
       # anywhere inside it, so --fix above leaves a range whose start moved by
-      # a line or two alone. This uses both installs to put each cited line
-      # back on the text it cited at the old pin, where that is unambiguous.
-      # Whatever it cannot place is left for the gate below to report.
+      # a line or two alone. This moves each cited line through the old->new
+      # source diff instead, which places repeated lines (`else:`, `return`)
+      # correctly where matching their text did not. Cited lines that upstream
+      # changed are left for the gate below to report.
       - name: Re-point ranges that drifted inside their anchor
         if: steps.oldpin.outputs.changed == 'true'
         continue-on-error: true

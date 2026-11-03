@@ -30,7 +30,7 @@ Same as `send-opportunistic-lxmf.md` step 1 except the desired_method differs. T
 
 ### 3. `LXMRouter.process_outbound` for PROPAGATED method
 
-`LXMF/LXMRouter.py:2802-2896` → `def process_outbound(self, sender = None)` (the `PROPAGATED` branch is structurally similar to the `DIRECT` branch in `send-link-lxmf.md`). High-level state:
+`LXMF/LXMRouter.py:2802-3051` → `def process_outbound(self, sender = None)` (the `PROPAGATED` branch is structurally similar to the `DIRECT` branch in `send-link-lxmf.md`). High-level state:
 
 - If a Link to the propagation node already exists and is `ACTIVE`: reuse it.
 - Else if the path is known: open a fresh `RNS.Link(propagation_node_destination)` with `LXMRouter.process_outbound` registered as the `link_established_callback` so the LXM is sent as soon as the link establishes.
@@ -54,7 +54,7 @@ The Link DATA packet gets the standard mandatory PROOF receipt per §6.5; the re
 
 ### 7. Submit via Resource (RESOURCE representation)
 
-If `representation == RESOURCE`, the sender emits the `propagation_packed` blob as a Resource transfer per `flows/send-resource.md`. The propagation node accepts via `delivery_resource_advertised`, and on completion runs `propagation_resource_concluded` (`LXMRouter.py:2453-2541` → `def propagation_resource_concluded(self, resource)`) which decodes the `[time, [lxmf_data, ...]]` outer and stores each contained LXMF body.
+If `representation == RESOURCE`, the sender emits the `propagation_packed` blob as a Resource transfer per `flows/send-resource.md`. The propagation node accepts via `delivery_resource_advertised`, and on completion runs `propagation_resource_concluded` (`LXMRouter.py:2453-2584` → `def propagation_resource_concluded(self, resource)`) which decodes the `[time, [lxmf_data, ...]]` outer and stores each contained LXMF body.
 
 ### 8. The link can stay open or be torn down
 

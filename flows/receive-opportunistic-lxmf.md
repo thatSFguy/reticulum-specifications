@@ -177,7 +177,7 @@ Note: `unpack_from_bytes` does the stamp-strip-and-reencode variant but does **n
 
 ### 12. `__delivery_callback` fires — message reaches the app
 
-`LXMF/LXMRouter.py:2033-1960` → `return False`. The router's caller (Sideband, NomadNet, MeshChat, …) sets `__delivery_callback` via `register_delivery_callback(...)`. It receives the validated `LXMessage` object and decides what to show in the inbox.
+`LXMF/LXMRouter.py:2033-2041` → `return False`. The router's caller (Sideband, NomadNet, MeshChat, …) sets `__delivery_callback` via `register_delivery_callback(...)`. It receives the validated `LXMessage` object and decides what to show in the inbox.
 
 Important: the recipient's app should apply the SPEC.md §9.6 clockless-sender heuristic at this point — `if message.timestamp < 1577836800: message.timestamp = local_now()` — to keep clockless LoRa devices out of January 1970 in the inbox. Upstream `LXMessage.unpack_from_bytes` does **not** do this fix-up.
 

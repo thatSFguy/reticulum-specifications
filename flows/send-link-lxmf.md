@@ -13,9 +13,9 @@ Out of scope: opportunistic delivery (see [`send-opportunistic-lxmf.md`](send-op
 DIRECT is reached two ways:
 
 1. **App-requested:** `LXMessage(desired_method=LXMessage.DIRECT, …)`. Used for messages too large for one packet, or for sessions where the app wants the link's full-duplex DATA channel (e.g. an interactive chat). The router opens or reuses an `RNS.Link` to the recipient and sends the message over it.
-2. **Auto-downgrade from OPPORTUNISTIC:** `LXMessage.pack` at `LXMF/LXMessage.py:411-418` → `raise TypeError(f"LXMessage desired opportunistic delivery method` falls back to `DIRECT` if the encrypted-form content size exceeds `ENCRYPTED_PACKET_MAX_CONTENT`. The originator may or may not surface this transition to the user; it's silent at the protocol layer.
+2. **Auto-downgrade from OPPORTUNISTIC:** `LXMessage.pack` falls back to `DIRECT` when the destination is `SINGLE` and the content size exceeds `ENCRYPTED_PACKET_MAX_CONTENT` (`LXMF/LXMessage.py:404-408` → `Falling back to link-based delivery.`). A `PLAIN` destination is never downgraded: content over `PLAIN_PACKET_MAX_CONTENT` raises `TypeError` instead (`:411-418` → `raise TypeError(f"LXMessage desired opportunistic delivery method`). The originator may or may not surface this transition to the user; it's silent at the protocol layer.
 
-Within DIRECT there are two **representations** decided at pack time (`LXMF/LXMessage.py:421-421` → `self.representation = LXMessage.PACKET`):
+Within DIRECT there are two **representations** decided at pack time (`LXMF/LXMessage.py:424-431` → `elif self.desired_method == LXMessage.DIRECT:`):
 
 - **PACKET** — the body fits in a single `LINK_PACKET_MAX_CONTENT`-sized DATA packet on the link.
 - **RESOURCE** — the body is larger than that and must be sent as an `RNS.Resource` (multi-packet, fragmented, with its own checksum / progress / retransmit machinery). The Resource fragmentation protocol is currently NOT in [`../SPEC.md`](../SPEC.md); see [`../todo.md`](../todo.md). This flow document covers PACKET in full and only sketches RESOURCE.
@@ -151,7 +151,7 @@ The recipient (per the receive flow — TODO `receive-link-lxmf.md`) decrypts th
 
 ### 8. (Optional) RESOURCE representation for large bodies
 
-If the packed body exceeds `LINK_PACKET_MAX_CONTENT` (`LXMF/LXMessage.py:422-428` → `self.__delivery_destination = self.__destination`), `representation` is set to `RESOURCE` and step 5 instead constructs an `RNS.Resource` (`__as_resource`, line 651):
+If the packed body exceeds `LINK_PACKET_MAX_CONTENT` (`LXMF/LXMessage.py:424-431` → `elif self.desired_method == LXMessage.DIRECT:`), `representation` is set to `RESOURCE` and step 5 instead constructs an `RNS.Resource` (`LXMF/LXMessage.py::LXMessage.__as_resource`):
 
 ```python
 RNS.Resource(self.packed, self.__delivery_destination, callback=..., progress_callback=..., auto_compress=...)

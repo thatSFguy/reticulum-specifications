@@ -987,7 +987,7 @@ valid value. The range is not derivable from the algorithm — a stamp cost is
 a leading-zero-bit target over a SHA-256 digest, so *arithmetically* anything
 in `0..256` is satisfiable — it comes from the only path by which a conformant
 peer arrives at the value it announces, `LXMRouter.set_inbound_stamp_cost`
-(`LXMF/LXMRouter.py:388-400` → `def set_inbound_stamp_cost(self,`):
+(`LXMF/LXMRouter.py:388-404` → `def set_inbound_stamp_cost(self,`):
 
 ```python
 if stamp_cost == None:
@@ -1041,7 +1041,7 @@ For interop coverage today, "implement PoW for outbound; tolerate-but-don't-vali
 | `LXMF/LXStamper.py:15` → `STAMP_SIZE = RNS.Identity.HASHLENGTH//8` | `STAMP_SIZE = 32` (PoW stamp length) |
 | `LXMF/LXMessage.py:42` → `TICKET_LENGTH = RNS.Identity.TRUNCATED_HASHLENGTH//8` | `TICKET_LENGTH = 16` |
 | `LXMF/LXMessage.py:53` → `COST_TICKET = 0x100` | `COST_TICKET = 0x100` (256) — sentinel `stamp_value` for ticket-validated stamps |
-| `LXMF/LXMessage.py:280-293` → `def validate_stamp(self,` | `validate_stamp` (ticket-then-PoW dispatch); `:284` → `if self.stamp == RNS.Identity.truncated_hash(ticket+self.message_id):` is the 16-byte ticket comparison |
+| `LXMF/LXMessage.py:280-301` → `def validate_stamp(self,` | `validate_stamp` (ticket-then-PoW dispatch); `:284` → `if self.stamp == RNS.Identity.truncated_hash(ticket+self.message_id):` is the 16-byte ticket comparison |
 | `LXMF/LXMessage.py:303-335` → `def get_stamp(self,` | `get_stamp` (ticket-or-PoW emission); `:307` → `truncated_hash(self.outbound_ticket+self.message_id)` derives the 16-byte ticket stamp |
 | `RNS/Identity.py:362-369` → `def truncated_hash(data):` | `truncated_hash` — `full_hash(x)[:TRUNCATED_HASHLENGTH//8]` = 16 bytes |
 | `LXMF/LXMRouter.py:1954-2027` → `def lxmf_delivery(self,` | inbound dispatch — ticket cache + stamp validation + drop logic |
@@ -1645,7 +1645,7 @@ Where:
 - `packet_hash = Identity.full_hash(original_packet.get_hashable_part())` — the full SHA-256 (32 bytes, **not** truncated to 16) of the prove-target packet's hashable part. `get_hashable_part` is the same recipe used for `link_id` derivation in §6.3, so the proof binds to the version of the packet that survived any HEADER_1↔HEADER_2 conversion in transit (the high nibble of flags, hops byte, and any HEADER_2 transport_id are stripped before hashing).
 - `signature` is the destination's (or link's) Ed25519 signature **over `packet_hash`**, NOT over the proof body itself. The signing key is the destination's long-term Ed25519 private key for an opportunistic DATA proof, or **the link's Ed25519 signing key** (`Link.sig_prv`, `RNS/Link.py:277` → `self.sig_prv = self.owner.identity.sig_prv` / `:285` → `self.sig_prv = Ed25519PrivateKey.generate()` in RNS 1.5.7) for a Link DATA proof — the owner identity's long-term key on the responder side, the link's ephemeral Ed25519 keypair on the initiator side. (The HKDF-derived `signing_key` from §6.4.1 is a separate **symmetric HMAC key** for the link Token form §3.1 — it cannot produce an Ed25519 signature and is not used here.)
 
-The two forms are distinguished **purely by length** at the receiver. `PacketReceipt.validate_proof` (`RNS/Packet.py:495-538` → `def validate_proof(self, proof,`) dispatches on `len(proof) == 96` (explicit) vs `len(proof) == 64` (implicit); lengths matching neither are rejected outright. There is no flag bit or context byte that signals which form is being used — wire length is the only signal.
+The two forms are distinguished **purely by length** at the receiver. `PacketReceipt.validate_proof` (`RNS/Packet.py:495-539` → `def validate_proof(self, proof,`) dispatches on `len(proof) == 96` (explicit) vs `len(proof) == 64` (implicit); lengths matching neither are rejected outright. There is no flag bit or context byte that signals which form is being used — wire length is the only signal.
 
 #### 6.5.2 Choosing which form to emit
 
@@ -2232,7 +2232,7 @@ else:             announce_context = RNS.Packet.NONE
 
 The body — public_key || name_hash || random_hash || [ratchet_pub] || signature || app_data — is built identically; the random_hash carries a fresh emission timestamp, the signature is computed over the same signed_data per §4.2. A receiver running the validation flow in §4.5 can't tell from the announce body that this is a response to a query rather than a periodic re-announce; only the context byte distinguishes them.
 
-A `tag` argument hands a previously-built path-response announce body back unchanged when the same tag is requested twice within `Destination.PR_TAG_WINDOW = 30s` (`RNS/Destination.py:260-278` → `stale_responses =`). This is what prevents a flood of identical path-response announces when several relays simultaneously forward the same path? request to a leaf — the leaf serves the cached body to all of them with the same wire bytes, lining up dedup decisions on every transit relay.
+A `tag` argument hands a previously-built path-response announce body back unchanged when the same tag is requested twice within `Destination.PR_TAG_WINDOW = 30s` (`RNS/Destination.py:260-278` → `stale_responses =`). In current RNS that branch is unreachable: `Transport.preprocess_inbound` drops a repeated `destination_hash || tag` at ingress (§7.2.2) before the request reaches `Destination.announce`, and upstream marks the branch as such (`RNS/Destination.py:270` → `# This code is currently not used, since Transport will block duplicate`). It is kept for future multi-path support, where it would let Transport recognise one emitted announce arriving over several paths.
 
 #### 7.2.5 Timing: `PATH_REQUEST_GRACE` and roaming
 
@@ -2255,7 +2255,7 @@ The minimum path-request response logic for a non-transport leaf, in protocol te
 
 Steps 4 and 5 are both required. Skipping the dedup table makes the leaf storm the network with redundant announces; skipping the local-destination check means peers can never message you after the path expires.
 
-**Leaves may skip the §7.2.5 `PR_TAG_WINDOW` body cache** — step 4's dedup table already collapses identical-tag retransmits, and a leaf isn't fanning the same body to multiple downstream relays the way a transit node does, so the 30-second cache offers no additional dedup-convergence benefit. The cache exists upstream because `Destination.announce` runs the same code path for both leaves and transit nodes; on a leaf, the cache is incidental.
+**Leaves may skip the §7.2.4 `PR_TAG_WINDOW` body cache** — step 4's dedup table already drops identical-tag retransmits before they reach the destination, which is why upstream's cache branch is never taken today (§7.2.4).
 
 For a chronological walk-through of the full request → response → path-table cycle, see [`flows/path-discovery.md`](flows/path-discovery.md).
 
@@ -2498,7 +2498,7 @@ Full inventory in `RNode_Firmware/Framing.h:24-95`. The configuration handshake 
 
 #### 8.4.2 Bring-up sequence
 
-Adapted from `RNodeInterface.initRadio` (`RNS/Interfaces/RNodeInterface.py:478-488` → `def initRadio(self):`):
+Adapted from `RNodeInterface.initRadio` (`RNS/Interfaces/RNodeInterface.py:478-489` → `def initRadio(self):`):
 
 ```
 1. Open serial port (or BLE GATT, or whatever bearer)
@@ -3693,7 +3693,7 @@ One `key=value` entry is reserved: `pid=<id>` names the placeholder so a `p:<id>
 | Identify-on-connect | `Browser.py:2030-2037` → `def link_established(self,` |
 | Cache-TTL header `#!c=N` | `Browser.py:2100-2107` → `cache_time = Browser.DEFAULT_CACHE_TIME` |
 | Color headers `#!bg=` / `#!fg=` | `Browser.py::load_page` → `bgpos = self.markup.find("#!bg=")` |
-| `/file/...` download dispatch | `Browser.py:1577-1645, 2211-2261` → `def download_file(self,` + `Node.py:316-334` → `def serve_file(self,` |
+| `/file/...` download dispatch | `Browser.py:1577-1645, 2211-2265` → `def download_file(self,` + `Node.py:316-339` → `def serve_file(self,` |
 | Partial placeholders | `Browser.py:1282-1410` → `def __load_partial(self,` |
 | Allow modes / `ALLOW_LIST` enforcement | `Node.py::request_allowed` → `if hasattr(remote_identity, "hash") and remote_identity.hash in allowed_list:` |
 
@@ -3821,7 +3821,7 @@ The `announce_table` entry queues a delayed retransmit; the actual emission happ
 
 #### 12.3.1 Announce cap (`ANNOUNCE_CAP`)
 
-`Reticulum.ANNOUNCE_CAP = 2` (a percentage: default 2% of airtime, configurable via `[reticulum] announce_cap`; interfaces store it as the fraction `0.02`, see `flows/forward-announce.md` step 5). Each interface tracks its outbound announce airtime and when the rolling-window utilization exceeds the cap, further announces are queued in `interface.announce_queue` rather than transmitted immediately. `process_announce_queue` (`RNS/Interfaces/Interface.py:391-428` → `def process_announce_queue(self):`) drains the queue at a rate the cap permits, picking the lowest-hop-count entry first.
+`Reticulum.ANNOUNCE_CAP = 2` (a percentage: default 2% of airtime, configurable via `[reticulum] announce_cap`; interfaces store it as the fraction `0.02`, see `flows/forward-announce.md` step 5). Each interface tracks its outbound announce airtime and when the rolling-window utilization exceeds the cap, further announces are queued in `interface.announce_queue` rather than transmitted immediately. `process_announce_queue` (`RNS/Interfaces/Interface.py:391-432` → `def process_announce_queue(self):`) drains the queue at a rate the cap permits, picking the lowest-hop-count entry first.
 
 The cap is per-interface, not global — a relay with multiple interfaces budgets each one independently, which lets a fast TCP backbone interface announce freely while the same node throttles announces on a slow LoRa interface. Without per-interface caps, a single high-rate interface would starve every other.
 
