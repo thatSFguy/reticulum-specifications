@@ -112,26 +112,26 @@ to remove their markers:
       215 line references pointing at moved code with CI green: `MAX_RANDOM_BLOBS`
       cited at `RNS/Transport.py:159`, which is `MAX_RECEIPTS = 1024`.
 
-- [ ] **Convert the remaining 87 line-only citations to `path::symbol`.**
-      85 of the 87 sit inside a named symbol, so they can drop their line number
-      entirely rather than merely becoming repairable — `ast` already resolves
-      which symbol each line falls in (`SourceIndex.symbols`). The residue
-      `tools/anchor_citations.py` refuses to guess at is 40 blank/structural
-      lines, 31 whose text repeats in the file, 8 with no unique snippet under
-      the length cap, and 3 except-clauses. Several of the blank-line ones point
-      at nothing meaningful and want re-pointing, not anchoring. Once this is
-      done, `check_citations.py --strict` can become the CI gate so the
-      line-only count can only go down.
+- [x] **Convert the remaining line-only citations to anchored / `path::symbol` form.**
+      Done on the RNS 1.5.7 bump branch: 61 → 5 (with nomadnet installed, so §11.6
+      counts). The 5 left are `# path:line` comments in fenced code blocks, which
+      `check_citations.py` only accepts in line form; the quoted code under each
+      is what the drift gate compares. `--strict` does not count line-only
+      citations, so making it the CI gate would not lock this in — that needs a
+      separate line-only ceiling check.
 
-- [ ] **Audit the 429 anchors for semantic correctness.**
-      Anchoring cements, it does not verify: anchors were generated from the
-      line numbers as they stood, so a citation already pointing at the wrong
-      place now has a matching anchor for the wrong place. #46 found three that
-      way — #45 had shifted `Transport.py:1791`, `:1804` and `Packet.py:239`,
-      which were already at 1.5.2 coordinates, and the resulting anchors were
-      absurd on their face (the announce-bound row cited an `except` clause).
-      A citation whose anchor is a bare `RNS.log(...)` or a comment is the
-      signal to look for; there are 8 such today.
+- [ ] **Audit the anchors for semantic correctness.**
+      Anchoring cements, it does not verify: an anchor generated from a line that
+      was already wrong anchors the wrong place. Partly done on the RNS 1.5.7 bump
+      branch — every anchor on a bare `RNS.log(...)` or comment was reviewed (five
+      re-pointed, block-opening comments left), and the drift gate now repairs
+      ranges whose anchor stayed inside while the start moved. Found along the way:
+      §11.6 cited the env-var mapping at a log line, a flow cited the ANNOUNCE
+      branch for a LINKREQUEST claim, and §2.3 cited `outbound`'s range for code
+      in `_outbound`. Still open: anchored *ranges* whose anchor is not on the
+      first cited line (e.g. `Browser.py:219-269` → `if link_data != None:` at
+      221) — `--fix` derives drift from the anchor, so these shift correctly, but
+      nothing confirms the range frames what the prose describes.
 
 - [x] **Install `tools/requirements-docs.txt` in `verify.yml` so §11.6's
       citations are actually checked.** `check_citations.py` already

@@ -112,6 +112,24 @@ jobs:
           echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "site=$(/tmp/oldpin/bin/python -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')" >> "$GITHUB_OUTPUT"
 
+      # An anchored range passes check_citations.py as long as its anchor is
+      # anywhere inside it, so --fix above leaves a range whose start moved by
+      # a line or two alone. This uses both installs to put each cited line
+      # back on the text it cited at the old pin, where that is unambiguous.
+      # Whatever it cannot place is left for the gate below to report.
+      - name: Re-point ranges that drifted inside their anchor
+        if: steps.oldpin.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          python tools/check_citation_drift.py --fix \
+            --baseline /tmp/baseline \
+            --old-src "${{ steps.oldpin.outputs.site }}" \
+            --new-src "$(python -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')"
+
+      - name: Re-check citations after the range repair
+        if: steps.oldpin.outputs.changed == 'true'
+        run: python tools/check_citations.py
+
       - name: Gate on citations that moved onto different code
         if: steps.oldpin.outputs.changed == 'true'
         run: |
