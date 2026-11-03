@@ -248,7 +248,9 @@ class Collector(cc.Checker):
 
 
 RE_FENCE = re.compile(r"^\s*```")
-ARROWED = re.compile(r"\s*(?:→|->)\s*`")
+# An arrow at end of line counts too: the anchor wraps onto the next line,
+# which check_citations.logical_lines() rejoins.
+ARROWED = re.compile(r"\s*(?:→|->)(?:\s*`|\s*$)")
 
 
 def main():

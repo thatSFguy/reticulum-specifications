@@ -2,7 +2,7 @@
 
 What happens chronologically when one node wants to reach another whose path is missing from `Transport.path_table`. This flow drives the well-known `rnstransport.path.request` destination (dest_hash `6b9f66014d9853faab220fba47d02761`, see [`../SPEC.md`](../SPEC.md) §1.2 and §7.1) and the path-response announce that returns along the reverse path.
 
-Pinned against **RNS 1.5.2**.
+Pinned against **RNS 1.5.7**.
 
 Out of scope: the LXMF outbound retry that gates this flow (`flows/send-opportunistic-lxmf.md` step 4); the periodic `Transport.jobs` cycle that ages out stale paths; transport-mode rebroadcast of a known path on behalf of a remote requester (Tier 3 spec gap, see `../todo.md`).
 
@@ -51,15 +51,15 @@ Initiator records `Transport.path_requests[destination_hash] = time.time()` for 
 
 ### 2. Initiator: `Transport.outbound` broadcasts the request
 
-The path? packet then runs through the standard outbound flow (`send-opportunistic-lxmf.md` steps 7-8) but lands in the broadcast branch (`Transport.py:1196+`) because its destination is `PLAIN` and not in the `path_table`. Result: the packet is transmitted on every OUT-flagged interface, not just one. This is intentional — until we know where the target lives, we have to ask everyone.
+The path? packet then runs through the standard outbound flow (`send-opportunistic-lxmf.md` steps 7-8) but lands in the broadcast branch (`RNS/Transport.py:1196+`) because its destination is `PLAIN` and not in the `path_table`. Result: the packet is transmitted on every OUT-flagged interface, not just one. This is intentional — until we know where the target lives, we have to ask everyone.
 
-If the initiator is a transport node, the broadcast is subject to `announce_cap` rate limiting just like an announce (`Transport.py:1279+`). Leaf clients have no announce_cap and broadcast unthrottled.
+If the initiator is a transport node, the broadcast is subject to `announce_cap` rate limiting just like an announce (`RNS/Transport.py:1279+`). Leaf clients have no announce_cap and broadcast unthrottled.
 
 ### 3. Each peer: `Transport.inbound` recognizes the path-request destination
 
-Every node on every interface that hears the broadcast packet runs it through `Transport.inbound`. The dispatch by `(packet_type, destination_type)` lands in the `DATA + PLAIN` branch (`Transport.py:1465` → `local_destination = Transport.destinations_map[packet.destination_hash]` — same code as the opportunistic-LXMF DATA dispatch in `flows/receive-opportunistic-lxmf.md` step 6, but for a PLAIN destination instead of SINGLE).
+Every node on every interface that hears the broadcast packet runs it through `Transport.inbound`. The dispatch by `(packet_type, destination_type)` lands in the `DATA + PLAIN` branch (`RNS/Transport.py:1465` → `local_destination = Transport.destinations_map[packet.destination_hash]` — same code as the opportunistic-LXMF DATA dispatch in `flows/receive-opportunistic-lxmf.md` step 6, but for a PLAIN destination instead of SINGLE).
 
-The destination lookup hits `Transport.destinations_map[dest_hash]` for the well-known path-request destination — every node has this destination registered automatically during Transport start-up at `Transport.py:356-357` → `Transport.path_request_destination = RNS.Destination(None, RNS.Destination.IN, RNS.Destination.PLAIN, Transport.APP_NAME, "path", "request")`:
+The destination lookup hits `Transport.destinations_map[dest_hash]` for the well-known path-request destination — every node has this destination registered automatically during Transport start-up at `RNS/Transport.py:356-357` → `Transport.path_request_destination = RNS.Destination(None, RNS.Destination.IN, RNS.Destination.PLAIN, Transport.APP_NAME, "path", "request")`:
 
 ```python
 Transport.path_request_destination = RNS.Destination(
@@ -73,7 +73,7 @@ Control reaches `Destination.receive` → `path_request_handler(data, packet)`.
 
 ### 4. Each peer: parse and dedup
 
-`Transport.py:3380-3417` → `def path_request_handler(data, packet)`. Per [`../SPEC.md`](../SPEC.md) §7.2.1, the handler extracts:
+`RNS/Transport.py:3380-3417` → `def path_request_handler(data, packet)`. Per [`../SPEC.md`](../SPEC.md) §7.2.1, the handler extracts:
 
 ```
 data[ 0:16]  destination_hash      — the requested target
@@ -85,7 +85,7 @@ Tagless requests are dropped. Otherwise the handler builds `unique_tag = destina
 
 ### 5. Each peer: dispatch in `Transport.path_request`
 
-`Transport.py:3420-3599` → `def path_request(destination_hash,`, also documented in [`../SPEC.md`](../SPEC.md) §7.2.3. Five mutually-exclusive branches:
+`RNS/Transport.py:3420-3599` → `def path_request(destination_hash,`, also documented in [`../SPEC.md`](../SPEC.md) §7.2.3. Five mutually-exclusive branches:
 
 - **Branch 1 — local destination (the responder we want):** `destination_hash` is in `Transport.destinations_map`. Call `local_destination.announce(path_response=True, tag=tag, attached_interface=...)`. **Goto step 6.**
 - **Branch 2 — transit relay knows the path:** `transport_enabled` AND `dest_hash` in `path_table`. Pull the cached announce packet from `path_table[dest_hash][IDX_PT_PACKET]`, queue it for rebroadcast on the receiving interface with `PATH_REQUEST_GRACE = 0.4s` delay (or `+1.5s` on roaming-mode interfaces). Out of scope for this flow doc — see Tier 3 todo.
@@ -115,10 +115,10 @@ The path-response announce is sent on `attached_interface` only (the interface t
 The path-response announce is itself a regular ANNOUNCE packet, broadcast-routed. As it traverses each transit node, the standard receive-announce flow runs (`flows/receive-announce.md`):
 
 - Step 2: signature-only quick check, increment per-interface ingress-frequency deque.
-- Step 3: ingress-rate limit check — but **path-responses bypass ingress limiting** because the destination is in `Transport.path_requests` (recently-requested-by-us) or `Transport.discovery_path_requests` (recently-requested-on-behalf-of). See `Transport.py:1819-1821` → `if packet.destination_hash in Transport.path_requests or packet.destination_hash in Transport.discovery_path_requests:`.
+- Step 3: ingress-rate limit check — but **path-responses bypass ingress limiting** because the destination is in `Transport.path_requests` (recently-requested-by-us) or `Transport.discovery_path_requests` (recently-requested-on-behalf-of). See `RNS/Transport.py:1819-1821` → `if packet.destination_hash in Transport.path_requests or packet.destination_hash in Transport.discovery_path_requests:`.
 - Step 5: full `validate_announce` — same signature, dest_hash, collision checks as any announce.
-- Step 7: path table population. **The hop count is whatever the cached announce stored** (`Transport.py:3346-3524` → `def remote_path_handler(path,`: `packet.hops = path_table[dest_hash][IDX_PT_HOPS]` if served from cache by Branch 2); for Branch 1 responses, hops counts up naturally as the announce traverses back.
-- Step 8: announce handler fan-out. **Path-response announces are filtered OUT of regular handler dispatch by default** (`Transport.py:2486-2537` → `for handler in Transport.announce_handlers:`):
+- Step 7: path table population. **The hop count is whatever the cached announce stored** (`RNS/Transport.py:3346-3524` → `def remote_path_handler(path,`: `packet.hops = path_table[dest_hash][IDX_PT_HOPS]` if served from cache by Branch 2); for Branch 1 responses, hops counts up naturally as the announce traverses back.
+- Step 8: announce handler fan-out. **Path-response announces are filtered OUT of regular handler dispatch by default** (`RNS/Transport.py:2486-2537` → `for handler in Transport.announce_handlers:`):
   ```python
   if packet.context == RNS.Packet.PATH_RESPONSE:
       execute_callback = handler.receive_path_responses == True
@@ -133,9 +133,9 @@ When the path-response announce arrives back at the initiator, `validate_announc
 
 ### 9. Timeout and escalation
 
-If no response arrives within `Transport.PATH_REQUEST_TIMEOUT = 15s` (`RNS/Transport.py:134` → `PATH_REQUEST_TIMEOUT        = 15`), the `discovery_path_requests` entry on transit relays is aged out by the `Transport.jobs` cycle (`Transport.py:851-858` → `with Transport.discovery_pr_tags_lock:`). The originating LXM stays in `pending_outbound`; on the next retry tick after `LXMRouter.PATH_REQUEST_WAIT`, `LXMRouter.process_outbound` checks `has_path()` again, finds it still False, and re-issues `request_path`. This continues up to `LXMRouter.MAX_DELIVERY_ATTEMPTS` (typically 5) before the message is marked failed.
+If no response arrives within `Transport.PATH_REQUEST_TIMEOUT = 15s` (`RNS/Transport.py:134` → `PATH_REQUEST_TIMEOUT        = 15`), the `discovery_path_requests` entry on transit relays is aged out by the `Transport.jobs` cycle (`RNS/Transport.py:851-858` → `with Transport.discovery_pr_tags_lock:`). The originating LXM stays in `pending_outbound`; on the next retry tick after `LXMRouter.PATH_REQUEST_WAIT`, `LXMRouter.process_outbound` checks `has_path()` again, finds it still False, and re-issues `request_path`. This continues up to `LXMRouter.MAX_DELIVERY_ATTEMPTS` (typically 5) before the message is marked failed.
 
-The full outer retry behaviour (drop_path then re-request, the `MAX_PATHLESS_TRIES + 1` rediscovery branch at `LXMRouter.py:2735-2764` → `if lxmessage.method == LXMessage.OPPORTUNISTIC:`) is documented in `flows/send-opportunistic-lxmf.md` step 12.
+The full outer retry behaviour (drop_path then re-request, the `MAX_PATHLESS_TRIES + 1` rediscovery branch at `LXMRouter.py:2853-2899` → `if lxmessage.method == LXMessage.OPPORTUNISTIC:`) is documented in `flows/send-opportunistic-lxmf.md` step 12.
 
 ---
 

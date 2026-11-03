@@ -2,7 +2,7 @@
 
 The inverse of [`send-opportunistic-lxmf.md`](send-opportunistic-lxmf.md). What happens chronologically on the recipient when wire bytes for an opportunistic LXMF DATA packet arrive at one of its interfaces.
 
-Pinned against **RNS 1.5.2 / LXMF 1.1.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.5.7 / LXMF 1.2.1**. Line numbers below are from those versions.
 
 Out of scope: receiving a packet over an established Reticulum Link (DIRECT method), receiving propagated messages from a propagation node, and receiving an announce / path-request / link-request. Each gets its own flow document.
 
@@ -10,7 +10,7 @@ Out of scope: receiving a packet over an established Reticulum Link (DIRECT meth
 
 ## Preconditions
 
-- Recipient has an `RNS.Identity` with the X25519 + Ed25519 private keys, plus a `lxmf.delivery` `RNS.Destination` registered with `LXMRouter.register_delivery_identity` — that registration calls `delivery_destination.set_packet_callback(self.delivery_packet)` at `LXMF/LXMRouter.py:358` → `delivery_destination.set_packet_callback(self.delivery_packet)`, which is the hand-off point in step 7 below.
+- Recipient has an `RNS.Identity` with the X25519 + Ed25519 private keys, plus a `lxmf.delivery` `RNS.Destination` registered with `LXMRouter.register_delivery_identity` — that registration calls `delivery_destination.set_packet_callback(self.delivery_packet)` at `LXMF/LXMRouter.py:368` → `delivery_destination.set_packet_callback(self.delivery_packet)`, which is the hand-off point in step 7 below.
 - Recipient has, at some point, been the target of one or more announces from the sender, so `RNS.Identity.known_destinations` knows the sender's full `public_key` (X25519 || Ed25519) under their `dest_hash`. Without this, signature validation in step 11 will fail with `unverified_reason = SOURCE_UNKNOWN`.
 
 ---
@@ -93,7 +93,7 @@ def receive(self, packet):
         return True
 ```
 
-For `lxmf.delivery` destinations, `self.callbacks.packet` was set at `LXMF/LXMRouter.py:358` → `delivery_destination.set_packet_callback(self.delivery_packet)` to the router's `delivery_packet` — see step 9.
+For `lxmf.delivery` destinations, `self.callbacks.packet` was set at `LXMF/LXMRouter.py:368` → `delivery_destination.set_packet_callback(self.delivery_packet)` to the router's `delivery_packet` — see step 9.
 
 ### 8. `Destination.decrypt` → `Identity.decrypt` — Token decode with ratchet ring
 
@@ -123,7 +123,7 @@ If the destination has ratchets enabled but on-disk state has gone stale, `Desti
 
 ### 9. `LXMRouter.delivery_packet(data, packet)` — proof first, then async parse
 
-`LXMF/LXMRouter.py:1926-1954` → `def delivery_packet(self, data, packet)`:
+`LXMF/LXMRouter.py:2043-2071` → `def delivery_packet(self, data, packet)`:
 
 ```python
 def delivery_packet(self, data, packet):
@@ -144,7 +144,7 @@ The opportunistic-form re-prepends `packet.destination.hash` because step 6 of t
 
 ### 10. `LXMessage.unpack_from_bytes(lxmf_data)` — body parse and signature validation
 
-`LXMF/LXMessage.py:747-822` → `def unpack_from_bytes(lxmf_bytes`. Field slicing:
+`LXMF/LXMessage.py:769-844` → `def unpack_from_bytes(lxmf_bytes`. Field slicing:
 
 ```
 destination_hash = lxmf_data[ 0:16]
@@ -167,7 +167,7 @@ Note: `unpack_from_bytes` does the stamp-strip-and-reencode variant but does **n
 
 ### 11. Stamp / ticket / dedup checks
 
-`LXMF/LXMRouter.py:1837-1924` → `def lxmf_delivery(self, lxmf_data`:
+`LXMF/LXMRouter.py:1954-2041` → `def lxmf_delivery(self, lxmf_data`:
 
 - **Ticket** (`message.fields[FIELD_TICKET]`): if present and non-expired, cached for outbound use.
 - **Stamp**: if the local destination has a `stamp_cost`, `message.validate_stamp(required_cost, tickets=...)` runs; a missing/invalid stamp causes the message to be dropped when `_enforce_stamps` is true.
@@ -177,7 +177,7 @@ Note: `unpack_from_bytes` does the stamp-strip-and-reencode variant but does **n
 
 ### 12. `__delivery_callback` fires — message reaches the app
 
-`LXMF/LXMRouter.py:1916-1924` → `return False`. The router's caller (Sideband, NomadNet, MeshChat, …) sets `__delivery_callback` via `register_delivery_callback(...)`. It receives the validated `LXMessage` object and decides what to show in the inbox.
+`LXMF/LXMRouter.py:2033-1960` → `return False`. The router's caller (Sideband, NomadNet, MeshChat, …) sets `__delivery_callback` via `register_delivery_callback(...)`. It receives the validated `LXMessage` object and decides what to show in the inbox.
 
 Important: the recipient's app should apply the SPEC.md §9.6 clockless-sender heuristic at this point — `if message.timestamp < 1577836800: message.timestamp = local_now()` — to keep clockless LoRa devices out of January 1970 in the inbox. Upstream `LXMessage.unpack_from_bytes` does **not** do this fix-up.
 

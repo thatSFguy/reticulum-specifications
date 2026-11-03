@@ -1,6 +1,6 @@
 # Flow: forward an announce (transport-node rebroadcast)
 
-What a transport-mode node does when it receives an inbound announce destined for a non-local destination. This is the flow that makes the mesh actually mesh — without it, announces never propagate beyond direct radio range. Pinned against **RNS 1.5.2**; cross-references [`../SPEC.md`](../SPEC.md) §4.5 (validation), §12.3 (rebroadcast rules), §12.4 (path table).
+What a transport-mode node does when it receives an inbound announce destined for a non-local destination. This is the flow that makes the mesh actually mesh — without it, announces never propagate beyond direct radio range. Pinned against **RNS 1.5.7**; cross-references [`../SPEC.md`](../SPEC.md) §4.5 (validation), §12.3 (rebroadcast rules), §12.4 (path table).
 
 This flow only runs on a node with `enable_transport = Yes` per §12.1. Leaf clients can ignore it entirely.
 
@@ -31,7 +31,7 @@ if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.contex
 
 ### 3. Insert into `announce_table`
 
-`Transport.py:2363-2374` → `Transport.announce_table[packet.destination_hash] = [`. The relay adds an entry:
+`RNS/Transport.py:2363-2374` → `Transport.announce_table[packet.destination_hash] = [`. The relay adds an entry:
 
 ```python
 Transport.announce_table[packet.destination_hash] = [
@@ -70,11 +70,11 @@ for dest_hash, entry in announce_table.items():
     entry[RETRIES] -= 1
 ```
 
-The actual code is in `Transport.py:737-800` → `Transport.links_last_checked =` (the `jobs` drain) and `:2090-2290` → `link_entry = [ now,` (the inbound announce path); the structure above is a simplification for the spec.
+The actual code is in `RNS/Transport.py:737-800` → `Transport.links_last_checked =` (the `jobs` drain) and `:2090-2290` → `link_entry = [ now,` (the inbound announce path); the structure above is a simplification for the spec.
 
 ### 5. Per-interface `announce_queue` drain
 
-Each interface independently throttles its outbound announces against `interface.announce_cap` (default `Reticulum.ANNOUNCE_CAP = 2.0` = 2% airtime). `Interface.process_announce_queue` (`RNS/Interfaces/Interface.py:390-431` → `min_hops = min(entry["hops"] for entry in self.announce_queue)`) drains the queue at a rate the cap permits, **picking the lowest-hop-count entry first** so closer destinations propagate before further ones:
+Each interface independently throttles its outbound announces against `interface.announce_cap`, a **fraction** of airtime: `Reticulum.ANNOUNCE_CAP = 2` is a percentage, divided by 100 wherever an interface is configured (`RNS/Reticulum.py:948` → `announce_cap = Reticulum.ANNOUNCE_CAP/100.0`), so the default is `0.02`. The lazy fallback for an interface that reaches the rebroadcast path without one does the same (`RNS/Transport.py:1524` → `interface.announce_cap = RNS.Reticulum.ANNOUNCE_CAP/100.0`); through RNS 1.5.2 that fallback assigned the raw `2`, a 200% cap that throttled nothing. `Interface.process_announce_queue` (`RNS/Interfaces/Interface.py:391-432` → `min_hops = min(entry["hops"] for entry in self.announce_queue)`) drains the queue at a rate the cap permits, **picking the lowest-hop-count entry first** so closer destinations propagate before further ones:
 
 ```python
 min_hops = min(e["hops"] for e in self.announce_queue)

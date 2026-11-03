@@ -1,6 +1,6 @@
 # Flow: receive an LXMF message over a Reticulum Link
 
-The inverse of [`send-link-lxmf.md`](send-link-lxmf.md), covering both halves of the responder side: accepting the inbound LINKREQUEST, sending the LRPROOF, then handling LXMF DATA on the established link. Pinned against **RNS 1.5.2 / LXMF 1.1.1**; cross-references [`../SPEC.md`](../SPEC.md) §6 (Link), §6.5 (PROOF), §6.6 (signalling), §6.7 (KEEPALIVE/teardown), §10 (Resource).
+The inverse of [`send-link-lxmf.md`](send-link-lxmf.md), covering both halves of the responder side: accepting the inbound LINKREQUEST, sending the LRPROOF, then handling LXMF DATA on the established link. Pinned against **RNS 1.5.7 / LXMF 1.2.1**; cross-references [`../SPEC.md`](../SPEC.md) §6 (Link), §6.5 (PROOF), §6.6 (signalling), §6.7 (KEEPALIVE/teardown), §10 (Resource).
 
 ---
 
@@ -47,7 +47,7 @@ where `signature = sign(link_id || responder_X25519_pub || responder_long_term_E
 
 After the initiator validates the LRPROOF and sends `Link.LRRTT (0xFE)` carrying its measured RTT, the responder receives it at `Link.receive` line 1056-1059 and calls `rtt_packet`. The responder's RTT cache updates and `Link.STATUS = ACTIVE` triggers the `link_established_callback` registered via `Destination.set_link_established_callback`.
 
-For LXMF, that callback is `LXMRouter.delivery_link_established` (`LXMF/LXMRouter.py:1956-1963` → `def delivery_link_established(self, link)`):
+For LXMF, that callback is `LXMRouter.delivery_link_established` (`LXMF/LXMRouter.py:2073-2080` → `def delivery_link_established(self, link)`):
 
 ```python
 link.track_phy_stats(True)
@@ -63,7 +63,7 @@ This is what makes inbound DATA on this link route into LXMF processing.
 
 ### 5. Inbound LXMF DATA — single-packet (PACKET representation)
 
-A regular DATA packet on the link (`context = NONE`, Token-encrypted with link session key per §3.1). `Link.receive` decrypts and passes the plaintext to `delivery_packet(data, packet)` (`LXMF/LXMRouter.py:1926-1954` → `def delivery_packet(self, data, packet)`) — the same handler used by opportunistic delivery. Differences:
+A regular DATA packet on the link (`context = NONE`, Token-encrypted with link session key per §3.1). `Link.receive` decrypts and passes the plaintext to `delivery_packet(data, packet)` (`LXMF/LXMRouter.py:2043-2071` → `def delivery_packet(self, data, packet)`) — the same handler used by opportunistic delivery. Differences:
 
 - `packet.destination_type == LINK` so `method = DIRECT`.
 - The LXMF body arrives **with** the recipient's dest_hash (§5.2), so no re-prepend like the opportunistic path does at step 9 of `receive-opportunistic-lxmf.md`.
@@ -72,7 +72,7 @@ The handler calls `packet.prove()` immediately (mandatory PROOF receipt per §6.
 
 ### 6. Inbound LXMF DATA — Resource representation
 
-A larger LXMF body arrives as a Resource transfer per `flows/receive-resource.md`. The Link's `resource_strategy = ACCEPT_APP` triggers `delivery_resource_advertised(resource)` (`LXMF/LXMRouter.py:1977-1984` → `def delivery_resource_advertised(self, resource)`):
+A larger LXMF body arrives as a Resource transfer per `flows/receive-resource.md`. The Link's `resource_strategy = ACCEPT_APP` triggers `delivery_resource_advertised(resource)` (`LXMF/LXMRouter.py:2094-2101` → `def delivery_resource_advertised(self, resource)`):
 
 ```python
 def delivery_resource_advertised(self, resource):

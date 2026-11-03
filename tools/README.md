@@ -66,7 +66,7 @@ error, so the list can't rot.
 
 ## Status
 
-Populated against RNS 1.5.2 / LXMF 1.1.1 (all 21 scripts re-run green at this pin):
+Populated against RNS 1.5.7 / LXMF 1.2.1 (all 22 scripts re-run green at this pin):
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|
