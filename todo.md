@@ -143,7 +143,7 @@ to remove their markers:
       hundred lines above it, and CI was green throughout (fixed in #54).
       Expect the first run to surface more of the same.
 
-- [ ] **Check every pin declaration, not just the header one.** SPEC.md
+- [x] **Check every pin declaration, not just the header one.** SPEC.md
       declares the NomadNet pin twice — line 5 and again in §11.6's own
       preamble — and `check_citations.py` only knows about line 5. On #53
       that is exactly what happened: `resync-citations --fix` rewrote the
@@ -152,8 +152,13 @@ to remove their markers:
       every `NomadNet X.Y.Z` (and `RNS X.Y.Z` / `LXMF X.Y.Z`) occurrence
       and require them to agree with `tools/`. Same shape of bug as the
       12 flow docs that sat on a stale pin declaration above.
+      Done: `check_citations.py` now also checks inline current-pin claims
+      (`in RNS X`, `(LXMF X)`, `against …`, `upstream …`) and `--fix`
+      rewrites them; history phrasing (`since`, `through`, `as of`, `≥`,
+      `Changed in`, `New in`) is not matched. Its first run found 7 stale
+      claims on `master`, all fixed.
 
-- [ ] **Make the resync drift gate fire on a docs-pin bump.** The
+- [x] **Make the resync drift gate fire on a docs-pin bump.** The
       "Install the previous pin for comparison" step in
       `resync-citations.yml` diffs `tools/requirements.txt` only, so a
       `requirements-docs.txt` bump reports "Pin unchanged; nothing to
@@ -165,12 +170,15 @@ to remove their markers:
       neither inside a cited range, and both files keep identical line
       counts. Verified by hand off the sdists, which is precisely the work
       this gate exists to stop a human from having to do.
+      Done in #66: the step now diffs `requirements-docs.txt` too, and the
+      old-pin venv installs both files.
 
-- [ ] **Anchor §11.6's citations once they resolve in CI.** All ~21 are
+- [x] **Anchor §11.6's citations once they resolve in CI.** All ~21 are
       bare `file:line`, the weakest form, and they are pinned to a package
       whose internals move faster than RNS's. Blocked on the
       `requirements-docs.txt` item above; once that lands,
       `tools/anchor_citations.py` can run over the section unchanged.
+      Done in #66, along with the hand-anchored residue.
 
 - [x] **Re-anchor the 12 flow docs still declaring the pre-1.5.0 pin.**
       Done — all 12 re-read against `rns==1.5.0` / `lxmf==1.1.1`, every line

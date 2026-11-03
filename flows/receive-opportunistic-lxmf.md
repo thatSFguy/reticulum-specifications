@@ -163,7 +163,7 @@ signed_part  = hashed_part || message_hash
 
 Signature validation calls `source.identity.validate(signature, signed_part)`. The sender's identity is recalled from `RNS.Identity.known_destinations` via `RNS.Identity.recall(source_hash)` at line 765 — keyed by the sender's **destination hash**, not their identity hash, per SPEC.md §5.4 and §9.1. If the sender is unknown locally (no announce ever received), `unverified_reason = SOURCE_UNKNOWN` and `signature_validated = False`; the message is still surfaced to the app callback in step 12, but downstream UI should mark it untrusted.
 
-Note: `unpack_from_bytes` does the stamp-strip-and-reencode variant but does **not** also try the as-received `packed_payload` if validation fails. SPEC.md §5.6 documents both raw and stripped-reencoded as valid receiver behavior; upstream LXMF 0.9.7 only does the stripped form (or the raw form when no stamp was present). The spec's stronger receiver tolerance is a recommendation for non-upstream implementers, not a description of upstream.
+Note: `unpack_from_bytes` does the stamp-strip-and-reencode variant but does **not** also try the as-received `packed_payload` if validation fails. SPEC.md §5.6 documents both raw and stripped-reencoded as valid receiver behavior; upstream LXMF 1.2.1 only does the stripped form (or the raw form when no stamp was present). The spec's stronger receiver tolerance is a recommendation for non-upstream implementers, not a description of upstream.
 
 ### 11. Stamp / ticket / dedup checks
 

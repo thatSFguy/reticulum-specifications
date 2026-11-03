@@ -36,7 +36,10 @@ block as a leading `#` comment):
 
 Also checks that pin declarations in document headers ("Pinned against
 **RNS 1.5.0 / LXMF 1.1.1**", "**Last verified against:** ...") match
-tools/requirements.txt. Files listed in tools/citations-exempt.txt are
+tools/requirements.txt, and so do inline current-pin claims anywhere in the
+text ("... in RNS 1.5.7", "(LXMF 1.2.1)", "verified against RNS 1.5.7",
+"upstream LXMF 1.2.1 ..."). Historical statements use "since", "through",
+"as of", "≥", "Changed in" or "New in", which are not matched. Files listed in tools/citations-exempt.txt are
 allowed to declare a stale pin, with a reason; an exemption that is no
 longer needed is itself an error, so the list cannot go stale.
 
@@ -86,6 +89,19 @@ RE_FENCE_COMMENT = re.compile(
 RE_PIN_DECL = re.compile(r"Pinned against \*\*(?P<body>[^*]+)\*\*")
 RE_LAST_VERIFIED = re.compile(r"\*\*Last verified against:\*\*(?P<body>.*)$")
 RE_PIN_TOKEN = re.compile(r"\b(RNS|LXMF|NomadNet)\s+`?(\d+\.\d+\.\d+)`?")
+
+# Inline current-pin claims: "`Packet.py:90` ... in RNS 1.5.7", "(RNS 1.5.7)",
+# "verified against LXMF 1.2.1", "upstream LXMF 1.2.1 only does ...". These
+# assert something about the pinned version as surely as a header does, and a
+# bump that rewrites only the header leaves them stale. History is written with
+# other words -- "since", "through", "as of", "until", "≥", "Changed in",
+# "New in" -- none of which match here. To state a fact about an older version
+# that would otherwise match, use one of those.
+RE_INLINE_PIN = re.compile(
+    r"(?:(?<![Cc]hanged )(?<![Nn]ew )\b[Ii]n\s+|\bagainst\s+(?:\*\*)?"
+    r"|\bupstream\s+|\()"
+    r"`?(?P<tok>(?P<pkg>RNS|LXMF|NomadNet)\s+`?(?P<ver>\d+\.\d+\.\d+))"
+)
 
 
 def norm(s: str) -> str:
@@ -542,6 +558,23 @@ def check_pins(checker: Checker, relpath, pins, exempt):
                         checker.err(relpath, n,
                                     f"{msg} (--fix rewrites this)", fixable=True)
                         checker.fixes.append(Fix(relpath, n, tok, new_tok))
+        if any(rx.search(raw) for rx in (RE_PIN_DECL, RE_LAST_VERIFIED)):
+            continue                     # a header declaration, checked above
+        for im in RE_INLINE_PIN.finditer(raw):
+            pkg, ver, tok = im.group("pkg"), im.group("ver"), im.group("tok")
+            pinned = pins.get(pkg.lower())
+            if not pinned or ver == pinned:
+                continue
+            mismatched = True
+            msg = (f"inline pin claim '{tok}', but tools/ pins "
+                   f"{pkg.lower()}=={pinned}. If this describes an older "
+                   f"version on purpose, say 'as of' / 'through' / 'since'")
+            if relpath in exempt:
+                checker.findings.append(
+                    Finding("info", relpath, n, f"{msg} — exempt: {exempt[relpath]}"))
+            else:
+                checker.err(relpath, n, f"{msg} (--fix rewrites this)", fixable=True)
+                checker.fixes.append(Fix(relpath, n, tok, tok.replace(ver, pinned)))
     if relpath in exempt and not mismatched:
         checker.err(relpath, 1,
                     "listed in tools/citations-exempt.txt but its pin "
@@ -592,9 +625,36 @@ SELFTESTS = [
 ]
 
 
+# (line, expected count of RE_INLINE_PIN matches). Current-pin phrasings must
+# match; history phrasings must not, or every bump would rewrite history.
+PIN_SELFTESTS = [
+    ("(`RNS/Destination.py:85` → `RATCHET_COUNT = 512` in RNS 1.5.7)", 1),
+    ("| `Transport.MAX_RANDOM_BLOBS = 64` (RNS 1.5.7) |", 1),
+    ("(verified against LXMF 1.2.1 by `tools/verify_lxmf_fields.py`)", 1),
+    ("Line citations in this section are against **NomadNet 1.4.4**", 1),
+    ("upstream LXMF 1.2.1 only does the stripped form", 1),
+    ("In RNS 1.5.7 the clamp is performed by transit relays", 1),
+    ("Since RNS 1.5.2 the parser also rejects an empty data field", 0),
+    ("Through RNS 1.4.2 the relay forwarded link DATA", 0),
+    ("**Ingress bound (RNS ≥ 1.5.2).**", 0),
+    ("> **Changed in RNS 1.5.0 — larger stream chunks.**", 0),
+    ("| drains continuously | **New in RNS 1.5.0.** Dequeues", 0),
+    ("Official as of LXMF 1.0.0 (2026-05-28)", 0),
+    ("line 1282 as of RNS 1.5.2", 0),
+]
+
+
 def run_selftest(index):
     """Every failure mode the checker claims to catch must actually fail it."""
     failures = 0
+    for line, want in PIN_SELFTESTS:
+        got = len(RE_INLINE_PIN.findall(line))
+        if got != want:
+            print(f"  FAIL pin selftest {line!r}: {got} inline pin claim(s), "
+                  f"expected {want}")
+            failures += 1
+    if not failures:
+        print(f"  ok   {len(PIN_SELFTESTS)} inline-pin classifier cases")
     abspath = index.resolve(SELFTEST_FILE)
     hits = [i for i, l in enumerate(index.lines(abspath) if abspath else [], 1)
             if SELFTEST_ANCHOR in l]
@@ -668,7 +728,8 @@ def main():
         if failures:
             print(f"FAIL: {failures} selftest(s) did not behave as documented")
             return 1
-        print(f"PASS: {len(SELFTESTS)} selftests")
+        print(f"PASS: {len(SELFTESTS)} selftests, "
+              f"{len(PIN_SELFTESTS)} inline-pin cases")
         return 0
 
     pins = load_pins()

@@ -246,7 +246,7 @@ The reason: `X25519PrivateKey.from_private_bytes` and `Ed25519PrivateKey.from_pr
 
 #### Cross-implementation portability
 
-The format is portable across implementations because there's nothing in it but the raw bytes. A 64-byte file written by Python RNS is byte-identical to one written by any clean-room implementation that follows this section, and both produce the same `identity_hash` and `lxmf.delivery` `destination_hash` when fed back through §1.1 and §1.2 — test vectors at [`test-vectors/identities.json`](test-vectors/identities.json) demonstrate the round-trip against RNS 1.2.4.
+The format is portable across implementations because there's nothing in it but the raw bytes. A 64-byte file written by Python RNS is byte-identical to one written by any clean-room implementation that follows this section, and both produce the same `identity_hash` and `lxmf.delivery` `destination_hash` when fed back through §1.1 and §1.2 — test vectors at [`test-vectors/identities.json`](test-vectors/identities.json) demonstrate the round-trip, checked at the pinned RNS by `tools/verify_destination_hash.py`.
 
 > ⚠️ **Spec correction:** Earlier revisions of this section described the on-disk order as Ed25519 first, X25519 second ("opposite of the public_key concatenation"). That was wrong — verified by re-running `Identity.to_file` and reading back the bytes against the test vector at `test-vectors/identities.json`, the actual order is X25519 first, Ed25519 second, identical to the public_key order. Implementations following the prior spec wording would have corrupted identity files when interoperating with upstream Python RNS.
 
@@ -353,7 +353,7 @@ bytes on the wire; only the masking arithmetic differs.
 
 When `ifac_flag = 1`, an `ifac_size`-byte IFAC field appears immediately after byte 2 of the header — i.e. between the `hops` byte and the start of `ADDRESSES`. `ifac_size` is interface-configured and ranges from `IFAC_MIN_SIZE = 1` byte (`RNS/Reticulum.py:151-155` → `HEADER_MAXSIZE =`) up to 64 bytes (full Ed25519 signature). The receiving side strips the IFAC after verification and rebuilds the un-IFACed packet for upstream processing — `Transport.handle_ifac` (`RNS/Transport.py:1689-1716` → `def handle_ifac(raw,`), with the pre-1.5.2 form retained as `Transport.handle_ifac_legacy` (`RNS/Transport.py:1719-1750` → `def handle_ifac_legacy(raw,`).
 
-> ⚠️ **Spec correction.** Earlier revisions of this section (through commit [`8c4d550`](https://github.com/thatSFguy/reticulum-specifications/commit/8c4d550)) treated `header_type` as a 2-bit field occupying bits 7-6, with bit 7 reserved. That was wrong: bit 7 has always been the IFAC flag (`Transport.handle_outgoing_ifac` line 1282 in RNS 1.5.2; `Transport.transmit` line 1255 in RNS 1.5.0), and `header_type` is 1 bit at position 6. The official manual §4.6.3 documents the correct layout. Implementations that followed the prior wording will mis-parse IFAC-protected packets as `header_type = 2 or 3` and reject them. Surfaced by the reporter on [issue #4](https://github.com/thatSFguy/reticulum-specifications/issues/4) item #1.
+> ⚠️ **Spec correction.** Earlier revisions of this section (through commit [`8c4d550`](https://github.com/thatSFguy/reticulum-specifications/commit/8c4d550)) treated `header_type` as a 2-bit field occupying bits 7-6, with bit 7 reserved. That was wrong: bit 7 has always been the IFAC flag (`Transport.handle_outgoing_ifac` line 1282 as of RNS 1.5.2; `Transport.transmit` line 1255 as of RNS 1.5.0), and `header_type` is 1 bit at position 6. The official manual §4.6.3 documents the correct layout. Implementations that followed the prior wording will mis-parse IFAC-protected packets as `header_type = 2 or 3` and reject them. Surfaced by the reporter on [issue #4](https://github.com/thatSFguy/reticulum-specifications/issues/4) item #1.
 
 ### 2.2 Two header forms
 
@@ -444,7 +444,7 @@ Full context inventory from `RNS/Packet.py:72-92` → `NONE = 0x00 # Generic` (R
 | `0xFA` | KEEPALIVE | Link keepalive (sent periodically while a Link is idle) |
 | `0xFB` | LINKIDENTIFY | Backchannel-identify proof on an established Link (§5 backchannel) |
 | `0xFC` | LINKCLOSE | Link teardown notification |
-| `0xFD` | LINKPROOF | Defined but **not actually emitted** by upstream RNS 1.2.4 in this revision. Both `Identity.prove` and `Link.prove_packet` build their proof packets with `context = NONE (0x00)` — the proof-ness is conveyed by `packet_type = PROOF (3)`, not by this context byte. Reserved for a future revision; see §6.5 |
+| `0xFD` | LINKPROOF | Defined but **not actually emitted** by upstream RNS 1.5.7. Both `Identity.prove` and `Link.prove_packet` build their proof packets with `context = NONE (0x00)` — the proof-ness is conveyed by `packet_type = PROOF (3)`, not by this context byte. Reserved for a future revision; see §6.5 |
 | `0xFE` | LRRTT | Link round-trip-time reply — initiator's link-activation packet (§6.4.2) |
 | `0xFF` | LRPROOF | Link request proof (§6.2) |
 
@@ -1699,7 +1699,7 @@ implicit form (64 bytes total body):
 [ 64B Ed25519_signature(SHA256(get_hashable_part(original_packet))) ]
 ```
 
-Note `context = 0x00 (NONE)` in both cases — the proof-ness is conveyed by `packet_type = PROOF (3)` in the flag byte, not by a context. This is in contrast to LRPROOF (which uses `context = 0xFF`) and RESOURCE_PRF (which uses `context = 0x05`). The `LINKPROOF (0xFD)` context constant defined at `RNS/Packet.py:90` → `LINKPROOF = 0xFD` is reserved but not actually used by either prove path in RNS 1.5.2.
+Note `context = 0x00 (NONE)` in both cases — the proof-ness is conveyed by `packet_type = PROOF (3)` in the flag byte, not by a context. This is in contrast to LRPROOF (which uses `context = 0xFF`) and RESOURCE_PRF (which uses `context = 0x05`). The `LINKPROOF (0xFD)` context constant defined at `RNS/Packet.py:90` → `LINKPROOF = 0xFD` is reserved but not actually used by either prove path in RNS 1.5.7.
 
 #### 6.5.5 Receiver tolerance
 
@@ -3048,7 +3048,7 @@ Two interop traps:
 
 ### 10.7 RESOURCE_HMU — hashmap update
 
-When the sender receives a RESOURCE_REQ with `exhausted == 0xFF` and a `last_map_hash`, it locates the position of `last_map_hash` in its full hashmap, advances to the **next** `HASHMAP_MAX_LEN` window, and emits the hashmap continuation (`Resource.py:1039-1051` → `if wants_more_hashmap:` in RNS 1.5.2):
+When the sender receives a RESOURCE_REQ with `exhausted == 0xFF` and a `last_map_hash`, it locates the position of `last_map_hash` in its full hashmap, advances to the **next** `HASHMAP_MAX_LEN` window, and emits the hashmap continuation (`Resource.py:1039-1051` → `if wants_more_hashmap:` in RNS 1.5.7):
 
 ```
 body = resource_hash(32) || umsgpack.packb([segment_index(int), hashmap_segment_bytes])
