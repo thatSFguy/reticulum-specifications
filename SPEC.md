@@ -364,7 +364,7 @@ HEADER_2: flags(1) hops(1) transport_id(16) dest_hash(16) context(1) data(...)  
 
 `HEADER_2` carries a `transport_id` (the next-hop transport node's identity hash) before the final destination hash. A relay converts a HEADER_1 packet to HEADER_2 by setting bit 6 of flags, inserting its own identity at offset 2, and re-transmitting.
 
-Since RNS 1.5.0 the parser **length-checks the address fields** rather than accepting a short slice: `Packet.unpack` raises if the `destination_hash` slice is not exactly 16 bytes, and for `HEADER_2` if the `transport_id` slice is not exactly 16 bytes either (`RNS/Packet.py:266-267` → `if len(self.transport_id)`, `:273`). Before 1.5.0 a truncated frame produced a short `destination_hash` that silently failed to match any local destination; now it is rejected as malformed at unpack time and (when the packet arrived on an interface) counted as a protocol violation against that interface. Implementations SHOULD reject frames shorter than the minimums above rather than routing on a truncated address.
+Since RNS 1.5.0 the parser **length-checks the address fields** rather than accepting a short slice: `Packet.unpack` raises if the `destination_hash` slice is not exactly 16 bytes, and for `HEADER_2` if the `transport_id` slice is not exactly 16 bytes either (`RNS/Packet.py:266-267` → `if len(self.transport_id)`, `:272-273` → `self.data = self.raw[DST_LEN+3:]`). Before 1.5.0 a truncated frame produced a short `destination_hash` that silently failed to match any local destination; now it is rejected as malformed at unpack time and (when the packet arrived on an interface) counted as a protocol violation against that interface. Implementations SHOULD reject frames shorter than the minimums above rather than routing on a truncated address.
 
 Since RNS 1.5.2 the parser also **rejects an empty data field**: `Packet.unpack` raises when the data slice is zero-length (`RNS/Packet.py:275` → `raise ValueError("Zero-length data field")`). The minimums above are therefore strict — the shortest conformant frame is 20 bytes (HEADER_1) or 36 (HEADER_2). Through RNS 1.5.0 a zero-data frame parsed successfully and was dispatched on its context byte.
 
@@ -384,7 +384,7 @@ if path_entry[IDX_PT_HOPS] > 1:
         new_raw += packet.raw[2:]                        # original dest_hash + context + payload
 ```
 
-Since RNS 1.3.7 the "hops byte unchanged" line carries a conditional: when the node has the `local_hops_delta` privacy option enabled, the emitted hops byte is the node's random delta instead of the packet's own value (`RNS/Transport.py:1401` in RNS 1.5.2) — see §2.4.
+Since RNS 1.3.7 the "hops byte unchanged" line carries a conditional: when the node has the `local_hops_delta` privacy option enabled, the emitted hops byte is the node's random delta instead of the packet's own value (`RNS/Transport.py:1396-1401` → `if path_entry[IDX_PT_HOPS] > 1:`) — see §2.4.
 
 For destinations 0 or 1 hops away, the originator may stay HEADER_1 — the receiving rnsd auto-fills the transport_id when the destination matches a local client (`for_local_client` branch at `RNS/Transport.py:1968` → `for_local_client = (packet.packet_type` in RNS 1.5.2). Implementations that always emit HEADER_1 will silently fail to deliver to multi-hop destinations even with a known path.
 
@@ -404,9 +404,9 @@ Since RNS 1.5.0 the same bound is also enforced on **emit**: `Packet.send()` ret
 > The delta applies when `packet.hops == 0`, the destination type is
 > not PLAIN or GROUP, and the outbound interface is not a
 > shared-instance / local-client interface (`should_apply_delta`,
-> `RNS/Transport.py:1608-1611` → `def should_apply_delta(packet,`; apply sites `:1401`, `:1421`,
+> `RNS/Transport.py:1608-1611` → `def should_apply_delta(packet,`; apply sites `:1396-1401` → `if path_entry[IDX_PT_HOPS] > 1:`, `:1416-1421` → `elif path_entry[IDX_PT_HOPS] == 1 and`,
 > `:1434-1435` → `if not Transport.should_apply_delta(packet, outbound_interface):`, `:1594-1597` → `if not Transport.should_apply_delta(packet, interface):`, plus the shared-instance local-client
-> emission sites `:2111` → `if Transport.local_hops_delta`, `:2159`, `:2659`, `:2739` → `proof_for_local_client or`). A HEADER_1
+> emission sites `:2111` → `if Transport.local_hops_delta`, `:2152-2159` → `if outbound_interface != None:`, `:2657-2659` → `RNS.log("Link request proof validated for transport via`, `:2739` → `proof_for_local_client or`). A HEADER_1
 > ANNOUNCE is additionally rewritten to HEADER_2 with the transport
 > bit set and the node's own transport identity hash inserted as
 > `transport_id` (`mangle_hops(…, transport_insert=True)`,
@@ -1051,7 +1051,7 @@ For interop coverage today, "implement PoW for outbound; tolerate-but-don't-vali
 
 A **propagation node** is an LXMF node configured to accept and store messages on behalf of recipients who are temporarily offline, then deliver them when the recipient comes back online and asks. Without propagation nodes, every message requires both peers online simultaneously — a fatal assumption for mobile / mesh-edge deployments. Propagation nodes form a peer mesh that syncs messages between themselves so a recipient can retrieve mail from any one of them.
 
-The `PROPAGATED` LXMF method (`LXMessage.py:423-441`, mentioned in `flows/send-link-lxmf.md` step 3) submits a message to a propagation node rather than directly to the recipient. The propagation node stores it and offers it to peers via §5.8.2 sync, and to the recipient via §5.8.3 retrieval.
+The `PROPAGATED` LXMF method (`LXMessage.py:426-441` → `elif self.desired_method == LXMessage.PROPAGATED:`, mentioned in `flows/send-link-lxmf.md` step 3) submits a message to a propagation node rather than directly to the recipient. The propagation node stores it and offers it to peers via §5.8.2 sync, and to the recipient via §5.8.3 retrieval.
 
 #### 5.8.1 The `lxmf.propagation` destination
 
@@ -1149,7 +1149,7 @@ Where:
 
 Common usage: client first sends `/get` with `[None, None]` to get the list, picks which ones it wants based on size, then sends `/get` with `[wanted_subset, prior_subset_to_purge]` to fetch the new ones and acknowledge previously-fetched ones.
 
-The propagation node only returns messages whose `propagation_entries[tid][0] == requester's destination_hash` (`LXMRouter.py:1510, 1535`) — each message is keyed to its intended recipient and the propagation node is structurally unable to deliver it to the wrong address. The LXMF body is still encrypted to the recipient's public key as a defence-in-depth.
+The propagation node only returns messages whose `propagation_entries[tid][0] == requester's destination_hash` (`LXMRouter.py:1508-1510` → `if data[1] != None and len(data[1]) > 0:`, `:1533-1535` → `cumulative_size = 24`) — each message is keyed to its intended recipient and the propagation node is structurally unable to deliver it to the wrong address. The LXMF body is still encrypted to the recipient's public key as a defence-in-depth.
 
 > ⚠️ **The `/get` response is a flat list of bodies, not the upload envelope.**
 > `message_get_request` builds `response_messages = []`
@@ -1758,7 +1758,7 @@ A clean-room implementation today can safely hardcode mode = `0x01` on emit. On 
 
 21-bit unsigned integer in the low 21 bits of the 24-bit signalling value. Max representable: `0x1FFFFF = 2,097,151` bytes. Real Reticulum `HW_MTU` values are radically smaller (LoRa: 508; TCP: typical HW MTU ~64 KiB; AutoInterface: matches its bearer). The 21-bit width is forward-looking: it leaves room for future high-bandwidth interfaces without a wire-format change.
 
-When the initiator emits a LINKREQUEST with signalling, the encoded `mtu` is the next-hop interface's `HW_MTU` (`RNS/Link.py:309-314` → `RNS.log(f"Signalling`):
+When the initiator emits a LINKREQUEST with signalling, the encoded `mtu` is the next-hop interface's `HW_MTU` (`RNS/Link.py::Link.__init__` → `if RNS.Reticulum.link_mtu_discovery() and nh_hw_mtu:`):
 
 ```python
 nh_hw_mtu = RNS.Transport.next_hop_interface_hw_mtu(destination.hash)
@@ -1808,7 +1808,7 @@ A clean-room implementation that omits the signalling bytes when present (or inc
 
 #### 6.6.6 Disabling MTU discovery
 
-The `[reticulum]` config option `link_mtu_discovery = No` makes `Reticulum.link_mtu_discovery()` return False, so the initiator skips signalling on outbound LINKREQUESTs (`RNS/Link.py:311-314` → `RNS.log(f"Establishing`). In that case the link uses `Reticulum.MTU` (default 500 bytes) globally, no per-link MTU clamping happens, and all four lengths fall back to the no-signalling sizes in §6.6.4.
+The `[reticulum]` config option `link_mtu_discovery = No` makes `Reticulum.link_mtu_discovery()` return False, so the initiator skips signalling on outbound LINKREQUESTs (`RNS/Link.py::Link.__init__` → `else: signalling_bytes = Link.signalling_bytes(RNS.Reticulum.MTU, self.mode)`). In that case the link uses `Reticulum.MTU` (default 500 bytes) globally, no per-link MTU clamping happens, and all four lengths fall back to the no-signalling sizes in §6.6.4.
 
 A receiver doesn't need its own copy of the disable switch — it just stops seeing trailing signalling bytes from peers that have it disabled. Its own MTU reporting on the LRPROOF return path runs unaffected for peers that send it.
 
@@ -1992,7 +1992,7 @@ A Channel is a **continuous, bi-directional, message-typed stream** on top of an
 
 #### 6.8.1 Wire form
 
-A Channel message rides as a single Link DATA packet with `context = CHANNEL (0x0E)`. The body is **6-byte fixed-prefix header + variable-length payload** (`RNS/Channel.py:130-133`):
+A Channel message rides as a single Link DATA packet with `context = CHANNEL (0x0E)`. The body is **6-byte fixed-prefix header + variable-length payload** (`RNS/Channel.py::Envelope.pack` → `struct.pack(">HHH"`):
 
 ```
 msgtype(2)  ||  sequence(2)  ||  length(2)  ||  data(length bytes)
@@ -2125,7 +2125,7 @@ A `path?` request itself is a regular DATA packet (verified by `tools/verify_pat
 
 #### 7.2.1 Path-request packet parse rules
 
-The path-request handler at `RNS/Transport.py:3380-3418` → `def path_request_handler(data,` parses inbound packets addressed to `path_request_destination` (the dest_hash in §7.1). The handler is registered as the destination's `packet_callback` at `Transport.py:357`, so any DATA packet to that dest_hash flows through it.
+The path-request handler at `RNS/Transport.py:3380-3418` → `def path_request_handler(data,` parses inbound packets addressed to `path_request_destination` (the dest_hash in §7.1). The handler is registered as the destination's `packet_callback` at `Transport.py:357` → `Transport.path_request_destination.set_packet_callback(`, so any DATA packet to that dest_hash flows through it.
 
 The path-request destination is a **PLAIN destination** with no identity attached, which is why its `dest_hash` derives only from the name: `dest_hash = SHA256(SHA256("rnstransport.path.request")[:10])[:16]` per the PLAIN/GROUP recipe in §1.4.3 (the `identity == None` branch of `Destination.hash` at `RNS/Destination.py:121-130` → `addr_hash_material =`). The result is a constant — `6b9f66014d9853faab220fba47d02761` — that every node on the mesh resolves identically without needing to discover a per-peer identity first.
 
@@ -2871,7 +2871,7 @@ bit 5 : x — has_metadata
 >
 > `HASHMAP_MAX_LEN` and `COLLISION_GUARD_SIZE` are evaluated once at import
 > (`RNS/Resource.py:1256-1258` → `OVERHEAD = 134`) from the **class-level** `RNS.Link.MDU`
-> (`RNS/Link.py:73`), which comes from `Reticulum.MTU` and never from any
+> (`RNS/Link.py:73` → `MDU = math.floor((RNS.Reticulum.MTU`), which comes from `Reticulum.MTU` and never from any
 > link. They are identical on every link regardless of what was negotiated,
 > and implementations **MUST NOT** recompute them from a negotiated MTU.
 > §10.7 derives `segment_index = part_index // HASHMAP_MAX_LEN`, so two
@@ -3143,7 +3143,7 @@ WINDOW_MAX_VERY_SLOW = 4
 WINDOW_FLEXIBILITY = 4
 ```
 
-After each successful round (every requested part arrived), `window += 1` up to `window_max`; `window_min += 1` once `window - window_min > WINDOW_FLEXIBILITY - 1` (`Resource.py::receive_part` → `RNS.log("Error`). The window cap is promoted to `WINDOW_MAX_FAST` after `FAST_RATE_THRESHOLD` consecutive rounds at observed throughput > `RATE_FAST = 50 kbps / 8`, and demoted to `WINDOW_MAX_VERY_SLOW` after `VERY_SLOW_RATE_THRESHOLD = 2` rounds below `RATE_VERY_SLOW = 2 kbps / 8` (`Resource.py::receive_part` → `self.rtt_rxd_bytes_at_part_req =`). These are receiver-private — they're not negotiated, so two implementations with different rate-detection cutoffs interop fine but may emerge with different effective throughput on the same channel.
+After each successful round (every requested part arrived), `window += 1` up to `window_max`; `window_min += 1` once `window - window_min > WINDOW_FLEXIBILITY - 1` (`Resource.py::receive_part` → `self.window_min += 1`). The window cap is promoted to `WINDOW_MAX_FAST` after `FAST_RATE_THRESHOLD` consecutive rounds at observed throughput > `RATE_FAST = 50 kbps / 8`, and demoted to `WINDOW_MAX_VERY_SLOW` after `VERY_SLOW_RATE_THRESHOLD = 2` rounds below `RATE_VERY_SLOW = 2 kbps / 8` (`Resource.py::receive_part` → `self.rtt_rxd_bytes_at_part_req =`). These are receiver-private — they're not negotiated, so two implementations with different rate-detection cutoffs interop fine but may emerge with different effective throughput on the same channel.
 
 ### 10.11 Multi-segment resources
 
@@ -3211,7 +3211,7 @@ The sweep runs every `CLEAN_INTERVAL = 15*60` seconds (`Reticulum.py:159` → `C
 > and any absolute ceiling must exceed the worst-case **single-segment**
 > transfer time, not the whole transfer's.
 
-The `.meta` sidecar written for a metadata-carrying first segment (`Resource.py:713-715` → `metadata_file = open(self.meta_storagepath, "wb")`) is unlinked when the final segment concludes (`:746` → `try: os.unlink(self.meta_storagepath)`), but it is **not** swept: `__clean_caches` only considers filenames of exactly `(HASHLENGTH//8)*2 = 64` characters (`Reticulum.py:1241`), and `{o.hex()}.meta` is 69. An abandoned multi-segment transfer leaves its metadata file behind permanently.
+The `.meta` sidecar written for a metadata-carrying first segment (`Resource.py:713-715` → `metadata_file = open(self.meta_storagepath, "wb")`) is unlinked when the final segment concludes (`:746` → `try: os.unlink(self.meta_storagepath)`), but it is **not** swept: `__clean_caches` only considers filenames of exactly `(HASHLENGTH//8)*2 = 64` characters (`Reticulum.py::__clean_caches` → `for filename in os.listdir(self.resourcepath):`), and `{o.hex()}.meta` is 69. An abandoned multi-segment transfer leaves its metadata file behind permanently.
 
 **4. `l` is unbounded on the wire, and so is the number of concurrent assemblies.** Nothing in `Resource.accept` (`Resource.py:168-246` → `def accept(advertisement_packet,`) bounds `l`, and nothing bounds how many distinct `o` values one link may have open. Upstream is unbothered because it spends **disk**, not RAM, and the 24 h sweep eventually reclaims it.
 
@@ -3313,7 +3313,7 @@ The msgpack array layout:
 > Pre-pack callers (`umsgpack.packb(data)` then passing the bytes as
 > element [2]) produce a wire envelope where decode yields `bytes` for
 > [2] — looks structurally similar but is semantically a different
-> type, and every NomadNet `Node.py:109` / LXMF `LXMRouter.__get_handler`
+> type, and every NomadNet `Node.py::serve_page` / LXMF `LXMRouter.__get_handler`
 > drops the request silently with no error response.
 
 For single-packet REQUESTs, `request_id = SHA-256(packet.get_hashable_part())[:16]` — i.e. the 16-byte truncation of the **packet hash**, computed over the on-the-wire bytes (low nibble of flags || `raw[2:]` for HEADER_1 / `raw[18:]` for HEADER_2). NOT a hash of the inner plaintext or of the msgpack-encoded `packed_request` blob. The server side at `Link.handle_request:1286` literally calls `packet.getTruncatedHash()`. Both sides MUST hash the same bytes to match. For Resource REQUESTs the request_id is carried explicitly in the advertisement's `q` field (§10.4) and the initiator MUST set it to the truncated `SHA-256(packed_request)[:16]` of the inner plaintext per `RNS/Link.py::request` line 504 (Resource path uses the plaintext-hash form because there is no single packet to hash). The receiver uses this id to correlate the inbound RESPONSE with this REQUEST.
@@ -3435,7 +3435,7 @@ NomadNet pages are served over this protocol with these conventions. Line citati
 #### 11.6.1 Paths and the `nomadnetwork.node` aspect
 
 - Server: hosts a destination at `nomadnetwork`/`node` aspects (`name_hash = 213e6311bcec54ab4fde`). Pages are registered as `register_request_handler(path="/page/<name>.mu", ...)`.
-- Client: default path is `/page/index.mu` (`Browser.py:73` `DEFAULT_PATH`).
+- Client: default path is `/page/index.mu` (`Browser.py:73` → `DEFAULT_PATH = "/page/index.mu"` `DEFAULT_PATH`).
 - Path format: `/page/<name>.mu` for micron pages, `/file/<name>` for static file downloads (§11.6.5).
 - Path hash on the wire is the §11.1 `SHA-256(path)[:16]` truncation — `/page/index.mu` and `/page/help.mu` are distinct request_handler keys.
 
@@ -3448,7 +3448,7 @@ When a client tap on a micron link with form fields fires a REQUEST, element [2]
 | `field_<name>` | Form-input values typed by the user | Exported as env var `field_<name>=<value>` to the page's executable handler |
 | `var_<name>`   | URL-query-style parameters embedded in the link itself | Exported as env var `var_<name>=<value>` |
 
-`Node.py:109-111` (upstream master, fetched 2026-05-04):
+`Node.py::serve_page` → `if data != None and isinstance(data, dict):`:
 
 ```python
 if data != None and isinstance(data, dict):
@@ -3460,7 +3460,7 @@ if data != None and isinstance(data, dict):
 The `field_` vs `var_` distinction is purely cosmetic on the wire (both become env vars), but in micron syntax they have separate origins:
 
 - **Form fields** (`field_<name>`) come from `<flags|name`value>` widgets that render as text inputs / checkboxes / radios. The Browser collects current widget state into a dict at submit time.
-- **URL parameters** (`var_<name>`) come from `key=value` entries in the third backtick component of a link: `` `[label`/page/foo.mu`username=alice|active=true|message] `` produces `{"var_username": "alice", "var_active": "true", ...}` PLUS `field_message` from a widget named `message` (`Browser.py:224-228`). Entries with `=` are var-params; entries without are field-widget names whose current values get included — **or the `*` wildcard, below, which is neither.**
+- **URL parameters** (`var_<name>`) come from `key=value` entries in the third backtick component of a link: `` `[label`/page/foo.mu`username=alice|active=true|message] `` produces `{"var_username": "alice", "var_active": "true", ...}` PLUS `field_message` from a widget named `message` (`Browser.py::handle_link` → `for e in`). Entries with `=` are var-params; entries without are field-widget names whose current values get included — **or the `*` wildcard, below, which is neither.**
 
 ##### The `*` wildcard — "every widget on the page"
 
@@ -3470,13 +3470,13 @@ One entry in that list is neither a `key=value` param nor a widget name. A bare 
 all_fields = True if "*" in link_data else False
 ```
 
-(`Browser.py:222`.) The widget walk then admits a widget when the wildcard is set OR the widget is named:
+(`Browser.py::handle_link` → `all_fields =`.) The widget walk then admits a widget when the wildcard is set OR the widget is named:
 
 ```python
 if hasattr(w, "field_name") and (all_fields or w.field_name in link_fields):
 ```
 
-(`Browser.py:246`.)
+(`Browser.py::handle_link` → `if hasattr(w, "field_name") and (all_fields`.)
 
 `*` composes with `=` params in the same list — the two are read in one pass, so `` `action=submit|* `` submits `var_action` **and** every widget:
 
@@ -3512,9 +3512,9 @@ A micron link's `target` string (the second component of `[label`target]` or thi
 | `p:<id>[:<id>…]` | Refresh the named partial placeholders in place (§11.6.7). No navigation. | 288-291 |
 | `rrc://<32hex>[:<dest_name>]/<room>` | A room on an RRC hub — handed to the RRC client, not the page fetcher. Also reachable as `rrc@…` / `rrc.hub.session@…`. | 277-280, 312-314, 426-461 |
 
-The last two are **local actions, not destinations**, and both are dispatched *before* the target is parsed as a destination and before any collected form data would be sent (`Browser.py:271-291`). A client that runs its destination parser first sees `#rules` as a malformed hash and reports a broken link on what is a working page.
+The last two are **local actions, not destinations**, and both are dispatched *before* the target is parsed as a destination and before any collected form data would be sent (`Browser.py:271-291` → `# In-document anchor`). A client that runs its destination parser first sees `#rules` as a malformed hash and reports a broken link on what is a working page.
 
-`expand_shorthands` (`Browser.py:206-214`):
+`expand_shorthands` (`Browser.py:206-214` → `def expand_shorthands(self,`):
 
 ```python
     def expand_shorthands(self, destination_type):
@@ -3531,8 +3531,8 @@ The last two are **local actions, not destinations**, and both are dispatched *b
 ##### The `rrc` target grammar
 
 `rrc` does not name a page. Both spellings hand their payload to
-`handle_rrc_link` (`Browser.py:426-461`), whose parse and validation is
-`Browser.py:430-446` verbatim:
+`handle_rrc_link` (`Browser.py:426-461` → `def handle_rrc_link(self,`), whose parse and validation is
+`Browser.py:430-446` → `rest = link_target.strip()` verbatim:
 
 ```python
             rest = link_target.strip()
@@ -3563,23 +3563,23 @@ that resolves to the wrong thing rather than failing:
   name, to the end of the token. It is then stripped, has any leading
   `#` removed, and — the part easily missed, because it is one line
   below where the parse looks finished — is **lower-cased**. It is
-  `room_norm`, not `room`, that is handed on (`Browser.py:455`, `:461`),
+  `room_norm`, not `room`, that is handed on (`Browser.py:455` → `channels._select_room(None,`, `:461` → `channels.confirm_new_hub_dialog(hub_hash,`),
   so room names match case-insensitively and a client that compares them
   case-sensitively will miss a room it was linked to.
 - **`:<dest_name>` names the hub's destination**, defaulting to `rrc.hub`
-  (`nomadnet/RRC.py:97` — `DEFAULT_DEST_NAME = "rrc.hub"`). It is a full
-  destination name, not an aspect: `RRC.py:379` splits it with
+  (`nomadnet/RRC.py:97` → `DEFAULT_DEST_NAME =` — `DEFAULT_DEST_NAME = "rrc.hub"`). It is a full
+  destination name, not an aspect: `RRC.py:379` → `app_name, aspects` splits it with
   `RNS.Destination.app_and_aspects_from_name(self.dest_name)`, making
   app_name `rrc` and aspect `hub` — the same shape as `nomadnetwork.node`
   and `lxmf.delivery` in the table above. A client that hardcodes it must
   **reject** a link naming a different one rather than dial `rrc.hub`
   regardless, because the link names a different destination. Upstream
-  fails closed here: `RRC.py:388` refuses the hub when the name it was
+  fails closed here: `RRC.py:388` → `if hub_dest.hash` refuses the hub when the name it was
   given does not hash to the hash it was given.
 - **`rrc.hub.session` is not a destination name.** `expand_shorthands`
   returns it, and it looks like one, which is the trap. It is only the
   label `handle_link` switches on to pick the handler
-  (`Browser.py:312-314`); nothing ever dials it. The destination name is
+  (`Browser.py:312-314` → `elif destination_type == "rrc.hub.session":`); nothing ever dials it. The destination name is
   `dest_name`, default `rrc.hub`.
 
 The strictness note below applies here too, and more strongly than
@@ -3624,10 +3624,10 @@ A client that hasn't implemented file downloads can detect `/file/` paths and ei
 Pages are registered with one of three allow modes (`Destination.py:74-76` → `ALLOW_NONE = 0x00`):
 
 - `ALLOW_ALL` — anyone with a Link can fetch. Used for public NomadNet pages, the propagation node's `/get`, etc.
-- `ALLOW_LIST` — caller's identity hash must appear in the page's `.allowed` file. Server checks `remote_identity.hash` against the list at request time (`Node.py:152-154`).
+- `ALLOW_LIST` — caller's identity hash must appear in the page's `.allowed` file. Server checks `remote_identity.hash` against the list at request time (`Node.py::serve_page` → `"Denying request, remote identity was not in list`).
 - `ALLOW_NONE` — registered handlers that exist but reject all requests (rare; debug only).
 
-For `ALLOW_LIST` the client MUST call `link.identify(identity)` immediately after the link transitions to ACTIVE and BEFORE issuing the REQUEST. This sends a `LINKIDENTIFY (context = 0xFB)` packet whose 128-byte payload is `public_key(64) || signature(64)`, with the signature computed over `link_id || public_key` — proving the long-term identity hash to the responder. The wire format is specified in §6.7.6. Without it, `remote_identity` is `None` server-side and every `ALLOW_LIST` page returns `DEFAULT_NOTALLOWED`. See `Browser.py:1454-1461` for the upstream call site:
+For `ALLOW_LIST` the client MUST call `link.identify(identity)` immediately after the link transitions to ACTIVE and BEFORE issuing the REQUEST. This sends a `LINKIDENTIFY (context = 0xFB)` packet whose 128-byte payload is `public_key(64) || signature(64)`, with the signature computed over `link_id || public_key` — proving the long-term identity hash to the responder. The wire format is specified in §6.7.6. Without it, `remote_identity` is `None` server-side and every `ALLOW_LIST` page returns `DEFAULT_NOTALLOWED`. See `Browser.py:1454-1461` → `def link_established(self,` for the upstream call site:
 
 ```python
 def link_established(self, link):
@@ -3646,7 +3646,7 @@ def link_established(self, link):
 
 A micron page may embed `` `{<path>[`<refresh_seconds>[`<fields>]]} `` placeholders. The Browser tracks each placeholder, opens / reuses a Link to the partial's destination, fetches `<path>` as a sub-REQUEST, and substitutes the response bytes into the rendered output. If a `<refresh>` is set, the partial is re-fetched periodically.
 
-Implementation reference: `Browser.py:707-835` (`__load_partial`, `start_partial_updater`). Partials are how live "chat tail" / "status" panels work on real NomadNet community pages. A client without partial support sees the literal placeholder text and the page renders as a static snapshot.
+Implementation reference: `Browser.py:707-835` → `def __load_partial(self,` (`__load_partial`, `start_partial_updater`). Partials are how live "chat tail" / "status" panels work on real NomadNet community pages. A client without partial support sees the literal placeholder text and the page renders as a static snapshot.
 
 **A partial's `<fields>` list obeys §11.6.2 in full, `*` included.** `__get_partial_request_data` is the same collection pass as the form-submit one, on the same widget tree:
 
@@ -3657,34 +3657,34 @@ Implementation reference: `Browser.py:707-835` (`__load_partial`, `start_partial
             link_data = partial["fields"]
 ```
 
-(`Browser.py:766-811` — `__get_partial_request_data`; the wildcard test is at `Browser.py:769`, the widget walk at `Browser.py:793`.)
+(`Browser.py:766-811` → `link_data = partial["fields"]` — `__get_partial_request_data`; the wildcard test is at `Browser.py::__get_partial_request_data` → `all_fields =`, the widget walk at `Browser.py::__get_partial_request_data` → `if hasattr(w, "field_name") and (all_fields`.)
 
 So a partial is not restricted to static `key=value` params: it can carry the live value of a widget elsewhere on the page, re-read on every refresh. That is how a page scopes a chat-tail panel by a nickname box the reader typed into.
 
-One `key=value` entry is reserved: `pid=<id>` names the placeholder so a `p:<id>` link (§11.6.3) can refresh it without reloading the page (`MicronParser.py:178-183`).
+One `key=value` entry is reserved: `pid=<id>` names the placeholder so a `p:<id>` link (§11.6.3) can refresh it without reloading the page (`MicronParser.py:178-183` → `if len(pf) > 0:`).
 
 #### 11.6.8 Source map (NomadNet ↔ wire)
 
 | Concept | Upstream Python file:line |
 |---|---|
-| Default path | `nomadnet/ui/textui/Browser.py:73` |
-| Form-field collection | `Browser.py:219-269` |
-| `*` all-fields wildcard | `Browser.py:222` (submit), `Browser.py:769` (partials) |
-| In-document anchor jump (`#name`) | `Browser.py:271-275`, `Browser.py:324-357` |
-| Anchor declarations + heading auto-slugs | `MicronParser.py:71-81`, `:308-311`, `:657-668` |
-| Partial refresh links (`p:<id>`) | `Browser.py:288-291`; `pid=` at `MicronParser.py:178-183` |
-| `field_` / `var_` env-var mapping | `nomadnet/Node.py:109-111` |
-| Shorthand expansion (`nnn`/`lxmf`/`rrc`) | `Browser.py:206-214` |
-| RRC link grammar (`rrc://` and `rrc@`) | `Browser.py:277-280`, `:312-314`, `:426-461` |
-| RRC room-name folding (`lower()`) | `Browser.py:446`, used at `:455`, `:461` |
-| RRC default hub destination name | `nomadnet/RRC.py:97`; split at `RRC.py:379`, enforced at `:388` |
-| Cross-node link routing | `Browser.py:271-323` |
-| Identify-on-connect | `Browser.py:1454-1461` |
-| Cache-TTL header `#!c=N` | `Browser.py:1524-1531` |
-| Color headers `#!bg=` / `#!fg=` | `Browser.py:1247-1267` |
-| `/file/...` download dispatch | `Browser.py:999-1068, 1635-1685` + `Node.py:191-210` |
-| Partial placeholders | `Browser.py:707-835` |
-| Allow modes / `ALLOW_LIST` enforcement | `Node.py:152-154` |
+| Default path | `nomadnet/ui/textui/Browser.py:73` → `DEFAULT_PATH = "/page/index.mu"` |
+| Form-field collection | `Browser.py:219-269` → `if link_data != None:` |
+| `*` all-fields wildcard | `Browser.py::handle_link` → `all_fields =` (submit), `Browser.py::__get_partial_request_data` → `all_fields =` (partials) |
+| In-document anchor jump (`#name`) | `Browser.py:271-275` → `# In-document anchor`, `Browser.py:324-357` → `def _jump_to_anchor(self,` |
+| Anchor declarations + heading auto-slugs | `MicronParser.py:71-81` → `_MICRON_STRIP_RE =`, `:308-311` → `slug = slugify_micron(line)`, `:657-668` → `elif c == ":":` |
+| Partial refresh links (`p:<id>`) | `Browser.py:288-291` → `elif link_target.startswith("p:"):`; `pid=` at `MicronParser.py:178-183` → `if len(pf) > 0:` |
+| `field_` / `var_` env-var mapping | `nomadnet/Node.py::serve_page` → `if data != None and isinstance(data, dict):` |
+| Shorthand expansion (`nnn`/`lxmf`/`rrc`) | `Browser.py:206-214` → `def expand_shorthands(self,` |
+| RRC link grammar (`rrc://` and `rrc@`) | `Browser.py:277-280` → `# rrc://<hex>[:<dest_name>]/<room>`, `:312-314` → `elif destination_type == "rrc.hub.session":`, `:426-461` → `def handle_rrc_link(self,` |
+| RRC room-name folding (`lower()`) | `Browser.py:446` → `room_norm = room.lower()`, used at `:455` → `channels._select_room(None,`, `:461` → `channels.confirm_new_hub_dialog(hub_hash,` |
+| RRC default hub destination name | `nomadnet/RRC.py:97` → `DEFAULT_DEST_NAME =`; split at `RRC.py:379` → `app_name, aspects`, enforced at `:388` → `if hub_dest.hash` |
+| Cross-node link routing | `Browser.py:271-323` → `# In-document anchor` |
+| Identify-on-connect | `Browser.py:1454-1461` → `def link_established(self,` |
+| Cache-TTL header `#!c=N` | `Browser.py:1524-1531` → `cache_time = Browser.DEFAULT_CACHE_TIME` |
+| Color headers `#!bg=` / `#!fg=` | `Browser.py::load_page` → `bgpos = self.markup.find("#!bg=")` |
+| `/file/...` download dispatch | `Browser.py:999-1068, 1635-1685` → `def download_file(self,` + `Node.py:191-210` → `def serve_file(self,` |
+| Partial placeholders | `Browser.py:707-835` → `def __load_partial(self,` |
+| Allow modes / `ALLOW_LIST` enforcement | `Node.py::serve_page` → `"Denying request, remote identity was not in list` |
 
 None of these are wire-spec — they're caller conventions layered on top of §11. A Reticulum client that can't render micron markup or doesn't implement the form/cache/partial conventions can still fetch pages and display the raw bytes; the protocol layer doesn't care about content.
 
@@ -3884,7 +3884,7 @@ For a `DATA` packet with `destination_type == LINK` whose `dest_hash` is in `lin
 >    the relay checks `link_entry[IDX_LT_VALIDATED]`; if the link's LRPROOF
 >    has not yet been validated by §12.5.1, the packet is discarded and
 >    counted as a protocol violation against the receiving interface
->    (`RNS/Transport.py:2126-2128`). Through RNS 1.4.2 the relay forwarded
+>    (`RNS/Transport.py:2128` → `"Link packet received before link validation"`). Through RNS 1.4.2 the relay forwarded
 >    link DATA in both directions from the moment the `link_table` entry
 >    was written by §12.2.4, i.e. before the responder had proved the link.
 >    An initiator that starts sending link DATA before it receives the
@@ -3893,12 +3893,12 @@ For a `DATA` packet with `destination_type == LINK` whose `dest_hash` is in `lin
 >    §6.2 handshake ordering load-bearing over multi-hop paths.
 > 2. **The branch now returns.** After link_table forwarding, `_inbound`
 >    returns instead of falling through to the remaining handling
->    (`RNS/Transport.py:2166`). The `return` was present but commented out
+>    (`RNS/Transport.py:2152-2166` → `if outbound_interface != None:`). The `return` was present but commented out
 >    through 1.4.2 with the note *"Can we return safely here?"*. A
 >    link-addressed packet is therefore no longer additionally considered
 >    for the announce, LRPROOF and reverse_table branches below.
 
-Unlike the path_table forwarding in §12.2 — which strips `transport_id` (`HEADER_2` → `HEADER_1`) at the last hop — link_table forwarding does NOT touch the header. The relay bumps `hops` and emits `packet.raw[0:1] + struct.pack("!B", packet.hops) + packet.raw[2:]` (`Transport.py:2158-2160`). Whatever header bytes the initiator emitted reach the destination verbatim. This is why the originator's wire conventions for post-handshake link DATA are constrained — see §6.4.3: senders MUST emit `HEADER_1` with no `transport_id` for every link-addressed packet, because a `HEADER_2` link packet would arrive at the destination with `transport_id` intact and be dropped by the destination's `packet_filter` as "for another transport instance".
+Unlike the path_table forwarding in §12.2 — which strips `transport_id` (`HEADER_2` → `HEADER_1`) at the last hop — link_table forwarding does NOT touch the header. The relay bumps `hops` and emits `packet.raw[0:1] + struct.pack("!B", packet.hops) + packet.raw[2:]` (`Transport.py:2152-2160` → `if outbound_interface != None:`). Whatever header bytes the initiator emitted reach the destination verbatim. This is why the originator's wire conventions for post-handshake link DATA are constrained — see §6.4.3: senders MUST emit `HEADER_1` with no `transport_id` for every link-addressed packet, because a `HEADER_2` link packet would arrive at the destination with `transport_id` intact and be dropped by the destination's `packet_filter` as "for another transport instance".
 
 #### 12.5.3 PROOF receipt forwarding via `reverse_table`
 

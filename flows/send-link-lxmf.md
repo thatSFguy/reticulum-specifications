@@ -80,7 +80,7 @@ self.start_watchdog()                                            # 60s establish
 self.packet.send()
 ```
 
-The LINKREQUEST is a **regular Reticulum DATA-routed packet** — `packet_type = LINKREQUEST (2)`, `destination_type = SINGLE`, addressed to the recipient's `lxmf.delivery` `dest_hash`. Per `RNS/Packet.py::pack` (`RNS/Packet.py:194-196`) `LINKREQUEST` packets are **not encrypted** — the body is `request_data` verbatim — because the responder needs to decode the public keys to perform the handshake.
+The LINKREQUEST is a **regular Reticulum DATA-routed packet** — `packet_type = LINKREQUEST (2)`, `destination_type = SINGLE`, addressed to the recipient's `lxmf.delivery` `dest_hash`. Per `RNS/Packet.py::pack` (`RNS/Packet.py:196-198` → `elif self.packet_type == Packet.LINKREQUEST:`) `LINKREQUEST` packets are **not encrypted** — the body is `request_data` verbatim — because the responder needs to decode the public keys to perform the handshake.
 
 The link_id is set immediately on the initiator side via `set_link_id` (SPEC.md §6.3): the SHA-256-truncated-to-16 hash of `get_hashable_part(LINKREQUEST_packet)`, with trailing signalling bytes stripped via `link_id_from_lr_packet`. Since `get_hashable_part` is invariant under HEADER_1↔HEADER_2 conversion (`RNS/Packet.py:353-361` → `def get_hash(self):`), the responder will arrive at the same link_id even if the LINKREQUEST passed through one or more relays.
 
@@ -112,7 +112,7 @@ Immediately after step 5 succeeds — and before any application DATA leaves —
 
 ### 5. Transfer the LXM body over the active link
 
-Back in `process_outbound` (`LXMF/LXMRouter.py:2789-2799` → `RNS.log("Starting transfer`), with `direct_link.status == ACTIVE`:
+Back in `process_outbound` (`LXMF/LXMRouter.py::process_outbound` → `if direct_link.status == RNS.Link.ACTIVE:`), with `direct_link.status == ACTIVE`:
 
 ```python
 lxmessage.set_delivery_destination(direct_link)                 # __delivery_destination = link
