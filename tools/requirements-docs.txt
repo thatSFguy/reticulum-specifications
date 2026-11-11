@@ -26,4 +26,4 @@
 # the new version and update the version named in §11.6's preamble. No
 # verifier runs against it; the only CI gate is citation resolution.
 
-nomadnet==1.4.4
+nomadnet==1.5.0
