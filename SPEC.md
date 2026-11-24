@@ -118,7 +118,8 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
   - [12.4 Path table management](#124-path-table-management)
   - [12.5 Reverse-table link transport](#125-reverse-table-link-transport)
   - [12.6 Tunnels and shared-instance protocol](#126-tunnels-and-shared-instance-protocol)
-  - [12.7 Source map for §12](#127-source-map-for-12)
+  - [12.7 Blackhole lists (`rnstransport.info.blackhole`)](#127-blackhole-lists-rnstransportinfoblackhole)
+  - [12.8 Source map for §12](#128-source-map-for-12)
 - [13. Threading and concurrency model](#13-threading-and-concurrency-model)
   - [13.1 Long-running threads](#131-long-running-threads)
   - [13.2 Lock inventory](#132-lock-inventory)
@@ -161,6 +162,7 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
   - [17.5 Application protocols layered over Reticulum](#175-application-protocols-layered-over-reticulum)
 - [18. Test vectors](#18-test-vectors)
 - [19. Source map](#19-source-map)
+<!-- /TOC -->
 <!-- /TOC -->
 <!-- /TOC -->
 
@@ -212,6 +214,7 @@ Common pre-computed `name_hash` values:
 | `4848a053c16415bed6c8` | `rnstransport.remote.management` |
 | `7926bbe7dd7f9aba88b0` | `rnstransport.path.request` (resulting `dest_hash` with `identity=None`: `6b9f66014d9853faab220fba47d02761`) |
 | `55aa39e85c3e045e9cb1` | `rnstransport.discovery.interface` (SINGLE; interface discovery announces, §4.8) |
+| `9e059549ef49a8c64d18` | `rnstransport.info.blackhole` (SINGLE; blackhole list publishing, §12.7) |
 
 ### 1.3 Private key on-disk format
 
@@ -713,7 +716,7 @@ This rule means: **first-announcer-wins for any given destination_hash** within 
 
 #### 5. Blackhole list check
 
-Before signature verification, check `RNS.Transport.blackholed_identities`. (Since RNS 1.6 the only check that runs earlier is the stamp check of §4.7, which can reject an announce only when stamp enforcement is on.) An identity_hash on the blackhole list is dropped silently regardless of signature validity (`RNS/Identity.py:902-906` → `if len(RNS.Transport.blackholed_identities)`). This is operator-controlled state, not a wire feature.
+Before signature verification, check `RNS.Transport.blackholed_identities`. (Since RNS 1.6 the only check that runs earlier is the stamp check of §4.7, which can reject an announce only when stamp enforcement is on.) An identity_hash on the blackhole list is dropped silently regardless of signature validity (`RNS/Identity.py:902-906` → `if len(RNS.Transport.blackholed_identities)`). This is operator-controlled state, not a wire feature, although the table can be filled from lists other nodes publish (§12.7).
 
 Since RNS 1.5.0 `Identity.validate_announce` takes a third parameter,
 `signal_blackholed=False` (`RNS/Identity.py:757` → `def validate_announce(packet, only_validate_signature=False, signal_blackholed=False,`). With it set, a blackholed
@@ -4345,7 +4348,111 @@ When multiple processes on one host share a single Reticulum stack (via `share_i
 
 The wire protocol for shared-instance loopback is just the same Reticulum packets over a TCP loopback interface — no special framing or commands. What's "shared" is the path_table and announce dispatch, not the wire format.
 
-### 12.7 Source map for §12
+### 12.7 Blackhole lists (`rnstransport.info.blackhole`)
+
+A node keeps a table of **blackholed identities**, `Transport.blackholed_identities`. Announces from them are refused (§4.5 step 5), and so are the paths and tunnels that lead to them. A node can also **publish** that table, and other nodes can **subscribe** to it, so one operator's moderation decisions propagate to nodes that choose to trust them. Publishing is an ordinary §11 REQUEST/RESPONSE service; nothing here is a new packet type. Verified by `tools/verify_blackhole_list.py`.
+
+#### 12.7.1 Entry format
+
+```
+blackholed_identities = {
+    identity_hash (bin, 16): {
+        "source": bin(16),          # transport identity hash of whoever blackholed it
+        "until":  float | int | nil, # unix seconds when it expires; nil = never
+        "reason": str | nil,
+    },
+    ...
+}
+```
+
+A local `Transport.blackhole_identity(identity_hash, until=None, reason=None)` creates an entry with `source` = this node's transport identity (`RNS/Transport.py:4733` → `entry = {"source": Transport.identity.hash, "until": until, "reason": reason}`). The key is an **identity** hash, not a destination hash, so one entry covers every destination that identity announces. Blackholing an identity also drops every path-table entry whose recalled identity matches (`RNS/Transport.py:4811` → `def remove_blackholed_paths():`). `Transport.jobs` removes expired entries every 60 s (`RNS/Transport.py:1445` → `# Check expired blackhole entries`).
+
+What the table blocks:
+
+- **Announces.** These are refused in `validate_announce` (`RNS/Identity.py:903` → `if announced_identity.hash in RNS.Transport.blackholed_identities:`). Since RNS 1.6 the ingress path counts such an announce as *filtered* against the receiving interface (`RNS/Transport.py:2148` → `if   announce_signature_valid == "blackholed":`).
+- **Persisted paths at start-up.** Paths to blackholed identities are not restored (`RNS/Transport.py:585` → `if path_identity and path_identity.hash in Transport.blackholed_identities: blackholed = True`). Through RNS 1.5.7 this check compared an `Identity` object against the hash-keyed table, so it never matched, and those paths were restored.
+- **Tunnels.** Since RNS 1.6, a tunnel synthesised by a blackholed transport identity is torn down (`RNS/Transport.py:3250` → `if remote_transport_identity.hash in Transport.blackholed_identities:`).
+- **Discovered interfaces.** A discovered interface (§4.8) whose `network_id` or `transport_id` is blackholed is forgotten.
+
+#### 12.7.2 Publishing
+
+With `[reticulum] publish_blackhole = yes`, and when the node is not a client of a shared instance, Transport creates a SINGLE destination `rnstransport.info.blackhole` under the **transport identity** (`name_hash` `9e059549ef49a8c64d18`, §1.2), and registers one request handler, `/list`, open to everyone (`ALLOW_ALL`, §11.4) (`RNS/Transport.py:515-520` → `if RNS.Reticulum.publish_blackhole_enabled() and not Transport.owner.is_connected_to_shared_instance:`). Since RNS 1.6 the destination requires a link-request stamp of cost **5.25** (§6.1.1). It is a management destination, so it is announced about 15 s after start and then every `mgmt_announce_interval = 2 h` (`RNS/Transport.py:545` → `Transport.last_mgmt_announce = time.time() - Transport.mgmt_announce_interval + 15`). Transport mode is not required.
+
+A `/list` request carries no data. The response is the node's **whole** `blackholed_identities` table, in the §12.7.1 format (`RNS/Transport.py:4842-4843` → `try: return Transport.blackholed_identities`), framed as any §11.2 response. Large tables therefore arrive as a Resource. The table includes entries the publisher itself learned from *its* subscriptions, with their original `source`, so lists propagate transitively.
+
+#### 12.7.3 Subscribing
+
+`[reticulum] blackhole_sources` lists the **transport identity hashes** to subscribe to, as 32 hex characters each. `blackhole_update_interval` is in minutes, minimum 2; the default is 1 hour (`RNS/Discovery.py:908` → `UPDATE_INTERVAL = 1*60*60`). Starting 20 s after start, then every minute, `BlackholeUpdater` checks each source whose interval has elapsed. For each one it derives `rnstransport.info.blackhole` from the source's identity hash, waits for a path, opens a Link, and requests `/list` (`RNS/Discovery.py:975-981` → `destination_hash = RNS.Destination.hash_from_name_and_identity("rnstransport.info.blackhole", identity_hash)`). Because the destination is derived from the configured hash, the identity that answers *is* the source. That is the whole trust check.
+
+On a dict response (`RNS/Discovery.py:928-955` → `def update_link_established(self, link):`) the subscriber:
+
+1. **adds** each entry whose identity it does not already have, and never overwrites an existing one (`:943` → `if not identity_hash in RNS.Transport.blackholed_identities:`);
+2. writes the fetched list **verbatim** to `storage/blackhole/<source hex>` (`:952` → `sourcelistpath = os.path.join(RNS.Reticulum.blackholepath`).
+
+At start-up `reload_blackhole` reads `storage/blackhole/` (`RNS/Transport.py:4770-4808` → `def reload_blackhole():`):
+
+- `local` is the node's own list.
+- Any other file is used only if its name is a hash still in `blackhole_sources`, so unsubscribing takes effect on restart.
+- Entries already expired are skipped.
+- A remote entry never replaces a local one.
+- Reloaded remote entries get `source` = the publisher named by the file, not whatever the entry claimed.
+
+Only entries whose `source` is this node's own transport identity are persisted to `local` (`RNS/Transport.py:4851-4856` → `def persist_blackhole():`).
+
+> **Hazard: fetched entries can become permanent "local" entries.**
+> Step 1 above stores each fetched entry exactly as received, **including its
+> `source` field**. Any fetched entry whose `source` equals the subscriber's
+> own transport identity hash is then indistinguishable from one the
+> subscriber's operator created. The next time the subscriber persists its
+> local list, which happens on any local blackhole or unblackhole,
+> `persist_blackhole` writes the entry to `storage/blackhole/local`. From then
+> on it survives removing every source from `blackhole_sources`. Upstream keeps
+> no other record of which entries the operator actually made, so once
+> persisted the entry **cannot be told apart from a genuine local one**, and no
+> after-the-fact cleanup rule can remove it safely. Two ways it happens:
+>
+> - **A hostile publisher.** A publisher, or anyone its list was learned from,
+>   sets `source` to the subscriber's transport identity hash. On a transport
+>   node that hash is static and visible on the network: it is the
+>   `transport_id` in every packet the node relays. A non-transport node uses
+>   a fresh ephemeral transport identity on each run, which narrows the
+>   window, but a persisted entry stays either way.
+> - **A list loop, with no attacker.** Nodes A and B each publish and each
+>   subscribe to the other. B holds A's entry for X with `source` = A, and
+>   `/list` returns everything B holds. A later **unblackholes** X. A's next
+>   routine fetch from B finds X absent locally, so it merges B's copy back,
+>   still claiming `source` = A. A's next local change persists it, so the
+>   unblackhole is silently reversed for good.
+>
+> Both were reproduced end to end against RNS 1.6.1. Each test used separate
+> transport-node processes connected over TCP, with the unmodified
+> `BlackholeUpdater` fetching `/list` over a real Link. In each case the entry
+> was still enforced after a restart with no `blackhole_sources` and no
+> interfaces, and an announce from the blackholed identity returned
+> `"blackholed"`. In the publisher case, the publisher's honestly attributed
+> entry was gone after the restart, as it should be. `tools/verify_blackhole_list.py`
+> asserts both mechanisms.
+>
+> **Affected versions: since RNS 1.1.0 (2026-01-04), and through at least the
+> current pin.** Blackhole lists first shipped in 1.1.0; 1.0.4 has none. Every
+> released wheel from 1.1.0 onward was checked for the three ingredients: the
+> verbatim merge in `update_link_established`, the `source` filter in
+> `persist_blackhole`, and the rewrite of `source` only in `reload_blackhole`.
+> All are present unchanged. The publisher reproduction was also run against
+> a clean RNS 1.1.0 install, with the same outcome. Through RNS 1.4.2,
+> `validate_announce` has no `signal_blackholed` parameter and simply returns
+> `False` (§4.5 step 5).
+>
+> **Guidance.** The fix belongs at merge time, the only point where an
+> entry's origin is still known. An implementation merging a fetched list
+> SHOULD NOT accept an entry as its own. It should either set `source` to the
+> publisher's identity hash, as `reload_blackhole` already does, or drop any
+> fetched entry whose `source` is its own transport identity and log it, since
+> that indicates a hostile publisher or a loop. It SHOULD also ignore keys that
+> are not 16 bytes. Merged entries are not checked for expiry, nor are their
+> `until` / `reason` types checked; `jobs` removes expired ones within 60 s.
+
+### 12.8 Source map for §12
 
 | File | What |
 |---|---|
@@ -4359,6 +4466,9 @@ The wire protocol for shared-instance loopback is just the same Reticulum packet
 | `RNS/Transport.py:1178-1311` → `# Cull the path table` | stale-path / stale-tunnel eviction |
 | `RNS/Transport.py:4117-4144` → `# interface has PR` | `discovery_path_requests` recursive search |
 | `RNS/Interfaces/Interface.py:456-495` → `def process_announce_queue(self):` | per-interface `announce_queue` and `ANNOUNCE_CAP` enforcement |
+| `RNS/Transport.py:4722-4740` → `def blackhole_identity(identity_hash, until=None, reason=None):` | local blackhole entries (§12.7.1) |
+| `RNS/Transport.py:4842-4848` → `def blackhole_list_handler(` | `/list` response: the whole table (§12.7.2) |
+| `RNS/Discovery.py:905-990` → `class BlackholeUpdater():` | blackhole-list subscriber (§12.7.3) |
 
 ---
 
@@ -4762,7 +4872,7 @@ Embedded clean-room implementations need to know up front which data structures 
 |---|---|---|
 | `Identity.known_destinations` | (unbounded) | §4.5 step 6 — main growth vector. Persisted across restart; aged out via `Identity.clean_known_destinations` based on `Identity.RATCHET_EXPIRY = 30 days` for unused entries. |
 | `Identity.known_ratchets` | (unbounded — one per `known_destinations` entry that has ever announced a ratchet) | §4.5 step 6, §7.4 |
-| `Transport.blackholed_identities` | (operator-controlled; empty by default) | §4.5 step 5 |
+| `Transport.blackholed_identities` | (operator-controlled; empty by default) — grows with every subscribed list (§12.7.3), with no cap | §4.5 step 5, §12.7 |
 | `Identity.announce_valid_cache` / `announce_invalid_cache` | 384 entries each, oldest evicted first (RNS ≥ 1.6) | §4.5 step 5. Validation results keyed by packet hash (`RNS/Identity.py::Identity.__cache_valid_announce` → `while len(Identity.announce_valid_cache) > Identity.__valid_cache_max:`) |
 
 ### 16.7 LXMF-level caps
@@ -4890,7 +5000,7 @@ Upstream Python sources, in rough order of frequency-of-reference:
 | `RNS/Transport.py` | `outbound`, `inbound`, `request_path`, path table, HEADER_1↔2 |
 | `RNS/Link.py` | Link establishment, LRPROOF, session-key derivation |
 | `RNS/Stamps.py` | Proof-of-work stamps for announces, link requests, path requests, LXMF and discovery (RNS ≥ 1.6) |
-| `RNS/Discovery.py` | Interface discovery announces: producer, receive checks, auto-connect policy (§4.8) |
+| `RNS/Discovery.py` | Interface discovery announces: producer, receive checks, auto-connect policy (§4.8); `BlackholeUpdater`, the blackhole-list subscriber (§12.7) |
 | `RNS/Cryptography/Token.py` | The Fernet-style Token format |
 | `RNS/vendor/umsgpack.py` | The bundled msgpack with locked bin/str semantics |
 | `RNS/Interfaces/TCPInterface.py` | TCPClient/TCPServer, including HDLC framing |
