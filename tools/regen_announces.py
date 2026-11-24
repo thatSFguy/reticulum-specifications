@@ -19,7 +19,13 @@ Determinism inputs:
     `time.time` inside `RNS.Destination` for the duration of the
     announce build).
   - `ratchet_priv` = fixed 32 bytes (vector #2 only).
-  - `app_data` = `umsgpack.packb([b"AliceTest", 0])` per S4.3.
+  - `app_data` = `umsgpack.packb([b"AliceTest", 0])` per S4.3. (A fixed
+    test input, not what current LXMF emits; see S4.3 for that.)
+  - Destination stamp (S4.7, RNS >= 1.6) = a fixed, pre-computed 14-byte
+    stamp per destination, installed on the Destination before announcing
+    so upstream appends it instead of running a fresh, random
+    proof-of-work. Each is checked against DESTINATION_VALUE here, so the
+    vectors carry exactly the trailer upstream emits by default.
 
 After build we run `RNS.Identity.validate_announce` on the produced
 packet and assert it accepts; this proves the recorded bytes are
@@ -54,6 +60,16 @@ FIXED_RANDOM_PREFIX = bytes.fromhex("a1a2a3a4a5")          # random_hash[0:5]
 FIXED_TIMESTAMP     = 1700000000                            # 2023-11-14, BE-uint40 -> random_hash[5:10]
 FIXED_RATCHET_PRIV  = bytes.fromhex("b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0")
 FIXED_APP_DATA      = umsgpack.packb([b"AliceTest", 0])    # S4.3 2-element form
+
+# S4.7 destination stamps over dest_hash || public_key || name_hash, one per
+# vector destination, found once by upstream's generator. Both exceed
+# DESTINATION_VALUE = 25.0. If Alice's key or an aspect ever changes these
+# stop validating and this script fails; regenerate them with
+# RNS.Stamps.generate_stamp(material, stamp_cost=25.0, expand_rounds=0, size=14).
+FIXED_DESTINATION_STAMPS = {
+    "alice_announce_no_ratchet":   bytes.fromhex("32e1213a71282249808106cbda75"),
+    "alice_announce_with_ratchet": bytes.fromhex("add495d12a15ad4b5189764bb8e5"),
+}
 
 
 def fail(msg: str) -> None:
@@ -123,6 +139,13 @@ def build_deterministic_announce(identity, with_ratchet: bool) -> bytes:
             dest.latest_ratchet_time  = float(FIXED_TIMESTAMP)
             dest.path_responses       = {}
         # else: leave dest.ratchets = None so context_flag=0
+
+        stamp = FIXED_DESTINATION_STAMPS[aspect]
+        value = RNS.Stamps.stamp_value(dest.stamp_material(), stamp)
+        if value < RNS.Stamps.quantize_cost(RNS.Transport.DESTINATION_VALUE):
+            fail(f"fixed destination stamp for {aspect} is worth {value}, below "
+                 f"DESTINATION_VALUE = {RNS.Transport.DESTINATION_VALUE}")
+        dest.stamp, dest.stamp_value = stamp, value
 
         pkt = dest.announce(app_data=FIXED_APP_DATA, send=False)
         pkt.pack()
@@ -206,6 +229,10 @@ def main():
                     "ratchet_priv_hex":          FIXED_RATCHET_PRIV.hex() if with_ratchet else None,
                     "app_data_msgpack_hex":      FIXED_APP_DATA.hex(),
                     "app_data_decoded":          ["AliceTest", 0],
+                    "destination_stamp_hex":     FIXED_DESTINATION_STAMPS["alice_announce_with_ratchet" if with_ratchet else "alice_announce_no_ratchet"].hex(),
+                    "note": ("body_app_data_hex is app_data_msgpack_hex followed by the S4.7 "
+                             "18-byte trailer: c1 00 || destination_stamp(14) || lr_cost "
+                             "(fraction byte first; 80 0c = 12.5, the default LR_COST)."),
                 },
                 "expected": {
                     "destination_hash_hex":      dest_hash.hex(),
@@ -214,7 +241,7 @@ def main():
                 },
                 "rns_version_at_generation":   RNS.__version__,
                 "generator_script":            "tools/regen_announces.py",
-                "verifies_spec_sections":      ["2.1", "4.1", "4.2", "4.3", "4.5"],
+                "verifies_spec_sections":      ["2.1", "4.1", "4.2", "4.3", "4.5", "4.7"],
             })
 
         payload = {

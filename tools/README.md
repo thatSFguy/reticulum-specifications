@@ -74,31 +74,34 @@ error, so the list can't rot.
 
 ## Status
 
-Populated against RNS 1.5.7 / LXMF 1.2.1 (all 22 scripts re-run green at this pin):
+Populated against RNS 1.6.1 / LXMF 1.3.1 (all 25 scripts re-run green at this pin):
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|
 | `verify_destination_hash.py` | §1.1, §1.2, §1.3 — identity composition, `dest_hash = SHA256(name_hash \|\| identity_hash)[:16]`, on-disk private-key round-trip via `to_file`/`from_file` | ✅ |
 | `verify_packet_header.py` | §2.1, §2.2, §2.3 — flag byte layout, HEADER_1/HEADER_2 form, originator HEADER_1→HEADER_2 conversion via upstream `Transport.outbound` | ✅ |
 | `verify_token_crypto.py` | §3 — Token encrypt/decrypt, HKDF salt = identity_hash, HMAC-then-AES order, PKCS#7 padding | ✅ |
-| `verify_announce_app_data.py` | §4.3 — LXMF announce app_data 2-element form, parser tolerance | ✅ |
-| `verify_app_data_dispatch.py` | §4.6 — app_data is opaque to RNS; LXMF's first-byte dispatch on non-LXMF payloads | ✅ |
-| `verify_announce_roundtrip.py` | §4.1, §4.2, §4.5 — announce body layout, signature, dest_hash recompute, tamper rejection | ✅ |
+| `verify_announce_app_data.py` | §4.3 — LXMF announce app_data as emitted by the real producer: the 4-element form, 1/256 cost quantization, the cap, and parsing of 2- to 5-element arrays | ✅ |
+| `verify_announce_stamp.py` | §4.7 — the 18-byte announce-stamp trailer: layout, `lr_cost` byte order, unexpanded stamp material, signature coverage, strip-vs-keep on receive, enforcement | ✅ |
+| `verify_app_data_dispatch.py` | §4.6 — app_data is opaque to RNS; LXMF's first-byte dispatch on non-LXMF payloads (returns `None` since LXMF 1.3); LXMF still parses app_data with the §4.7 trailer attached | ✅ |
+| `verify_announce_roundtrip.py` | §4.1, §4.2, §4.5 — announce body layout, signature, dest_hash recompute, tamper rejection; the `random_hash` timestamp falls inside the build window (it predates the stamp wait) | ✅ |
 | `verify_lxmf_opportunistic.py` | §5.1, §5.2, §5.5, §5.6 — full identity → encrypt → decrypt → parse round-trip | ✅ |
 | `verify_canonical_msgpack.py` | §5.6, §5.6.1 — canonical msgpack is a MUST for stamped messages and a SHOULD otherwise; round-trips a non-canonical integer envelope through upstream both ways and reads its verdict, including the unstamped control case | ✅ |
 | `verify_lxmf_fields.py` | §5.9 — every `FIELD_*` / `AM_*` / `RENDERER_*` / `PN_META_*` / `SF_*` / reaction-comment-continuation dict-index constant matches upstream, plus an audit that fails if upstream adds an un-enumerated constant | ✅ |
 | `verify_lxmf_peer_constants.py` | §5.8.1, §5.8.2 — propagation-node request-path strings across both destinations and the eight `LXMPeer.ERROR_*` response bytes (incl. the unallocated `0xf2`), plus an audit that fails if upstream adds an un-enumerated `ERROR_*` or `*_PATH` constant | ✅ |
 | `verify_proof_packet.py` | §6.5 — implicit (64B) and explicit (96B) proof body forms, validator length-dispatch | ✅ |
 | `verify_link_handshake.py` | §6.1, §6.2, §6.3, §6.6 — LINKREQUEST/LRPROOF body order, link_id derivation, signalling | ✅ |
+| `verify_link_request_stamp.py` | §6.1.1 — link-request stamps: defaults, the stamped X25519 key on the initiator, enforcement on the responder | ✅ |
 | `verify_link_lrrtt.py` | §6.4.2, §6.4.3 — LRRTT wire form, HEADER_1 header, dest_type=LINK, ctx=0xfe, link-form Token body, msgpack float64 plaintext | ✅ |
-| `verify_path_request.py` | §1.2 well-known hashes, §7.1 LXMF path-preamble gating | ✅ |
+| `verify_path_request.py` | §1.2 well-known hashes; §7.1–§7.2.1 path-request bytes captured at runtime (48 unstamped, 64 stamped, `transport_id` on every node), stamp zero bits counted independently, and the 32/48/64-byte ingress rule with enforcement off and on | ✅ |
 | `verify_rnode_split.py` | §8.3 — RNode air-frame split-packet TX/RX state machines | ✅ |
 | `verify_msgpack_quirk.py` | §9.3 — encoding name as bytes vs str affects upstream parsing | ✅ |
+| `verify_lxmf_stamp_costs.py` | §5.7.2–§5.7.4, §5.8 — fractional (1/256) costs: integer targets match the old formula, `floor(stamp_value)` matches the old value, the unexpanded form is accepted but not generated, the 8-element propagation announce, link costs, the 300 s throttle and the app-flag gate | ✅ |
 | `verify_stamps.py` | §5.7 — workblock determinism, PoW stamp search/validate, ticket shortcut, and the ticket-stamp length: `truncated_hash(ticket \|\| message_id)` is 16 bytes (half `STAMP_SIZE`), emitted by `get_stamp` with `stamp_value = COST_TICKET = 0x100` | ✅ |
 | `verify_propagation_get.py` | §5.8.3 — the `/get` retrieval response is a flat list of bodies (not the `[timestamp, [bodies]]` upload envelope), each stripped of its propagation stamp, and `full_hash(body_as_received)` reproduces the node's `transient_id` so the `have_ids` purge round closes | ✅ |
-| `verify_resource_sizing.py` | §10.2 step 6, §10.4, §5.7.4 — which Resource quantities follow the negotiated link MTU vs. which are fixed class constants; that upstream still imposes no receive-time part-size check; and the `stamp_cost` `1..254` range with its `< 1 → None` / `>= 255` refused rules | ✅ |
+| `verify_resource_sizing.py` | §10.2 step 6, §10.4, §5.7.4 — which Resource quantities follow the negotiated link MTU vs. which are fixed class constants; that upstream still imposes no receive-time part-size check; the `stamp_cost` range `1 ≤ c < 100` (int or float) with `< 1 → None` and `>= 100` refused; the Resource app flag, the empty-hashmap advertisement and `HASHMAP_IS_EMPTY` | ✅ |
 | `verify_ratchet_dedup.py` | §7.3 / §4.5 step 6.3 — confirms replay defence is keyed on `random_blob`, NOT on `(dest_hash, ratchet_pub)` | ✅ |
-| `verify_ingress_bounds.py` | §2.2, §4.5 — receive-side ingress bounds added in RNS 1.5.2: `Packet.unpack` rejects a zero-length data field (HEADER_1 and HEADER_2), and `Transport.inbound` refuses an ANNOUNCE over the 500-byte `Reticulum.MTU` as a protocol violation before `validate_announce` runs, while accepting one at exactly the MTU | ✅ |
+| `verify_ingress_bounds.py` | §2.2, §4.5 — `Packet.unpack` rejects a zero-length data field (HEADER_1 and HEADER_2); `Transport.inbound` refuses an ANNOUNCE over the 500-byte `Reticulum.MTU` before `validate_announce` runs; since RNS 1.6 a `HEADER_1` announce must be ≤ 484 bytes (send and receive) and announce data ≥ 84 bytes, while a 500-byte `HEADER_2` announce is accepted | ✅ |
 | `verify_resource_segment_store.py` | §10.11.1 — receiver-side multi-segment store: `storagepath` keyed on the advertised `o` alone (per-node, shared across links), segments concatenated in **arrival** order rather than by `i`, and the 24 h idle `RESOURCE_CACHE` / 15 min sweep / 64-char filename filter | ✅ |
 | `regen_identities.py` | regenerates `test-vectors/identities.json` | ✅ |
 | `regen_announces.py` | regenerates `test-vectors/announces.json` (deterministic announce wire bytes, with and without ratchet) | ✅ |

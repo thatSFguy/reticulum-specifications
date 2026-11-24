@@ -15,7 +15,7 @@
         "name_hash_hex": "6ec60bc318e2c0f0d908",
         "destination_hash_hex": "c33c40a5b030596d95617dc4ca163aae"
       },
-      "rns_version_at_generation": "1.2.0",
+      "rns_version_at_generation": "1.6.1",
       "generator_script": "tools/regen_identities.py",
       "verifies_spec_sections": [
         "1.1",
@@ -36,7 +36,7 @@
         "name_hash_hex": "6ec60bc318e2c0f0d908",
         "destination_hash_hex": "9695d17f22fa6e45d2b0cd3439a7ca7e"
       },
-      "rns_version_at_generation": "1.2.0",
+      "rns_version_at_generation": "1.6.1",
       "generator_script": "tools/regen_identities.py",
       "verifies_spec_sections": [
         "1.1",

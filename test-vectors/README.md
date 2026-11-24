@@ -4,14 +4,14 @@ Known-good byte sequences that any Reticulum-compatible implementation should be
 
 ## Status
 
-Generated against RNS 1.2.4 / LXMF 0.9.7; re-verified green against the current `tools/requirements.txt` pin (RNS 1.5.7 / LXMF 1.2.1). Regenerating all four files at that pin reproduces every wire byte; only the `*_version_at_generation` fields differ, which record where each vector was first produced:
+Regenerated against the current `tools/requirements.txt` pin (RNS 1.6.1 / LXMF 1.3.1). `identities.json`, `lxmf.json` and `links.json` came out byte-identical to their earlier RNS 1.2.x generation; only the `*_version_at_generation` fields moved. **`announces.json` changed**: since RNS 1.6 every announce ends its `app_data` with the 18-byte stamp trailer (SPEC.md §4.7), so both vectors gained it and their signatures changed with it. The stamps are pinned inputs (`destination_stamp_hex`), so the file stays byte-deterministic:
 
 - ✅ `identities.json` — Alice + Bob identity vectors (regenerator: `../tools/regen_identities.py`, verifier: `../tools/verify_destination_hash.py`).
 - ✅ `announces.json` — two announce vectors (no-ratchet + with-ratchet) signed by Alice (regenerator: `../tools/regen_announces.py`, verifier: `../tools/verify_announce_roundtrip.py`).
 - ✅ `lxmf.json` — two opportunistic-LXMF vectors Alice → Bob (regenerator: `../tools/regen_lxmf.py`, verifier: `../tools/verify_lxmf_opportunistic.py`).
 - ✅ `links.json` — full Link handshake vector (LINKREQUEST + LRPROOF + derived session key) Alice → Bob, plus an LRRTT packet (§6.4.2) emitted from the initiator with pinned IV and `rtt_seconds = 0.05` (regenerator: `../tools/regen_links.py`, verifiers: `../tools/verify_link_handshake.py`, `../tools/verify_link_lrrtt.py`).
 
-All four files are byte-deterministic across runs: regenerators pin every random source (ephemeral keys, IVs, `random_hash` prefix + timestamp, LXMF timestamp) so the output is reproducible against a fixed upstream RNS / LXMF version.
+All four files are byte-deterministic across runs: regenerators pin every random source (ephemeral keys, IVs, `random_hash` prefix + timestamp, LXMF timestamp, destination stamps) so the output is reproducible against a fixed upstream RNS / LXMF version.
 
 See [`../agent.md`](../agent.md) §5 and [`../todo.md`](../todo.md) for the remaining bootstrap task list.
 
