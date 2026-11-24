@@ -56,6 +56,7 @@ def verify_well_known_hashes():
         ("rnstransport.broadcasts",         "9efb9c771eeb5ae90ea6"),
         ("rnstransport.remote.management",  "4848a053c16415bed6c8"),
         ("rnstransport.path.request",       "7926bbe7dd7f9aba88b0"),
+        ("rnstransport.discovery.interface", "55aa39e85c3e045e9cb1"),
     ]
     for name, expected_namehash_hex in cases:
         actual = hashlib.sha256(name.encode("utf-8")).digest()[:10]
