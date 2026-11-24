@@ -24,8 +24,8 @@
           "msgpack_payload_hex": "94cb41d954fc40000000c40568656c6c6fc406686920626f6280"
         }
       },
-      "rns_version_at_generation": "1.2.0",
-      "lxmf_version_at_generation": "0.9.6",
+      "rns_version_at_generation": "1.6.1",
+      "lxmf_version_at_generation": "1.3.1",
       "generator_script": "tools/regen_lxmf.py",
       "verifies_spec_sections": [
         "3",
@@ -61,8 +61,8 @@
           "msgpack_payload_hex": "94cb41d954fc40000000c4076d656574696e67c40c7365652061747461636865648201a26b31022a"
         }
       },
-      "rns_version_at_generation": "1.2.0",
-      "lxmf_version_at_generation": "0.9.6",
+      "rns_version_at_generation": "1.6.1",
+      "lxmf_version_at_generation": "1.3.1",
       "generator_script": "tools/regen_lxmf.py",
       "verifies_spec_sections": [
         "3",

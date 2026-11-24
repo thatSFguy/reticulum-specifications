@@ -193,6 +193,8 @@ def verify_header_conversion(rns_instance):
                 [],            # IDX_PT_RANDBLOBS
                 FakeIF(),      # IDX_PT_RVCD_IF
                 None,          # IDX_PT_PACKET
+                0,             # IDX_PT_USED (RNS >= 1.6; _outbound stamps it
+                               # with the send time; ignored by older pins)
             ]
 
         # Build the packet — PLAIN destination DATA, HEADER_1 by default.
@@ -237,7 +239,7 @@ def verify_header_conversion(rns_instance):
             fail("§2.3 conversion: trailing bytes (orig dest_hash + ctx + payload) mismatch")
 
         print("PASS S2.3 HEADER_1 -> HEADER_2 conversion at originator "
-              "(matches RNS/Transport.py:1077-1108)")
+              "(RNS/Transport.py::_outbound)")
     finally:
         Transport.transmit = real_transmit
         with Transport.path_table_lock:
@@ -253,12 +255,21 @@ def main():
         verify_header_two_form()
         verify_hop_count_bound()
         verify_header_conversion(rns_instance)
+        # Printed before the finally block: exit_handler can end the process.
+        print("ALL PASS")
+    except BaseException:
+        # Report before exit_handler runs, which can terminate the process
+        # and swallow the traceback (an IndexError here once exited 1 silently).
+        import traceback
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        raise
     finally:
         try:
             RNS.Reticulum.exit_handler()
         except Exception:
             pass
-    print("ALL PASS")
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@
           "body_hex": "4444444444444444444444444444444408eed3f995972368190afe8851fcc6850767824d5c8980840a16d4e5c873a5977669bb9c488d68ecf0da3ff6111cf630"
         }
       },
-      "rns_version_at_generation": "1.2.4",
+      "rns_version_at_generation": "1.6.1",
       "generator_script": "tools/regen_links.py",
       "verifies_spec_sections": [
         "6.1",

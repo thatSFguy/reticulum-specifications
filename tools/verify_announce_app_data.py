@@ -3,21 +3,22 @@ Verifier for SPEC.md S4.3 (announce app_data format for LXMF delivery
 destinations).
 
 Exercises:
-  - Upstream LXMF.LXMRouter.get_announce_app_data emits a 3-element msgpack
-    array [display_name_bytes, stamp_cost, [SF_COMPRESSION]] as of LXMF 1.0.x.
-    (The LXMF 0.9.7 producer computed supported_functionality but never
-    appended it, emitting only 2 elements — see SPEC.md S4.3.)
-  - The wire-byte form for display_name="Reticulum5", stamp_cost=None matches
-    the hex documented in SPEC.md S4.3:
-        3-element: 93 c4 0a 52 65 74 69 63 75 6c 75 6d 35 c0 91 00
-        2-element (legacy ≤0.9.x): 92 c4 0a 52 65 74 69 63 75 6c 75 6d 35 c0
-  - The parsers in LXMF/LXMF.py tolerate:
-      * raw UTF-8 ("original announce format")
-      * 1-element msgpack array
-      * 2-element [name, stamp_cost]
-      * 3-element [name, stamp_cost, [capability_flags]]
-    and that the 3-element variant is what flips
-    compression_support_from_app_data based on SF_COMPRESSION presence.
+  - Upstream LXMF.LXMRouter.get_announce_app_data, CALLED on a stub router
+    (not grepped), emits the LXMF 1.3 4-element msgpack array
+        [display_name_bytes, ceil(stamp_cost) | None, [SF_COMPRESSION], stamp_cost | None]
+    where element [3] is the 1/256-quantized fractional cost as a float and
+    element [1] is that cost rounded UP for LXMF <= 1.2 readers.
+    (An earlier revision of this verifier looked for the 3-element producer
+    line in the function source. After LXMF 1.3 that line survives only as
+    a comment, so the check kept passing against a producer that no longer
+    emitted the documented shape. Calling the producer closes that hole.)
+  - The wire bytes for display_name="Reticulum5" with no stamp cost, and
+    with stamp_cost=8.5, match the hex documented in SPEC.md S4.3.
+  - The legacy 2-element (<= 0.9.x) and 3-element (1.0-1.2) forms still
+    have the documented bytes.
+  - The parsers in LXMF/LXMF.py tolerate raw UTF-8, and 1/2/3/4-element
+    arrays; stamp_cost_from_app_data prefers a numeric element [3] and
+    falls back to element [1] otherwise.
 
 Exit code 0 on PASS, non-zero on FAIL.
 """
@@ -25,11 +26,16 @@ Exit code 0 on PASS, non-zero on FAIL.
 from __future__ import annotations
 
 import sys
+import types
 
 import RNS
 import LXMF
 from LXMF import LXMF as LXMF_helpers
+from LXMF.LXMRouter import LXMRouter
 import RNS.vendor.umsgpack as umsgpack
+
+
+NAME_HEX = "c40a" + "5265746963756c756d35"   # bin8(10) "Reticulum5"
 
 
 def fail(msg: str) -> None:
@@ -37,56 +43,63 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
-def verify_three_element_wire_bytes():
-    # SPEC.md S4.3 hex example: display_name="Reticulum5", stamp_cost=None,
-    # supported_functionality=[SF_COMPRESSION].
-    # Spec layout:
-    #   93                              # fixarray, 3 elements
-    #   c4 0a                           # bin8, length 10
-    #   52 65 74 69 63 75 6c 75 6d 35   # "Reticulum5"
-    #   c0                              # nil (stamp_cost)
-    #   91                              # fixarray, 1 element
-    #   00                              # SF_COMPRESSION
-    expected = bytes.fromhex("93" + "c40a" + "5265746963756c756d35" + "c0" + "91" + "00")
+def produce(stamp_cost) -> bytes:
+    """Run upstream's get_announce_app_data against a minimal stub router."""
+    dest_hash = b"\x01" * 16
+    dest = types.SimpleNamespace(display_name="Reticulum5", stamp_cost=stamp_cost)
+    stub = types.SimpleNamespace(delivery_destinations={dest_hash: dest})
+    out = LXMRouter.get_announce_app_data(stub, dest_hash)
+    if not isinstance(out, bytes):
+        fail(f"S4.3 get_announce_app_data returned {type(out).__name__}, expected bytes")
+    return out
 
-    name = b"Reticulum5"
-    peer_data = [name, None, [LXMF_helpers.SF_COMPRESSION]]
-    actual = umsgpack.packb(peer_data)
+
+def verify_producer_wire_bytes():
+    # No stamp cost: 94 <name> c0 91 00 c0
+    expected = bytes.fromhex("94" + NAME_HEX + "c0" + "91" + "00" + "c0")
+    actual = produce(None)
     if actual != expected:
-        fail(f"S4.3 3-element wire bytes mismatch:\n"
-             f"  got: {actual.hex()}\n"
-             f"  want: {expected.hex()}")
-    print("PASS S4.3 3-element wire bytes "
-          "(umsgpack.packb([b'Reticulum5', None, [SF_COMPRESSION]]))")
+        fail(f"S4.3 producer bytes (no stamp cost) mismatch:\n"
+             f"  got:  {actual.hex()}\n  want: {expected.hex()}")
+    print(f"PASS S4.3 LXMF {LXMF.__version__} producer emits the 4-element form, "
+          f"no stamp cost: {actual.hex()}")
 
-
-def verify_legacy_two_element_wire_bytes():
-    # Legacy ≤0.9.x producer form, still accepted on inbound. Documented in
-    # SPEC.md S4.3 as the 2-element form.
-    expected = bytes.fromhex("92" + "c40a" + "5265746963756c756d35" + "c0")
-    actual = umsgpack.packb([b"Reticulum5", None])
+    # stamp_cost = 8.5: element [1] = ceil = 9 (fixint 09), element [3] = float64 8.5
+    expected = bytes.fromhex("94" + NAME_HEX + "09" + "91" + "00" + "cb4021000000000000")
+    actual = produce(8.5)
     if actual != expected:
-        fail(f"S4.3 legacy 2-element wire bytes mismatch:\n"
-             f"  got: {actual.hex()}\n"
-             f"  want: {expected.hex()}")
-    print("PASS S4.3 legacy 2-element wire bytes (umsgpack.packb([b'Reticulum5', None]))")
+        fail(f"S4.3 producer bytes (stamp_cost=8.5) mismatch:\n"
+             f"  got:  {actual.hex()}\n  want: {expected.hex()}")
+    print("PASS S4.3 stamp_cost=8.5 -> element [1] = 9 (rounded up), "
+          "element [3] = float64 8.5")
+
+    # Quantization: [3] is the 1/256 grid value, and [1] is never rounded down.
+    for cost in (1, 8, 12.7, 33.3, 99.9):
+        peer = umsgpack.unpackb(produce(cost))
+        q = RNS.Stamps.quantize_cost(cost)
+        if peer[3] != q or not isinstance(peer[3], float):
+            fail(f"S4.3 element [3] for cost {cost!r} is {peer[3]!r}, want quantized float {q!r}")
+        if not isinstance(peer[1], int) or peer[1] < peer[3] or peer[1] - peer[3] >= 1:
+            fail(f"S4.3 element [1] for cost {cost!r} is {peer[1]!r}, want ceil({peer[3]!r})")
+    print("PASS S4.3 element [3] is the 1/256-quantized float, element [1] its ceiling")
+
+    # At or above STAMP_COST_CAP the producer announces no cost at all.
+    cap = RNS.Transport.STAMP_COST_CAP
+    peer = umsgpack.unpackb(produce(cap))
+    if peer[1] is not None or peer[3] is not None:
+        fail(f"S4.3 cost == STAMP_COST_CAP ({cap}) announced as {peer!r}; expected no cost")
+    print(f"PASS S4.3 cost >= STAMP_COST_CAP ({cap}) is not announced")
 
 
-def verify_producer_is_three_element_in_this_lxmf():
-    # Read the LXMRouter source and confirm it appends 3 elements in the
-    # LXMF 1.0.x producer. We inspect the function source so the verifier
-    # breaks loudly if upstream reverts to (or diverges from) the 3-element
-    # [display_name, stamp_cost, supported_functionality] form.
-    import inspect
-    from LXMF.LXMRouter import LXMRouter
-
-    src = inspect.getsource(LXMRouter.get_announce_app_data)
-    if "peer_data = [display_name, stamp_cost, supported_functionality]" not in src:
-        fail(f"S4.3 3-element producer line not found in "
-             f"LXMRouter.get_announce_app_data. Upstream may have changed the "
-             f"app_data producer shape — re-check SPEC.md S4.3. Source:\n{src}")
-    print(f"PASS S4.3 LXMF {LXMF.__version__} producer emits 3-element form "
-          "[display_name, stamp_cost, supported_functionality]")
+def verify_legacy_wire_bytes():
+    # Forms emitted by older producers, which receivers must still accept.
+    three = bytes.fromhex("93" + NAME_HEX + "c0" + "91" + "00")
+    if umsgpack.packb([b"Reticulum5", None, [LXMF_helpers.SF_COMPRESSION]]) != three:
+        fail("S4.3 3-element (LXMF 1.0-1.2) wire bytes mismatch")
+    two = bytes.fromhex("92" + NAME_HEX + "c0")
+    if umsgpack.packb([b"Reticulum5", None]) != two:
+        fail("S4.3 legacy 2-element wire bytes mismatch")
+    print("PASS S4.3 legacy 3-element and 2-element wire bytes")
 
 
 def verify_parser_tolerance():
@@ -111,6 +124,18 @@ def verify_parser_tolerance():
         ("3-element fixarray [name, nil, []] (no SF flags set)",
          umsgpack.packb([b"Faye", None, []]),
          "Faye", None, False),
+        ("4-element [name, 9, [SF], 8.5] -> element [3] wins",
+         umsgpack.packb([b"Gus", 9, [LXMF_helpers.SF_COMPRESSION], 8.5]),
+         "Gus", 8.5, True),
+        ("4-element [name, nil, [SF], nil] -> no cost",
+         umsgpack.packb([b"Hal", None, [LXMF_helpers.SF_COMPRESSION], None]),
+         "Hal", None, True),
+        ("4-element [name, 7, [SF], 'x'] -> non-numeric [3] falls back to [1]",
+         umsgpack.packb([b"Ivy", 7, [LXMF_helpers.SF_COMPRESSION], "x"]),
+         "Ivy", 7, True),
+        ("5-element (future) [name, 7, [], 6.25, 'extra']",
+         umsgpack.packb([b"Jo", 7, [], 6.25, "extra"]),
+         "Jo", 6.25, False),
     ]
     for label, blob, want_name, want_cost, want_compress in cases:
         got_name = LXMF_helpers.display_name_from_app_data(blob)
@@ -122,14 +147,14 @@ def verify_parser_tolerance():
             fail(f"S4.3 parser ({label}): stamp_cost got {got_cost!r} want {want_cost!r}")
         if got_compress != want_compress:
             fail(f"S4.3 parser ({label}): compression got {got_compress!r} want {want_compress!r}")
-    print("PASS S4.3 parser tolerance (raw UTF-8, 1/2/3-element msgpack array)")
+    print("PASS S4.3 parser tolerance (raw UTF-8, 1/2/3/4/5-element msgpack array; "
+          "numeric element [3] preferred over [1])")
 
 
 def main():
     print(f"verify_announce_app_data.py against RNS {RNS.__version__} / LXMF {LXMF.__version__}")
-    verify_three_element_wire_bytes()
-    verify_legacy_two_element_wire_bytes()
-    verify_producer_is_three_element_in_this_lxmf()
+    verify_producer_wire_bytes()
+    verify_legacy_wire_bytes()
     verify_parser_tolerance()
     print("ALL PASS")
 

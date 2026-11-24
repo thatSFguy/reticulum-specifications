@@ -1,6 +1,7 @@
 """
-Verifier for SPEC.md §10.2 step 6, §10.4 (the MTU-vs-fixed callout) and
-§5.7.4 (the stamp-cost valid range).
+Verifier for SPEC.md §10.2 step 6, §10.4 (the MTU-vs-fixed callout, and
+since RNS 1.6 the application flag and the deferred-hashmap advertisement),
+§10.5 (HASHMAP_IS_EMPTY) and §5.7.4 (the stamp-cost valid range).
 
 Three claim clusters, all of which are silent-failure surface — a peer that
 gets any of them wrong produces no error, just a transfer that never
@@ -21,11 +22,13 @@ progresses or an announce that is wrongly rejected.
    implementations to add their own. That statement is only safe to make
    while it stays true, so this verifier asserts it by source inspection.
 
-3. §5.7.4 — the `stamp_cost` valid range (`1..254`), the `< 1 -> None`
-   rule, and the `>= 255` refusal. §5.7.4 documented none of these until
-   2026-08-27; a Go client derived a range from the PoW algorithm instead
-   (`[0, 256]`, arithmetically true and wrong here) and treated a negative
-   cost as a malformed announce, which upstream reads as "no stamp".
+3. §5.7.4 — the `stamp_cost` valid range (`1 <= c < STAMP_COST_CAP`, i.e.
+   below 100, int or float since LXMF 1.3; `1..254` int-only through LXMF
+   1.2), the `< 1 -> None` rule, and the refusal at or above the cap.
+   §5.7.4 documented none of these until 2026-08-27; a Go client derived a
+   range from the PoW algorithm instead (`[0, 256]`, arithmetically true and
+   wrong here) and treated a negative cost as a malformed announce, which
+   upstream reads as "no stamp".
 
 Exit code 0 on PASS, non-zero on FAIL.
 """
@@ -115,6 +118,44 @@ def verify_sdu_follows_link_mtu() -> None:
           f"{1064 - overhead} at a negotiated MTU of 1064")
 
 
+def verify_adv_flags_and_deferred_hashmap() -> None:
+    """§10.4 (RNS >= 1.6): flag bit 6 is the application flag `a`, and an
+    advertisement that would exceed the link MDU is sent with an empty `m`
+    (the receiver then asks for segment 0 with HASHMAP_IS_EMPTY = 0xFE)."""
+    from RNS.vendor import umsgpack
+
+    if getattr(Resource, "HASHMAP_IS_EMPTY", None) != 0xFE:
+        fail(f"§10.5 Resource.HASHMAP_IS_EMPTY = {getattr(Resource, 'HASHMAP_IS_EMPTY', None)!r}, expected 0xFE")
+    if (Resource.HASHMAP_IS_NOT_EXHAUSTED, Resource.HASHMAP_IS_EXHAUSTED) != (0x00, 0xFF):
+        fail("§10.5 HASHMAP_IS_NOT_EXHAUSTED / HASHMAP_IS_EXHAUSTED are no longer 0x00 / 0xFF")
+
+    n = ResourceAdvertisement.HASHMAP_MAX_LEN
+    stub = types.SimpleNamespace(
+        size=1000, total_size=1000, parts=[None] * n, hash=b"\x11" * 32,
+        random_hash=b"\x22" * 4, original_hash=b"\x11" * 32,
+        hashmap=b"\x33" * (4 * n), compressed=False, encrypted=True,
+        app_flag=True, split=False, has_metadata=False, segment_index=1,
+        total_segments=1, request_id=None, is_response=False)
+
+    adv = ResourceAdvertisement(stub)
+    if adv.f != 0x41:
+        fail(f"§10.4 flags for encrypted + app_flag = 0x{adv.f:02x}, expected 0x41 (bit 6 = a)")
+    full = umsgpack.unpackb(adv.pack())
+    if len(full["m"]) != 4 * n:
+        fail(f"§10.4 a full advertisement carried {len(full['m'])} hashmap bytes, expected {4 * n}")
+    back = ResourceAdvertisement.unpack(adv.pack())
+    if not back.a:
+        fail("§10.4 unpack did not read flag bit 6 as the application flag")
+
+    small = ResourceAdvertisement(stub, mdu=200)
+    deferred = umsgpack.unpackb(small.pack())
+    if deferred["m"] != b"" or deferred["n"] != n:
+        fail(f"§10.4 over-MDU advertisement: m = {len(deferred['m'])} bytes, n = {deferred['n']}; "
+             f"expected an empty m with n unchanged")
+    print(f"PASS §10.4 flag bit 6 = application flag; an advertisement over the link MDU "
+          f"is sent with m = b\"\" (n still {n}); HASHMAP_IS_EMPTY = 0xFE")
+
+
 def verify_no_receive_time_size_check() -> None:
     """§10.4: upstream buffers parts without bounding them. Assert it stays so."""
     src = inspect.getsource(Resource.receive_part)
@@ -135,16 +176,22 @@ def verify_no_receive_time_size_check() -> None:
 
 
 def verify_stamp_cost_range() -> None:
-    """§5.7.4: 1..254 valid, < 1 means None, >= 255 refused."""
+    """§5.7.4: 1 <= c < 100 valid (int or float), < 1 means None, >= 100 refused."""
+    cap = RNS.Transport.STAMP_COST_CAP
+    if cap != 100:
+        fail(f"§5.7.4 RNS.Transport.STAMP_COST_CAP = {cap!r}, expected 100")
     cases = [
         # (input, expect_return, expect_stored, label)
         (None,  True,  None, "None -> None"),
         (0,     True,  None, "0 -> None (not an error)"),
         (-5,    True,  None, "negative -> None (not an error)"),
+        (0.5,   True,  None, "0.5 -> None (float below 1, not an error)"),
         (1,     True,  1,    "1 -> 1 (lower bound)"),
-        (128,   True,  128,  "128 -> 128"),
-        (254,   True,  254,  "254 -> 254 (upper bound)"),
-        (255,   False, "UNCHANGED", "255 -> refused, previous value kept"),
+        (23.5,  True,  23.5, "23.5 -> 23.5 (fractional cost accepted)"),
+        (99,    True,  99,   "99 -> 99 (largest integer below the cap)"),
+        (100,   False, "UNCHANGED", "100 -> refused at the cap, previous value kept"),
+        (128,   False, "UNCHANGED", "128 -> refused (accepted through LXMF 1.2)"),
+        (254,   False, "UNCHANGED", "254 -> refused (old upper bound)"),
         (99999, False, "UNCHANGED", "huge -> refused, previous value kept"),
     ]
 
@@ -164,8 +211,8 @@ def verify_stamp_cost_range() -> None:
                  f"{dest.stamp_cost!r}, expected {want!r} ({label})")
 
     print(f"PASS §5.7.4 stamp_cost range over {len(cases)} cases: "
-          "None/<1 -> None, 1..254 accepted, >=255 refused with the "
-          "previous value retained")
+          "None/<1 -> None, 1 <= c < 100 accepted (int or float), >= 100 "
+          "refused with the previous value retained")
 
 
 def verify_reader_does_not_validate() -> None:
@@ -192,6 +239,7 @@ def main() -> None:
     verify_link_mdu_is_not_per_link()
     verify_sdu_follows_link_mtu()
     verify_no_receive_time_size_check()
+    verify_adv_flags_and_deferred_hashmap()
     verify_stamp_cost_range()
     verify_reader_does_not_validate()
     print()

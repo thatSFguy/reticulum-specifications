@@ -2,7 +2,7 @@
 
 The inverse of [`send-opportunistic-lxmf.md`](send-opportunistic-lxmf.md). What happens chronologically on the recipient when wire bytes for an opportunistic LXMF DATA packet arrive at one of its interfaces.
 
-Pinned against **RNS 1.5.7 / LXMF 1.2.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.6.1 / LXMF 1.3.1**. Line numbers below are from those versions.
 
 Out of scope: receiving a packet over an established Reticulum Link (DIRECT method), receiving propagated messages from a propagation node, and receiving an announce / path-request / link-request. Each gets its own flow document.
 
@@ -10,7 +10,7 @@ Out of scope: receiving a packet over an established Reticulum Link (DIRECT meth
 
 ## Preconditions
 
-- Recipient has an `RNS.Identity` with the X25519 + Ed25519 private keys, plus a `lxmf.delivery` `RNS.Destination` registered with `LXMRouter.register_delivery_identity` — that registration calls `delivery_destination.set_packet_callback(self.delivery_packet)` at `LXMF/LXMRouter.py:368` → `delivery_destination.set_packet_callback(self.delivery_packet)`, which is the hand-off point in step 7 below.
+- Recipient has an `RNS.Identity` with the X25519 + Ed25519 private keys, plus a `lxmf.delivery` `RNS.Destination` registered with `LXMRouter.register_delivery_identity` — that registration calls `delivery_destination.set_packet_callback(self.delivery_packet)` at `LXMF/LXMRouter.py:425` → `delivery_destination.set_packet_callback(self.delivery_packet)`, which is the hand-off point in step 7 below.
 - Recipient has, at some point, been the target of one or more announces from the sender, so `RNS.Identity.known_destinations` knows the sender's full `public_key` (X25519 || Ed25519) under their `dest_hash`. Without this, signature validation in step 11 will fail with `unverified_reason = SOURCE_UNKNOWN`.
 
 ---
@@ -25,41 +25,46 @@ For RNode KISS specifically, `CMD_STAT_RSSI = 0x23` and `CMD_STAT_SNR = 0x24` si
 
 ### 2. `Transport.inbound(raw, interface)` entry point
 
-`RNS/Transport.py:1682-1686` → `def inbound(raw, interface=None, tc=None, ifac_handled=False)`, which delegates to `preprocess_inbound` (`:1753-1896` → `def preprocess_inbound(raw,`). The single entry point for any inbound packet on any interface. The function is gated by `Transport.ready` — packets arriving before transport startup are dropped with a warning.
+`RNS/Transport.py:1987-1995` → `def inbound(raw, interface=None, tc=None, ifac_handled=False, no_accounting=False)`, which delegates to `preprocess_inbound` (`:2062-2275` → `def preprocess_inbound(raw,`). The single entry point for any inbound packet on any interface. A packet that arrives before transport startup waits up to `READY_WAIT` for it, then is dropped with a warning (`:2067-2073` → `Inbound packet timed out waiting for transport startup, dropping`). Since RNS 1.6, `inbound` also adds the frame to the interface's accepted or filtered byte counters, depending on what `preprocess_inbound` decided.
 
 ### 3. IFAC unmask (Interface Authentication Codes)
 
-`RNS/Transport.py:1766-1814` → `if not ifac_handled`. If the interface has an `ifac_identity` configured, the high bit of `raw[0]` must be set; the IFAC bytes at `raw[2:2+ifac_size]` are then used to derive an HKDF mask, the rest of the packet is unmasked in place, and the IFAC is verified against `ifac_identity.sign(unmasked_raw)[-ifac_size:]`. Mismatch drops the packet silently.
+`RNS/Transport.py:2079-2155` → `if not ifac_handled`. If the interface has an `ifac_identity` configured, the high bit of `raw[0]` must be set; the IFAC bytes at `raw[2:2+ifac_size]` are then used to derive an HKDF mask, the rest of the packet is unmasked in place, and the IFAC is verified against `ifac_identity.sign(unmasked_raw)[-ifac_size:]`. Mismatch drops the packet silently.
 
 If the interface has no IFAC and the high bit IS set, the packet is dropped (an unexpected IFAC).
 
 ### 4. Packet parse and physical-layer stats
 
-`RNS/Transport.py:1793-1799` → `packet = RNS.Packet(None, raw)`:
+`RNS/Transport.py:2106-2113` → `packet = RNS.Packet(None, raw)`:
 
 ```python
 packet = RNS.Packet(None, raw)
-if not packet.unpack(): return
+if not packet.unpack(): return interface.protocol_violation("Malformed packet ...")
+if interface.hop_limiter and not packet.hops < interface.hop_limiter: return   # RNS >= 1.6
+if not packet.hops < Transport.HOP_LIMITER: return                             # = PATHFINDER_M
+if not Transport.packet_filter(packet): return
 packet.receiving_interface = interface
 packet.hops += 1
 ```
 
+Since RNS 1.6 a packet that fails to unpack counts as a protocol violation against the interface, and an optional per-interface `hop_limiter` can drop packets that have travelled too far.
+
 `packet.unpack` reads the header byte fields per SPEC.md §2.1, sets `packet.header_type`, `packet.packet_type`, `packet.destination_type`, `packet.destination_hash`, `packet.context`, and slices `packet.data` from the remainder. Importantly, **hops is incremented by 1 here**, so even on a leaf-endpoint receive the local `packet.hops` is one more than what flew on the wire — flow logic that treats `packet.hops == 0` as "originator on this interface" must use the wire byte before this increment.
 
-RSSI / SNR / Q link-quality stats are attached to `packet` if the interface exposed them (`RNS/Transport.py:1793-1800` → `packet = RNS.Packet(None, raw)`).
+RSSI / SNR / Q link-quality stats are attached to `packet` later, once it is dequeued in `Transport._inbound`, if the interface reports them (`RNS/Transport.py:2296-2298` → `packet.rssi = packet.receiving_interface.r_stat_rssi`).
 
-### 5. Hop fix-up for shared-instance and local-client interfaces
+### 5. No hop fix-up for shared-instance and local-client interfaces
 
-`RNS/Transport.py:1788-1791` → `if Transport.identity == None: return`. If the receiving interface is to a local shared instance or a local-client TCP socket, the +1 increment from step 4 is undone — the shared-instance path doesn't count as a real network hop.
+The +1 increment from step 4 is **not** undone for a packet that arrives from a local shared instance or a local-client socket. Upstream compensates where it compares hop counts instead: a packet from a local client is treated as directly attached when `packet.hops == 1` (`RNS/Transport.py:2127` → `allowed = True if packet.hops == 1 else False # 1 == 0 really`). Earlier revisions of this step described an undo, citing an unrelated line; no upstream release we have checked contains one.
 
 ### 6. Dedup, then dispatch by packet_type / destination_type
 
-`RNS/Transport.py:1795` → `if not Transport.packet_filter(packet): return interface.packet_filter_hit()`. `Transport.packet_filter` checks `packet.packet_hash` against `Transport.packet_hashlist` to drop replays. Hashes are added to the dedup list except for two cases that must be deferred:
+`RNS/Transport.py:2110` → `if not Transport.packet_filter(packet): return interface.packet_filter_hit()`. `Transport.packet_filter` checks `packet.packet_hash` against `Transport.packet_hashlist` to drop replays. Hashes are added to the dedup list except for two cases that must be deferred:
 
 - packet whose `destination_hash` is in `Transport.link_table` — the dedup decision is left to the link itself,
 - LRPROOF packets — these may legitimately arrive on multiple interfaces during routing-fork chaos and the dedup list is updated only after the LRPROOF is validated.
 
-Then the function fans out by `(packet_type, destination_type)`. For an opportunistic LXMF DATA packet — `packet_type == DATA`, `destination_type == SINGLE` — control reaches `RNS/Transport.py:1465-1479` → `destination = Transport.destinations_map[packet.destination_hash]`:
+Then the function fans out by `(packet_type, destination_type)`. For an opportunistic LXMF DATA packet — `packet_type == DATA`, `destination_type == SINGLE` — control reaches the local-delivery branch of `Transport._inbound` (`RNS/Transport.py:2995-3004` → `destination = Transport.destinations_map.get(packet.destination_hash)`):
 
 ```python
 destination = Transport.destinations_map.get(packet.destination_hash)
@@ -78,7 +83,7 @@ If `destination_hash` does not match any locally-registered destination, this br
 
 ### 7. `Destination.receive(packet)` — decrypt and run packet callback
 
-`RNS/Destination.py:414-429` → `def receive(self, packet)`:
+`RNS/Destination.py:513-528` → `def receive(self, packet)`:
 
 ```python
 def receive(self, packet):
@@ -93,11 +98,11 @@ def receive(self, packet):
         return True
 ```
 
-For `lxmf.delivery` destinations, `self.callbacks.packet` was set at `LXMF/LXMRouter.py:368` → `delivery_destination.set_packet_callback(self.delivery_packet)` to the router's `delivery_packet` — see step 9.
+For `lxmf.delivery` destinations, `self.callbacks.packet` was set at `LXMF/LXMRouter.py:425` → `delivery_destination.set_packet_callback(self.delivery_packet)` to the router's `delivery_packet` — see step 9.
 
 ### 8. `Destination.decrypt` → `Identity.decrypt` — Token decode with ratchet ring
 
-`RNS/Destination.py:622-664` → `def decrypt(self,` (`def decrypt(self, ciphertext)`) delegates to `RNS/Identity.py:852-908` → `def decrypt(self,` (`def decrypt(self, ciphertext_token`). The packet body is the Token form from SPEC.md §3.1: `ephemeral_pub(32) || iv(16) || aes_ciphertext || hmac_sha256(32)`.
+`RNS/Destination.py:720-762` → `def decrypt(self,` (`def decrypt(self, ciphertext)`) delegates to `RNS/Identity.py:1231-1287` → `def decrypt(self,` (`def decrypt(self, ciphertext_token`). The packet body is the Token form from SPEC.md §3.1: `ephemeral_pub(32) || iv(16) || aes_ciphertext || hmac_sha256(32)`.
 
 ```python
 peer_pub_bytes = ciphertext_token[:32]                     # sender's ephemeral X25519 pub
@@ -119,11 +124,11 @@ if plaintext is None and not enforce_ratchets:             # fallback to long-te
 
 The matching ratchet's id is stored on the packet via `ratchet_id_receiver.latest_ratchet_id`, so `delivery_packet` can later annotate the LXMessage with which ratchet it arrived under.
 
-If the destination has ratchets enabled but on-disk state has gone stale, `Destination.decrypt` retries once after `_reload_ratchets` (`RNS/Destination.py:643` → `self._reload_ratchets(self.ratchets_path)`), then gives up.
+If the destination has ratchets enabled but on-disk state has gone stale, `Destination.decrypt` retries once after `_reload_ratchets` (`RNS/Destination.py:741` → `self._reload_ratchets(self.ratchets_path)`), then gives up.
 
 ### 9. `LXMRouter.delivery_packet(data, packet)` — proof first, then async parse
 
-`LXMF/LXMRouter.py:2043-2071` → `def delivery_packet(self, data, packet)`:
+`LXMF/LXMRouter.py:2264-2292` → `def delivery_packet(self, data, packet)`:
 
 ```python
 def delivery_packet(self, data, packet):
@@ -144,7 +149,7 @@ The opportunistic-form re-prepends `packet.destination.hash` because step 6 of t
 
 ### 10. `LXMessage.unpack_from_bytes(lxmf_data)` — body parse and signature validation
 
-`LXMF/LXMessage.py:769-844` → `def unpack_from_bytes(lxmf_bytes`. Field slicing:
+`LXMF/LXMessage.py:777-852` → `def unpack_from_bytes(lxmf_bytes`. Field slicing:
 
 ```
 destination_hash = lxmf_data[ 0:16]
@@ -163,21 +168,21 @@ signed_part  = hashed_part || message_hash
 
 Signature validation calls `source.identity.validate(signature, signed_part)`. The sender's identity is recalled from `RNS.Identity.known_destinations` via `RNS.Identity.recall(source_hash)` at line 765 — keyed by the sender's **destination hash**, not their identity hash, per SPEC.md §5.4 and §9.1. If the sender is unknown locally (no announce ever received), `unverified_reason = SOURCE_UNKNOWN` and `signature_validated = False`; the message is still surfaced to the app callback in step 12, but downstream UI should mark it untrusted.
 
-Note: `unpack_from_bytes` does the stamp-strip-and-reencode variant but does **not** also try the as-received `packed_payload` if validation fails. SPEC.md §5.6 documents both raw and stripped-reencoded as valid receiver behavior; upstream LXMF 1.2.1 only does the stripped form (or the raw form when no stamp was present). The spec's stronger receiver tolerance is a recommendation for non-upstream implementers, not a description of upstream.
+Note: `unpack_from_bytes` does the stamp-strip-and-reencode variant but does **not** also try the as-received `packed_payload` if validation fails. SPEC.md §5.6 documents both raw and stripped-reencoded as valid receiver behavior; upstream LXMF 1.3.1 only does the stripped form (or the raw form when no stamp was present). The spec's stronger receiver tolerance is a recommendation for non-upstream implementers, not a description of upstream.
 
 ### 11. Stamp / ticket / dedup checks
 
-`LXMF/LXMRouter.py:1954-2041` → `def lxmf_delivery(self, lxmf_data`:
+`LXMF/LXMRouter.py:2167-2262` → `def lxmf_delivery(self, lxmf_data`:
 
 - **Ticket** (`message.fields[FIELD_TICKET]`): if present and non-expired, cached for outbound use.
-- **Stamp**: if the local destination has a `stamp_cost`, `message.validate_stamp(required_cost, tickets=...)` runs; a missing/invalid stamp causes the message to be dropped when `_enforce_stamps` is true.
+- **Stamp**: if the local destination has a `stamp_cost`, `message.validate_stamp(required_cost, tickets=...)` runs. It tries the tickets, then (LXMF 1.3+) a stamp over the bare `message_id`, then the expanded workblock (SPEC.md §5.7.2). A missing or invalid stamp causes the message to be dropped when `_enforce_stamps` is true.
 - **Phy stats**: RSSI / SNR / Q copied onto the LXMessage from `phy_stats`.
 - **Ignore list**: messages from `source_hash in self.ignored_list` are dropped silently.
-- **Dedup**: `self.has_message(message.hash)` checks `locally_delivered_transient_ids`; duplicates are dropped (the previously-seen `message.hash` was added on first delivery at line 1803).
+- **Dedup**: since LXMF 1.3 a single atomic check-and-record in the SQLite store (`LXMF/LXMRouter.py::lxmf_delivery` → `elif not self.store.conditionally_claim_delivered(message.hash, time.time()):`) drops a `message.hash` that has already been delivered. Without the store, the legacy path checks `self.has_message(message.hash)` against `locally_delivered_transient_ids` and then records the hash. Either way duplicates are dropped silently (SPEC.md §16.7).
 
 ### 12. `__delivery_callback` fires — message reaches the app
 
-`LXMF/LXMRouter.py:2033-2041` → `return False`. The router's caller (Sideband, NomadNet, MeshChat, …) sets `__delivery_callback` via `register_delivery_callback(...)`. It receives the validated `LXMessage` object and decides what to show in the inbox.
+`LXMF/LXMRouter.py:2254-2262` → `return False`. The router's caller (Sideband, NomadNet, MeshChat, …) sets `__delivery_callback` via `register_delivery_callback(...)`. It receives the validated `LXMessage` object and decides what to show in the inbox.
 
 Important: the recipient's app should apply the SPEC.md §9.6 clockless-sender heuristic at this point — `if message.timestamp < 1577836800: message.timestamp = local_now()` — to keep clockless LoRa devices out of January 1970 in the inbox. Upstream `LXMessage.unpack_from_bytes` does **not** do this fix-up.
 
@@ -224,12 +229,12 @@ Step 9 re-prepends `packet.destination.hash` so step 10 can parse with the same 
 | Step | File | Function / line |
 |---|---|---|
 | 1 | `RNS/Interfaces/*.py` | per-interface KISS / HDLC deframer |
-| 2 | `RNS/Transport.py` | `inbound`, line 1378 |
-| 3 | `RNS/Transport.py` | IFAC unmask, line 1389 |
-| 4 | `RNS/Transport.py` | parse + hops, line 1442 |
+| 2 | `RNS/Transport.py` | `inbound` |
+| 3 | `RNS/Transport.py` | `preprocess_inbound`, IFAC unmask |
+| 4 | `RNS/Transport.py` | `preprocess_inbound`, parse + hop limit + hops |
 | 4 | `RNS/Packet.py` | `unpack` |
-| 5 | `RNS/Transport.py` | hop fix-up, line 1473 |
-| 6 | `RNS/Transport.py` | dedup + dispatch, line 1478; DATA/SINGLE branch line 2175 |
+| 5 | — | (no hop fix-up; see step 5) |
+| 6 | `RNS/Transport.py` | `preprocess_inbound` dedup; `_inbound` DATA/SINGLE local-delivery branch |
 | 7 | `RNS/Destination.py` | `receive`, line 403 |
 | 8 | `RNS/Destination.py` | `decrypt`, line 611 |
 | 8 | `RNS/Identity.py` | `decrypt`, line 821 |

@@ -7,8 +7,10 @@ exercising upstream LXMF.LXMStamper directly:
   1. Workblock construction is deterministic and roughly the documented
      size (~768 KiB at 3000 rounds, scaled down here for test speed).
 
-  2. stamp_value() returns the leading-zero-bit count of
-     SHA256(workblock || stamp).
+  2. stamp_value() returns at least target_cost for a stamp that meets it
+     (since RNS 1.6 the value is a float on a 1/256 grid whose floor is the
+     leading-zero-bit count of SHA256(workblock || stamp)).
+     LXStamper re-exports these primitives from RNS.Stamps since LXMF 1.3.
 
   3. stamp_valid() accepts a stamp meeting target_cost and rejects one
      that doesn't.
@@ -167,11 +169,18 @@ def verify_ticket_shortcut(target_cost=4):
     # roughly 1 CI run in 18 before the stamp was pinned this way. Search for a
     # ticket whose stamp misses the target; the loop exits on the first try
     # ~94% of the time.
+    #
+    # Since LXMF 1.3 validate_stamp also tries a NON-expanded workblock (the
+    # bare message_id) before the expanded one -- SPEC.md S5.7.2 -- so the
+    # pinned stamp has to miss BOTH, or the wrong-ticket check below passes
+    # for the wrong reason roughly 1 run in 16.
     workblock = LXStamper.stamp_workblock(lxm.message_id)
+    workblock_ne = LXStamper.stamp_workblock(lxm.message_id, no_expand=True)
     for _ in range(64):
         ticket = os.urandom(LXMessage.TICKET_LENGTH)              # 16B
         expected_stamp = RNS.Identity.truncated_hash(ticket + lxm.message_id)
-        if LXStamper.stamp_value(workblock, expected_stamp) < target_cost:
+        if (LXStamper.stamp_value(workblock, expected_stamp) < target_cost and
+                LXStamper.stamp_value(workblock_ne, expected_stamp) < target_cost):
             break
     else:
         fail("S5.7.3 could not find a ticket whose stamp misses the PoW target "

@@ -10,6 +10,9 @@ Verifies:
           `frame_len <= HEADER_MINSIZE` (19) bound.
   - §4.5: the emit half — `Packet.pack` refuses to build an announce whose
           frame exceeds `Reticulum.MTU` (500). Long-standing, not new.
+          Since RNS 1.6 it also refuses a HEADER_1 announce that would exceed
+          the MTU once a relay inserts a 16-byte transport_id, so the largest
+          emittable HEADER_1 announce is 484 bytes. 485 packed through 1.5.7.
   - §4.5: the receive half — `Transport.inbound` drops an ANNOUNCE whose raw
           frame exceeds `Reticulum.MTU` and counts it as a protocol violation
           against the receiving interface, before `validate_announce` runs. An
@@ -19,6 +22,10 @@ Verifies:
           announce-specific rule, and mirrors the real gap it closes: an
           interface's own HW_MTU reaches 512 KiB on a 1 Gbps link, so before
           1.5.2 an oversized announce got a full signature validation.
+  - §4.5: since RNS 1.6 the receive half also refuses a HEADER_1 announce
+          with fewer than 16 bytes of headroom under the MTU ("Excessive
+          announce payload"), while a 500-byte HEADER_2 announce is still
+          accepted. A 485-byte HEADER_1 announce was accepted through 1.5.7.
 
 Exit code 0 on PASS, non-zero on FAIL.
 """
@@ -33,9 +40,16 @@ import time
 import RNS
 from RNS import Transport
 
-# The exact violation text preprocess_inbound records for the
-# announce-specific bound (RNS/Transport.py:1804 in RNS 1.5.2).
+# The exact violation texts preprocess_inbound records for the
+# announce-specific bounds (RNS/Transport.py::preprocess_inbound).
 EXCESSIVE_ANNOUNCE = "Excessive announce packet frame size"
+EXCESSIVE_PAYLOAD = "Excessive announce payload"  # RNS >= 1.6
+INSUFFICIENT_PAYLOAD = "Insufficient announce payload"  # RNS >= 1.6
+ANNOUNCE_MIN_DATA = 64 + 10 + 10   # public_key || name_hash || random_hash
+HEADER_1_LEN = 2 + 16 + 1          # flags, hops, dest_hash, context
+
+TRANSPORT_ID_LEN = RNS.Reticulum.TRUNCATED_HASHLENGTH // 8
+H1_ANNOUNCE_MAX = RNS.Reticulum.MTU - TRANSPORT_ID_LEN  # 484
 
 
 def fail(msg: str) -> None:
@@ -80,6 +94,16 @@ class StubInterface:
         self.violations = []
         self.announces_received = 0
         self.held_announces = 0
+        # RNS >= 1.6 reads a per-interface hop limiter (None disables it)
+        # and accounts accepted/filtered bytes on the interface.
+        self.hop_limiter = None
+        self.parent_interface = None
+        self.rxb = 0
+        self.frxb = 0
+        # RNS >= 1.6: validate_announce reads the interface's required
+        # announce stamp value. Stamps are not enforced by default, so the
+        # value only matters to the (unenforced) stamp check.
+        self.destination_cost = getattr(Transport, "DESTINATION_COST", None)
 
     def should_ingress_limit(self):
         # False, so preprocess_inbound carries the announce through to the
@@ -92,7 +116,10 @@ class StubInterface:
         self.held_announces += 1
         return None
 
-    def protocol_violation(self, description=None):
+    def filtered_announce(self):
+        return None
+
+    def protocol_violation(self, description=None, level=None):
         self.violations.append(description)
         return None
 
@@ -155,46 +182,79 @@ def build_announce_of_size(dest, target_size):
              f"announce is already {overhead} bytes")
 
     pkt = dest.announce(app_data=b"\x00" * (target_size - overhead), send=False)
-    if target_size > pkt.MTU:
-        pkt.MTU = target_size
+    if target_size > H1_ANNOUNCE_MAX:
+        # Lift the packet's own MTU past both emit-side checks (the general
+        # one and, since RNS 1.6, the transport_id headroom one).
+        pkt.MTU = target_size + TRANSPORT_ID_LEN
     pkt.pack()
     if len(pkt.raw) != target_size:
         fail(f"announce packed to {len(pkt.raw)} bytes, wanted {target_size}")
     return pkt
 
 
+def _try_pack(dest, size, overhead):
+    pkt = dest.announce(app_data=b"\x00" * (size - overhead), send=False)
+    if pkt.MTU != RNS.Reticulum.MTU:
+        fail(f"announce packet MTU is {pkt.MTU}, expected Reticulum.MTU "
+             f"{RNS.Reticulum.MTU}")
+    try:
+        pkt.pack()
+    except OSError as e:
+        return None, str(e)
+    return pkt, None
+
+
 def verify_announce_emit_bound(dest):
-    """§4.5: Packet.pack refuses to emit an announce over Reticulum.MTU."""
+    """§4.5: Packet.pack refuses to emit an announce over Reticulum.MTU, and
+    (RNS >= 1.6) a HEADER_1 announce without room for a transport_id."""
     mtu = RNS.Reticulum.MTU
     probe = dest.announce(app_data=b"", send=False)
     probe.pack()
     overhead = len(probe.raw)
 
-    pkt = dest.announce(app_data=b"\x00" * (mtu + 1 - overhead), send=False)
-    if pkt.MTU != mtu:
-        fail(f"announce packet MTU is {pkt.MTU}, expected Reticulum.MTU {mtu}")
-    try:
-        pkt.pack()
-    except OSError:
-        print(f"PASS §4.5 Packet.pack refuses to emit an announce over the "
-              f"{mtu}-byte MTU")
-        return
-    fail(f"Packet.pack emitted a {len(pkt.raw)}-byte announce, over the "
-         f"{mtu}-byte MTU")
+    pkt, err = _try_pack(dest, mtu + 1, overhead)
+    if pkt is not None:
+        fail(f"Packet.pack emitted a {len(pkt.raw)}-byte announce, over the "
+             f"{mtu}-byte MTU")
+    print(f"PASS §4.5 Packet.pack refuses to emit an announce over the "
+          f"{mtu}-byte MTU")
+
+    pkt, err = _try_pack(dest, H1_ANNOUNCE_MAX + 1, overhead)
+    if pkt is not None:
+        fail(f"Packet.pack emitted a {len(pkt.raw)}-byte HEADER_1 announce; "
+             f"since RNS 1.6 the limit is {H1_ANNOUNCE_MAX} so a relay can "
+             f"insert a transport_id")
+    if "Transport-inserted" not in err:
+        fail(f"the {H1_ANNOUNCE_MAX + 1}-byte HEADER_1 announce was refused, "
+             f"but not by the transport_id headroom check: {err}")
+    pkt, err = _try_pack(dest, H1_ANNOUNCE_MAX, overhead)
+    if pkt is None:
+        fail(f"Packet.pack refused a {H1_ANNOUNCE_MAX}-byte HEADER_1 announce: "
+             f"{err}")
+    print(f"PASS §4.5 Packet.pack emits a HEADER_1 announce of at most "
+          f"{H1_ANNOUNCE_MAX} bytes (MTU minus a {TRANSPORT_ID_LEN}-byte "
+          f"transport_id)")
+
+
+def as_header2(raw: bytes, transport_id: bytes) -> bytes:
+    """Rewrite a HEADER_1 frame as the HEADER_2 frame a relay would emit:
+    header_type bit 6 and transport_type TRANSPORT (bit 4) set, transport_id
+    inserted after the hops byte (§2.2)."""
+    return bytes([raw[0] | 0x40 | 0x10, raw[1]]) + transport_id + raw[2:]
 
 
 def verify_announce_ingress_bound(dest):
     """§4.5: an announce over Reticulum.MTU is refused before validation."""
     mtu = RNS.Reticulum.MTU
 
-    at_limit = build_announce_of_size(dest, mtu)
+    at_limit = build_announce_of_size(dest, H1_ANNOUNCE_MAX)
     over_limit = build_announce_of_size(dest, mtu + 1)
 
     iface = StubInterface()
     Transport.inbound(over_limit.raw, iface)
     if not wait_for(lambda: bool(iface.violations)):
         fail(f"a {mtu + 1}-byte announce raised no protocol violation; "
-             f"RNS 1.5.2 must refuse it")
+             f"RNS >= 1.5.2 must refuse it")
     # Match the specific bound, not merely the word "announce": an
     # "Invalid announce signature" violation would otherwise satisfy this
     # assertion and hide the removal of the size check.
@@ -205,24 +265,72 @@ def verify_announce_ingress_bound(dest):
         fail(f"the {mtu + 1}-byte announce reached received_announce; it must "
              f"be dropped before validate_announce")
 
-    iface = StubInterface()
-    Transport.inbound(at_limit.raw, iface)
-    if not wait_for(lambda: iface.announces_received > 0):
-        fail(f"an announce of exactly {mtu} bytes did not reach "
-             f"received_announce within the timeout; it should be accepted "
-             f"(violations: {iface.violations}, held: {iface.held_announces})")
-    if iface.violations:
-        fail(f"an announce of exactly {mtu} bytes was refused: {iface.violations}")
-    if iface.held_announces:
-        fail(f"an announce of exactly {mtu} bytes was held by ingress "
-             f"limiting; the stub must not trigger that path")
-
     print(f"PASS §4.5 Transport.inbound refuses an announce over the "
-          f"{mtu}-byte MTU as a protocol violation, accepts one at exactly {mtu}")
+          f"{mtu}-byte MTU as a protocol violation")
+
+    # RNS >= 1.6: a HEADER_1 announce must leave room for a transport_id.
+    h1_over = build_announce_of_size(dest, H1_ANNOUNCE_MAX + 1)
+    iface = StubInterface()
+    Transport.inbound(h1_over.raw, iface)
+    if not wait_for(lambda: bool(iface.violations) or iface.announces_received > 0):
+        fail(f"a {H1_ANNOUNCE_MAX + 1}-byte HEADER_1 announce produced neither "
+             f"a violation nor an accept within the timeout")
+    if not any(EXCESSIVE_PAYLOAD in (v or "") for v in iface.violations):
+        fail(f"a {H1_ANNOUNCE_MAX + 1}-byte HEADER_1 announce was not refused "
+             f"by the transport_id headroom bound ({EXCESSIVE_PAYLOAD!r}); "
+             f"violations: {iface.violations}, accepted: {iface.announces_received}")
+    if iface.announces_received:
+        fail(f"the {H1_ANNOUNCE_MAX + 1}-byte HEADER_1 announce reached "
+             f"received_announce")
+    print(f"PASS §4.5 Transport.inbound refuses a HEADER_1 announce over "
+          f"{H1_ANNOUNCE_MAX} bytes (RNS >= 1.6)")
+
+    # RNS >= 1.6: the data field must hold at least
+    # public_key(64) || name_hash(10) || random_hash(10) = 84 bytes.
+    hdr = at_limit.raw[:HEADER_1_LEN]
+    for n, refused in ((ANNOUNCE_MIN_DATA - 1, True), (ANNOUNCE_MIN_DATA, False)):
+        iface = StubInterface()
+        Transport.inbound(hdr + at_limit.raw[HEADER_1_LEN:HEADER_1_LEN + n], iface)
+        wait_for(lambda: bool(iface.violations))
+        hit = any(INSUFFICIENT_PAYLOAD in (v or "") for v in iface.violations)
+        if hit != refused:
+            fail(f"a HEADER_1 announce with {n} data bytes was "
+                 f"{'not ' if refused else ''}refused by the minimum-payload "
+                 f"bound ({INSUFFICIENT_PAYLOAD!r}); violations: {iface.violations}")
+        if iface.announces_received:
+            fail(f"a HEADER_1 announce with {n} data bytes reached received_announce")
+    print(f"PASS §4.5 Transport.inbound refuses announce data shorter than "
+          f"{ANNOUNCE_MIN_DATA} bytes (RNS >= 1.6)")
+
+    for name, raw in (
+        (f"{H1_ANNOUNCE_MAX}-byte HEADER_1", at_limit.raw),
+        (f"{mtu}-byte HEADER_2", as_header2(at_limit.raw, b"\xcc" * TRANSPORT_ID_LEN)),
+    ):
+        if len(raw) not in (H1_ANNOUNCE_MAX, mtu):
+            fail(f"{name} test frame is {len(raw)} bytes")
+        iface = StubInterface()
+        Transport.inbound(raw, iface)
+        if not wait_for(lambda: iface.announces_received > 0):
+            fail(f"a {name} announce did not reach received_announce within the "
+                 f"timeout; it should be accepted (violations: {iface.violations}, "
+                 f"held: {iface.held_announces})")
+        if iface.violations:
+            fail(f"a {name} announce was refused: {iface.violations}")
+        if iface.held_announces:
+            fail(f"a {name} announce was held by ingress limiting; the stub must "
+                 f"not trigger that path")
+    print(f"PASS §4.5 Transport.inbound accepts a {H1_ANNOUNCE_MAX}-byte HEADER_1 "
+          f"announce and a {mtu}-byte HEADER_2 one")
 
 
 def main():
     reticulum = init_minimal_rns()
+    # RNS >= 1.6 attaches a proof-of-work stamp to every emitted announce by
+    # default (cost 25, tens of seconds of CPU). The bounds under test are
+    # about frame size, and the stamp is part of app_data either way, so turn
+    # stamping off to keep this verifier fast.
+    if hasattr(Transport, "STAMP_DESTINATIONS"):
+        Transport.STAMP_DESTINATIONS = False
     print(f"Running against RNS {RNS.__version__}")
 
     verify_zero_length_data()
