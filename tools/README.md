@@ -74,7 +74,7 @@ error, so the list can't rot.
 
 ## Status
 
-Populated against RNS 1.6.1 / LXMF 1.3.1 (all 25 scripts re-run green at this pin):
+Populated against RNS 1.6.1 / LXMF 1.3.1 (all 26 scripts re-run green at this pin):
 
 | Script | Verifies SPEC.md section | Status |
 |---|---|---|
@@ -85,6 +85,7 @@ Populated against RNS 1.6.1 / LXMF 1.3.1 (all 25 scripts re-run green at this pi
 | `verify_announce_stamp.py` | §4.7 — the 18-byte announce-stamp trailer: layout, `lr_cost` byte order, unexpanded stamp material, signature coverage, strip-vs-keep on receive, enforcement | ✅ |
 | `verify_app_data_dispatch.py` | §4.6 — app_data is opaque to RNS; LXMF's first-byte dispatch on non-LXMF payloads (returns `None` since LXMF 1.3); LXMF still parses app_data with the §4.7 trailer attached | ✅ |
 | `verify_announce_roundtrip.py` | §4.1, §4.2, §4.5 — announce body layout, signature, dest_hash recompute, tamper rejection; the `random_hash` timestamp falls inside the build window (it predates the stamp wait) | ✅ |
+| `verify_interface_discovery.py` | §4.8 — interface discovery announces through upstream's real producer and consumer: `name_hash`, `flags \|\| msgpack(info) \|\| stamp(32)` layout and key types, the 20-round discovery stamp (zero bits counted independently), receive-side rejections (no path, low stamp, tampering, bad type, integer latitude, an attached §4.7 trailer), the transitional unexpanded stamp, and the encrypted form | ✅ |
 | `verify_lxmf_opportunistic.py` | §5.1, §5.2, §5.5, §5.6 — full identity → encrypt → decrypt → parse round-trip | ✅ |
 | `verify_canonical_msgpack.py` | §5.6, §5.6.1 — canonical msgpack is a MUST for stamped messages and a SHOULD otherwise; round-trips a non-canonical integer envelope through upstream both ways and reads its verdict, including the unstamped control case | ✅ |
 | `verify_lxmf_fields.py` | §5.9 — every `FIELD_*` / `AM_*` / `RENDERER_*` / `PN_META_*` / `SF_*` / reaction-comment-continuation dict-index constant matches upstream, plus an audit that fails if upstream adds an un-enumerated constant | ✅ |

@@ -12,8 +12,10 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
 <summary><b>Contents</b> — click to expand the per-section table of contents (regenerate with <code>python tools/_gen_toc.py</code>)</summary>
 
 <!-- TOC: regenerate via `python tools/_gen_toc.py` -->
+<!-- TOC: regenerate via `python tools/_gen_toc.py` -->
 ## Contents
 
+- [Contents](#contents)
 - [1. Identity and destination hashes](#1-identity-and-destination-hashes)
   - [1.1 Identity composition](#11-identity-composition)
   - [1.2 Destination hash](#12-destination-hash)
@@ -39,6 +41,7 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
   - [4.5 Announce validation rules (receive side)](#45-announce-validation-rules-receive-side)
   - [4.6 `app_data` is not always msgpack](#46-app_data-is-not-always-msgpack)
   - [4.7 Announce stamps (RNS ≥ 1.6)](#47-announce-stamps-rns-16)
+  - [4.8 Interface discovery announces (`rnstransport.discovery.interface`)](#48-interface-discovery-announces-rnstransportdiscoveryinterface)
 - [5. LXMF wire format](#5-lxmf-wire-format)
   - [5.1 Opportunistic delivery (single Reticulum DATA packet)](#51-opportunistic-delivery-single-reticulum-data-packet)
   - [5.2 Direct delivery (over an established Reticulum Link)](#52-direct-delivery-over-an-established-reticulum-link)
@@ -159,6 +162,7 @@ Source citations refer to the standard `pip install rns lxmf` install layout (`R
 - [18. Test vectors](#18-test-vectors)
 - [19. Source map](#19-source-map)
 <!-- /TOC -->
+<!-- /TOC -->
 
 </details>
 
@@ -207,6 +211,7 @@ Common pre-computed `name_hash` values:
 | `9efb9c771eeb5ae90ea6` | `rnstransport.broadcasts` |
 | `4848a053c16415bed6c8` | `rnstransport.remote.management` |
 | `7926bbe7dd7f9aba88b0` | `rnstransport.path.request` (resulting `dest_hash` with `identity=None`: `6b9f66014d9853faab220fba47d02761`) |
+| `55aa39e85c3e045e9cb1` | `rnstransport.discovery.interface` (SINGLE; interface discovery announces, §4.8) |
 
 ### 1.3 Private key on-disk format
 
@@ -858,6 +863,77 @@ Consequences for other implementations, all verified by `tools/verify_announce_s
 - **The trailer is not self-delimiting.** It is recognised only by position and the `0xC1` marker. Upstream leaves it in place when a stamp is insufficient, so an upstream receiver configured with a higher `destination_cost` hands the trailer to its applications.
 - **Unstamped announces are accepted by default.** A sender that does not stamp interoperates with every upstream receiver until that receiver enables `enforce_stamps`.
 - Stamp **costs and values are fractional** (`23.5`, `25.0`, `12.5`), so integer leading-zero arithmetic is not enough. See §5.7.2 for the fixed-point target.
+
+### 4.8 Interface discovery announces (`rnstransport.discovery.interface`)
+
+An instance can advertise its own interfaces so that other nodes can find them and, optionally, connect to them automatically. The advertisement is an ordinary announce (§4.1–§4.2) of a **SINGLE** destination named `rnstransport.discovery.interface` (`RNS/Discovery.py:93-94` → `self.discovery_destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE,`). Its `name_hash` is `55aa39e85c3e045e9cb1` (§1.2). The interface description travels in `app_data`. This mechanism predates RNS 1.6. What changed at 1.6 is noted inline. Verified by `tools/verify_interface_discovery.py`, which drives upstream's real producer and consumer.
+
+**Which identity announces.** The destination is created under the instance's **network identity** when one is configured, otherwise under the transport identity (`RNS/Discovery.py:90-91` → `if self.owner.has_network_identity(): identity = self.owner.network_identity`). Several transport nodes run by one operator can therefore share a network identity, and all their advertisements come from one `network_id`. Configuring `discoverable = yes` on a non-transport instance forces a static transport identity (`RNS/Reticulum.py:1198` → `enabling static transport identity`), because the advertisement names it (`TRANSPORT_ID` below).
+
+**Cadence.** A background job wakes every 60 s and announces **at most one** due interface per wake-up, the one that has waited longest (`RNS/Discovery.py:108-119` → `due_interfaces = [i for i in self.owner.interfaces if i.supports_discovery`). Each interface is due every `announce_interval` minutes from its config section, default **6 hours**, minimum 5 minutes (`RNS/Reticulum.py:1203-1205` → `if discovery_announce_interval < 5*60: discovery_announce_interval = 5*60`).
+
+#### 4.8.1 `app_data` layout
+
+```
+app_data = flags(1) || msgpack(info) || stamp(32)                          # flags = 0x00
+app_data = flags(1) || network_identity.encrypt(msgpack(info) || stamp(32))  # flags = 0x02
+```
+
+(`RNS/Discovery.py:246-256` → `return bytes([flags])+payload`.)
+
+| `flags` bit | Name | Meaning |
+|---|---|---|
+| `0x01` | `FLAG_SIGNED` | Defined (`RNS/Discovery.py:259` → `FLAG_SIGNED       = 0b00000001`) but never set or checked. The announce signature (§4.2) already covers `app_data`. |
+| `0x02` | `FLAG_ENCRYPTED` | The rest is encrypted to the network identity with the ordinary §3 single-destination token (`RNS/Discovery.py:252` → `else: payload = self.owner.network_identity.encrypt(packed+stamp)`). Only holders of that identity's private key can read it. The announce itself stays public. |
+
+On RNS ≥ 1.6 the announce also carries the §4.7 stamp trailer **after** this `app_data`, like every other announce. The discovery handler takes its own stamp from the **last 32 bytes** it is given. So the §4.7 trailer must have been stripped before then, which upstream does only when the announce stamp validates. If the receiving interface's `destination_cost` is above what the sender stamped, the trailer stays attached, and the discovery announce is silently rejected as an invalid stamp. `tools/verify_interface_discovery.py` asserts this.
+
+#### 4.8.2 The `info` map
+
+A msgpack map keyed by **small integers**, not strings (`RNS/Discovery.py:50-71` → `NAME            = 0xFF`). The producer always emits the first block of keys (`RNS/Discovery.py:166-176` → `info  = {INTERFACE_TYPE: interface_type,`). The rest depend on the interface type.
+
+| Key | Name | Type | Notes |
+|---|---|---|---|
+| `0x00` | `INTERFACE_TYPE` | str | One of `BackboneInterface`, `TCPServerInterface`, `TCPClientInterface`, `RNodeInterface`, `WeaveInterface`, `I2PInterface`, `KISSInterface` (`RNS/Discovery.py:80-81` → `DISCOVERABLE_INTERFACE_TYPES = [`). A KISS-framed `TCPClientInterface` is advertised as `KISSInterface`. A plain one is refused (`RNS/Discovery.py:180` → `if interface_type == "TCPClientInterface" and not interface.kiss_framing:`). |
+| `0x01` | `TRANSPORT` | bool | Whether the advertising instance has transport enabled |
+| `0xFE` | `TRANSPORT_ID` | bin(16) | The instance's transport identity hash |
+| `0xFD` | `TRANSPORT_IMPL` | str | `"RNS"` from upstream (`IMPLEMENTATION_NAME`) |
+| `0xFC` | `TRANSPORT_VERS` | str | Implementation version, e.g. `"1.6.1"` |
+| `0xFB` | `DST_COST` | float | The interface's required announce-stamp cost (§4.7), quantized to 1/256. **RNS ≥ 1.6.** |
+| `0xFA` | `PR_COST` | float | The interface's required path-request stamp cost (§7.1), quantized. **RNS ≥ 1.6.** |
+| `0xFF` | `NAME` | str or nil | Operator-chosen name |
+| `0x03` / `0x04` / `0x05` | `LATITUDE` / `LONGITUDE` / `HEIGHT` | **float** or nil | Must be msgpack *float*. The receiver rejects an integer here (`RNS/Discovery.py:359-361` → `if type(unpacked[LATITUDE])  not in [type(None), float]`), so `52` must be sent as `52.0`. |
+| `0xF0` | `OP_ADDR` | bin(16) | Optional operator LXMF address (`RNS/Discovery.py:178` → `if interface.discovery_lxmf_address: info[OP_ADDR] = interface.discovery_lxmf_address`) |
+| `0x02` | `REACHABLE_ON` | str | `BackboneInterface` / `TCPServerInterface`: an IP address or hostname, checked on both sides. `I2PInterface`: the `.b32` address without the `.b32.i2p` suffix. |
+| `0x06` | `PORT` | int | `BackboneInterface` / `TCPServerInterface` only |
+| `0x09` / `0x0A` | `FREQUENCY` / `BANDWIDTH` | int | `RNodeInterface`, `WeaveInterface`, `KISSInterface` |
+| `0x0B` / `0x0C` | `SPREADINGFACTOR` / `CODINGRATE` | int | `RNodeInterface` |
+| `0x0D` / `0x0E` | `MODULATION` / `CHANNEL` | str / int | `WeaveInterface` (both), `KISSInterface` (`MODULATION`) |
+| `0x07` / `0x08` | `IFAC_NETNAME` / `IFAC_NETKEY` | str | Only when the operator sets `publish_ifac`. This publishes the interface's access credentials, so in practice it belongs with `FLAG_ENCRYPTED`. |
+
+#### 4.8.3 Discovery stamp
+
+Distinct from the §4.7 announce stamp. The stamp is 32 bytes (`STAMP_SIZE`) over `infohash = SHA-256(packed)`, where `packed` is the msgpack bytes before encryption. The workblock is expanded with **20** HKDF rounds (§5.7.2) (`RNS/Discovery.py:78` → `WORKBLOCK_EXPAND_ROUNDS = 20`). The default cost is **16** both to emit and to accept (`RNS/Discovery.py:77` → `DEFAULT_STAMP_VALUE = 16`). Per interface, `discovery_stamp_value` raises the emitted cost, and `[reticulum] required_discovery_value` raises the accepted one. Since RNS 1.6 the stamp code is `RNS.Stamps`. Through RNS 1.5.7 it came from LXMF, so an RNS without LXMF installed could not do discovery at all. Since RNS 1.6 the receiver also accepts a stamp over the **non-expanded** workblock, checked first and marked transitory (`RNS/Discovery.py:327-329` → `workblock_ne  = self.stamper.stamp_workblock(infohash, expand_rounds=0)`), like LXMF's (§5.7.2 callout). Senders should keep emitting the 20-round form, which every version accepts.
+
+#### 4.8.4 Receive-side checks
+
+`InterfaceAnnounceHandler.received_announce` (`RNS/Discovery.py:281-474` → `def received_announce(self, destination_hash, announced_identity, app_data):`) drops the advertisement, silently, unless all of these hold, in this order:
+
+1. If `interface_discovery_sources` is configured, the announcing identity is in it (`RNS/Discovery.py:283-286` → `discovery_sources = RNS.Reticulum.interface_discovery_sources()`). This is the trust boundary: by default, discovery is accepted from **anyone**.
+2. `app_data` is longer than 33 bytes (`RNS/Discovery.py:288` → `if app_data and len(app_data) > self.stamper.STAMP_SIZE+1:`).
+3. A path to the discovery destination is known, within `PATHFINDER_M − 1` hops (`RNS/Discovery.py:296` → `if hops > RNS.Transport.PATHFINDER_M-1:`). `hops_to` returns `PATHFINDER_M` for an unknown destination. **RNS ≥ 1.6.**
+4. If `FLAG_ENCRYPTED` is set, the receiver holds the network identity and decryption succeeds (`RNS/Discovery.py:313-316` → `app_data = RNS.Transport.network_identity.decrypt(app_data)`).
+5. No other discovery stamp is being validated at that moment. A second one arriving meanwhile is **dropped, not queued** (`RNS/Discovery.py:318-320` → `if self.validation_lock.locked():`). Results are cached on `SHA-256(app_data)`, 2048 entries each for valid and invalid.
+6. The stamp meets the required value (§4.8.3).
+7. The map has `INTERFACE_TYPE`, `NAME`, `TRANSPORT`, `TRANSPORT_ID` and the three location keys, with the types in §4.8.2. `TRANSPORT_ID` is exactly 16 bytes, the type is in the discoverable list, and `REACHABLE_ON` (if present) is a valid address or hostname (`RNS/Discovery.py:358-368` → `if type(unpacked[TRANSPORT]) != bool:`). A missing required key raises, and the advertisement is dropped. Type-specific keys (`PORT`, `FREQUENCY`, …) are read without a presence check, so they are required for their type.
+
+The accepted record is identified by `discovery_hash = SHA-256(hex(transport_id) || name)` (`RNS/Discovery.py:467-468` → `discovery_hash_material = info["transport_id"]+info["name"]`), with `transport_id` as lowercase hex text. A node that changes its name therefore appears as a new interface. The record's `network_id` is the announcing identity. Stored records become *unknown* after 1 day and *stale* after 3, and are removed after 7 (`RNS/Discovery.py:481-483` → `THRESHOLD_UNKNOWN  = 24*60*60`). They are removed early if either `network_id` or `transport_id` is blackholed.
+
+Because the advertisement is an announce, it also passes the generic §4.5 checks first. A node that restricts announces by destination type (§4.4) still receives discovery announces, because enabling discovery registers the type as wanted (`RNS/Discovery.py:523` → `wants_destination_type("rnstransport.discovery.interface")`).
+
+#### 4.8.5 Auto-connect eligibility
+
+With auto-connect enabled, upstream connects automatically only to a discovered **`BackboneInterface`** (`RNS/Discovery.py:492` → `AUTOCONNECT_TYPES  = ["BackboneInterface"]`), and only if the advertisement has `TRANSPORT = True` and `TRANSPORT_IMPL = "RNS"` with `TRANSPORT_VERS ≥ 1.5.7` (`RNS/Discovery.py:792-801` → `def autoconnect_qualified(self, info):`, `:496` → `AUTOCONNECT_MIN_V  = "1.5.7"`). This is upstream *client policy*, not a wire rule, but it matters to other implementations. A conforming non-RNS transport node that advertises its own `TRANSPORT_IMPL` is discovered and listed, but **not auto-connected**, unless the receiving operator sets `autoconnect_unverified_implementations`. An implementation must not claim `"RNS"` in `TRANSPORT_IMPL` to get past this. The field identifies the software.
 
 ## 5. LXMF wire format
 
@@ -4813,6 +4889,8 @@ Upstream Python sources, in rough order of frequency-of-reference:
 | `RNS/Packet.py` | Header pack/unpack, packet types, contexts, `prove` |
 | `RNS/Transport.py` | `outbound`, `inbound`, `request_path`, path table, HEADER_1↔2 |
 | `RNS/Link.py` | Link establishment, LRPROOF, session-key derivation |
+| `RNS/Stamps.py` | Proof-of-work stamps for announces, link requests, path requests, LXMF and discovery (RNS ≥ 1.6) |
+| `RNS/Discovery.py` | Interface discovery announces: producer, receive checks, auto-connect policy (§4.8) |
 | `RNS/Cryptography/Token.py` | The Fernet-style Token format |
 | `RNS/vendor/umsgpack.py` | The bundled msgpack with locked bin/str semantics |
 | `RNS/Interfaces/TCPInterface.py` | TCPClient/TCPServer, including HDLC framing |
