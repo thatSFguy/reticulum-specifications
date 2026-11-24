@@ -19,7 +19,9 @@ directly and checks:
   4. Only locally-sourced entries are persisted, to storage/blackhole/local.
   5. Subscriber merge (BlackholeUpdater.update_link_established, fed a stub
      link): new entries are added, existing ones are not overwritten, and
-     the list is persisted to storage/blackhole/<source hex>.
+     the list is persisted to storage/blackhole/<source hex>. Plus the S12.7
+     hazard, both ways: an entry claiming our own `source` is persisted as
+     local, and an entry we unblackholed comes back from a peer's list.
   6. reload_blackhole: a file whose source is not in blackhole_sources is
      ignored; expired entries are dropped; a remote list never replaces a
      local entry.
@@ -159,6 +161,23 @@ def main():
     T.unblackhole_identity(spoofed)
     print("PASS S12.7 hazard: fetched entries keep the publisher-supplied `source`; one claiming ours "
           "is persisted as local")
+
+    # 5c. list loop, no attacker: our own entry, held by a peer we subscribe
+    # to, comes back after we unblackhole it, and is persisted as ours again.
+    looped = RNS.Identity().hash
+    T.blackhole_identity(looped, reason="ours")
+    peer_copy = {looped: dict(T.blackholed_identities[looped])}   # the peer holds our entry verbatim
+    T.unblackhole_identity(looped)
+    D.BlackholeUpdater().update_link_established(StubLink(source, peer_copy))
+    if T.blackholed_identities.get(looped, {}).get("source") != T.identity.hash:
+        fail("S12.7 loop no longer reproduces: an unblackholed entry did not return via a peer's list. "
+             "Upstream changed; update S12.7")
+    loop_trigger = RNS.Identity().hash
+    T.blackhole_identity(loop_trigger)
+    if looped not in read_msgpack(os.path.join(RNS.Reticulum.blackholepath, "local")):
+        fail("S12.7 loop: the returned entry was not persisted as local")
+    T.unblackhole_identity(looped); T.unblackhole_identity(loop_trigger)
+    print("PASS S12.7 loop: an unblackholed entry returns from a peer's list as our own and is persisted")
 
     # 3. `/list` republishes everything it holds
     body = T.blackhole_list_handler("/list", None, b"\x00" * 16, b"\x00" * 16, None, time.time())

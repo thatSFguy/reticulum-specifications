@@ -4399,38 +4399,58 @@ At start-up `reload_blackhole` reads `storage/blackhole/` (`RNS/Transport.py:477
 
 Only entries whose `source` is this node's own transport identity are persisted to `local` (`RNS/Transport.py:4851-4856` → `def persist_blackhole():`).
 
-> **Hazard: a publisher can make its entries permanent on your node.**
+> **Hazard: fetched entries can become permanent "local" entries.**
 > Step 1 above stores each fetched entry exactly as received, **including its
-> `source` field**. A publisher, or anyone its list was learned from, can set
-> `source` to the *subscriber's* transport identity hash. On a transport
-> node that hash is static and visible on the network: it is the
-> `transport_id` in every packet the node relays. A non-transport node uses
-> a fresh ephemeral transport identity on each run, which narrows the
-> window, but an entry written to `local` stays there either way.
-> The next time the subscriber persists its local list, which happens on any
-> local blackhole or unblackhole, `persist_blackhole` treats those entries as
-> the subscriber's own and writes them to `storage/blackhole/local`. They then
-> survive removing that source from `blackhole_sources`. Verified by
-> `tools/verify_blackhole_list.py`. Also reproduced end to end against
-> RNS 1.6.1, with two separate transport-node processes connected over TCP.
-> The subscriber's unmodified `BlackholeUpdater` fetched `/list` over a real
-> Link, one ordinary local blackhole followed, and after a restart with the
-> source unsubscribed the planted entry was still enforced. Announces from it
-> returned `"blackholed"`. The publisher's honestly attributed entry was gone.
+> `source` field**. Any fetched entry whose `source` equals the subscriber's
+> own transport identity hash is then indistinguishable from one the
+> subscriber's operator created. The next time the subscriber persists its
+> local list, which happens on any local blackhole or unblackhole,
+> `persist_blackhole` writes the entry to `storage/blackhole/local`. From then
+> on it survives removing every source from `blackhole_sources`. Upstream keeps
+> no other record of which entries the operator actually made, so once
+> persisted the entry **cannot be told apart from a genuine local one**, and no
+> after-the-fact cleanup rule can remove it safely. Two ways it happens:
+>
+> - **A hostile publisher.** A publisher, or anyone its list was learned from,
+>   sets `source` to the subscriber's transport identity hash. On a transport
+>   node that hash is static and visible on the network: it is the
+>   `transport_id` in every packet the node relays. A non-transport node uses
+>   a fresh ephemeral transport identity on each run, which narrows the
+>   window, but a persisted entry stays either way.
+> - **A list loop, with no attacker.** Nodes A and B each publish and each
+>   subscribe to the other. B holds A's entry for X with `source` = A, and
+>   `/list` returns everything B holds. A later **unblackholes** X. A's next
+>   routine fetch from B finds X absent locally, so it merges B's copy back,
+>   still claiming `source` = A. A's next local change persists it, so the
+>   unblackhole is silently reversed for good.
+>
+> Both were reproduced end to end against RNS 1.6.1. Each test used separate
+> transport-node processes connected over TCP, with the unmodified
+> `BlackholeUpdater` fetching `/list` over a real Link. In each case the entry
+> was still enforced after a restart with no `blackhole_sources` and no
+> interfaces, and an announce from the blackholed identity returned
+> `"blackholed"`. In the publisher case, the publisher's honestly attributed
+> entry was gone after the restart, as it should be. `tools/verify_blackhole_list.py`
+> asserts both mechanisms.
 >
 > **Affected versions: since RNS 1.1.0 (2026-01-04), and through at least the
 > current pin.** Blackhole lists first shipped in 1.1.0; 1.0.4 has none. Every
 > released wheel from 1.1.0 onward was checked for the three ingredients: the
 > verbatim merge in `update_link_established`, the `source` filter in
 > `persist_blackhole`, and the rewrite of `source` only in `reload_blackhole`.
-> All are present unchanged. The two-process reproduction above was also run
-> against a clean RNS 1.1.0 install, with the same outcome. Through RNS 1.4.2,
+> All are present unchanged. The publisher reproduction was also run against
+> a clean RNS 1.1.0 install, with the same outcome. Through RNS 1.4.2,
 > `validate_announce` has no `signal_blackholed` parameter and simply returns
-> `False` (§4.5 step 5). An implementation SHOULD set `source` to
-> the publisher's identity hash when merging a fetched list, as
-> `reload_blackhole` already does, and SHOULD ignore keys that are not
-> 16 bytes. Merged entries are also not checked for expiry, nor are their
-> `until` / `reason` types checked. `jobs` removes expired ones within 60 s.
+> `False` (§4.5 step 5).
+>
+> **Guidance.** The fix belongs at merge time, the only point where an
+> entry's origin is still known. An implementation merging a fetched list
+> SHOULD NOT accept an entry as its own. It should either set `source` to the
+> publisher's identity hash, as `reload_blackhole` already does, or drop any
+> fetched entry whose `source` is its own transport identity and log it, since
+> that indicates a hostile publisher or a loop. It SHOULD also ignore keys that
+> are not 16 bytes. Merged entries are not checked for expiry, nor are their
+> `until` / `reason` types checked; `jobs` removes expired ones within 60 s.
 
 ### 12.8 Source map for §12
 
