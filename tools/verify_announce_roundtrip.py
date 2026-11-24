@@ -23,6 +23,7 @@ Exit code 0 on PASS, non-zero on FAIL.
 
 from __future__ import annotations
 
+import time
 import hashlib
 import os
 import sys
@@ -48,8 +49,15 @@ def build_announce(identity, app_data=None):
     """Build an announce via upstream and return (packet, raw bytes after pack)."""
     dest = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE,
                            "verify_announce", "test")
+    # Bracket the build. Since RNS 1.6, _announce takes random_hash BEFORE it
+    # blocks on destination-stamp generation (_await_stamp), so on a first
+    # announce the timestamp can predate emission by however long the
+    # proof-of-work took. It must still fall inside this window.
+    global BUILD_WINDOW
+    t0 = int(time.time())
     pkt = dest.announce(app_data=app_data, send=False)
     pkt.pack()
+    BUILD_WINDOW = (t0, int(time.time()))
     return dest, pkt
 
 
@@ -109,13 +117,13 @@ def verify_body_layout_and_signature(dest, pkt):
              f"  actual:   {dest.hash.hex()}")
 
     # S4.1 corrected: random_hash[5:10] is BE-uint40 unix_seconds
-    import time
     ts = int.from_bytes(random_hash[5:10], "big")
-    now = int(time.time())
-    if abs(now - ts) > 10:
-        fail(f"S4.1 random_hash timestamp half is not a recent unix_seconds value:\n"
+    t0, t1 = BUILD_WINDOW
+    now = t1
+    if not (t0 - 1 <= ts <= t1 + 1):
+        fail(f"S4.1 random_hash timestamp half is not unix_seconds taken during the build:\n"
              f"  random_hash[5:10] -> {ts}\n"
-             f"  now               -> {now}")
+             f"  build window      -> {t0}..{t1}")
 
     print("PASS S4.1/4.2 announce body layout + signature + dest_hash recompute")
     print(f"     context_flag={context_flag}  ratchet={'yes' if ratchet else 'no'}  "

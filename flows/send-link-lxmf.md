@@ -63,7 +63,7 @@ Setting `process_outbound` itself as the link's established-callback is the tric
 
 ### 3. `RNS.Link(destination)` builds and sends a LINKREQUEST
 
-`RNS/Link.py:240-353` → `def __init__(self, destination=None, established_callback=None`. The `Link` constructor on the **initiator** side generates a fresh ephemeral X25519 + Ed25519 keypair (`pub_bytes` and `sig_pub_bytes`) and constructs the LINKREQUEST body (`RNS/Link.py:321-337` → `signalling_bytes = Link.signalling_bytes(nh_hw_mtu,`):
+`RNS/Link.py:240-337` → `def __init__(self, destination=None, established_callback=None`. The `Link` constructor on the **initiator** side generates a fresh ephemeral X25519 + Ed25519 keypair (`pub_bytes` and `sig_pub_bytes`). Since RNS 1.6 it then hands off to `Link.__initiate`, which constructs the LINKREQUEST body (`RNS/Link.py:396-412` → `signalling_bytes = Link.signalling_bytes(nh_hw_mtu,`). If the destination announced a link cost (SPEC §4.7), the X25519 key is instead searched for as a stamped key (SPEC §6.1.1). In that case `__initiate` runs on a background thread and the LINKREQUEST goes out only once the key is found, so the constructor returns before anything has been sent:
 
 ```
 request_data = initiator_X25519_pub(32) || initiator_Ed25519_pub(32) || [signalling(3)]

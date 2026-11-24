@@ -20,7 +20,7 @@ Out of scope: the receive side (`receive-resource.md` — TODO), Resource cancel
 
 ### 1. Caller constructs the `RNS.Resource`
 
-For LXMF DIRECT/RESOURCE, this happens in `LXMessage.__as_resource` (`LXMF/LXMessage.py:684` → `RNS.Resource(self.packed, self.__delivery_destination`):
+For LXMF DIRECT/RESOURCE, this happens in `LXMessage.__as_resource` (`LXMF/LXMessage.py:684` → `RNS.Resource(self.packed, self.__delivery_destination`). Since LXMF 1.3 the PROPAGATED branch of the same method also passes `app_flag=True`, which sets advertisement flag bit 6 (SPEC §10.4); the DIRECT call is unchanged:
 
 ```python
 RNS.Resource(self.packed, self.__delivery_destination,

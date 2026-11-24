@@ -42,7 +42,7 @@ LINKREQUEST → LRPROOF → ACTIVE. The propagation node's `delivery_link_establ
 
 ### 5. (Optional) Stamp generation for propagation cost
 
-If the propagation node's announce app_data declared a `stamp_cost` (element [5][0] per §5.8.5), the sender computes a propagation stamp via `LXMessage.get_propagation_stamp(target_cost)` (`LXMessage.py:344-368` → `def get_propagation_stamp(self, target_cost, timeout=None)`). Algorithm same as §5.7 stamps but with `WORKBLOCK_EXPAND_ROUNDS_PN = 1000` rounds (cheaper than the regular `3000`-round stamp), and computed over the `transient_id` rather than `message_id`.
+If the propagation node's announce app_data declared a `stamp_cost` (element [7][0] since LXMF 1.3, else the rounded-up [5][0]; per §5.8.5), the sender computes a propagation stamp via `LXMessage.get_propagation_stamp(target_cost)` (`LXMessage.py:344-368` → `def get_propagation_stamp(self, target_cost, timeout=None)`). Algorithm same as §5.7 stamps but with `WORKBLOCK_EXPAND_ROUNDS_PN = 1000` rounds (cheaper than the regular `3000`-round stamp), and computed over the `transient_id` rather than `message_id`.
 
 The stamp is appended to the wire body: `lxmf_data += propagation_stamp` (the propagation node validates the stamp before storing).
 
@@ -54,7 +54,7 @@ The Link DATA packet gets the standard mandatory PROOF receipt per §6.5; the re
 
 ### 7. Submit via Resource (RESOURCE representation)
 
-If `representation == RESOURCE`, the sender emits the `propagation_packed` blob as a Resource transfer per `flows/send-resource.md`. The propagation node accepts via `delivery_resource_advertised`, and on completion runs `propagation_resource_concluded` (`LXMRouter.py:2671-2808` → `def propagation_resource_concluded(self, resource)`) which decodes the `[time, [lxmf_data, ...]]` outer and stores each contained LXMF body.
+If `representation == RESOURCE`, the sender emits the `propagation_packed` blob as a Resource transfer per `flows/send-resource.md`, with the Resource **app flag set** since LXMF 1.3 (`LXMF/LXMessage.py:686` → `app_flag=True`; §5.8.2). The propagation node accepts via `propagation_resource_advertised`, which lets a flagged Resource past its `from_static_only` gate (`LXMF/LXMRouter.py:2544` → `if self.from_static_only and not resource.app_flag_set():`), and on completion runs `propagation_resource_concluded` (`LXMRouter.py:2671-2808` → `def propagation_resource_concluded(self, resource)`) which decodes the `[time, [lxmf_data, ...]]` outer and stores each contained LXMF body.
 
 ### 8. The link can stay open or be torn down
 

@@ -12,13 +12,18 @@ tell the two apart. LXMF/LXMF.py::display_name_from_app_data dispatches on the
 FIRST BYTE only -- 0x90..0x9f or 0xdc takes the msgpack branch, anything else
 is assumed to be a raw UTF-8 name -- so it is a heuristic, not a validation.
 Fed a non-LXMF payload it does not report an error; it does one of three
-things depending on that first byte, and two of them look like success:
+things depending on that first byte, and none of them raises:
 
-  * first byte outside both ranges, not valid UTF-8 -> UnicodeDecodeError
+  * first byte outside both ranges, not valid UTF-8 -> None (through LXMF
+    1.2.x this raised UnicodeDecodeError; LXMF 1.3 catches it)
   * first byte outside both ranges, valid UTF-8     -> returns a CORRUPTED
     name with the length/type header byte glued on as a character
   * first byte lands in 0x90..0x9f by coincidence   -> msgpack branch,
     returns None as though the announce carried no name
+
+It also checks the S4.7 interaction: LXMF app_data followed by the 18-byte
+RNS >= 1.6 announce-stamp trailer still parses, because umsgpack ignores
+bytes after the first object.
 
 The third case is reachable from CBOR without contrivance: CBOR encodes an
 array of 16 items as 0x90, which is msgpack fixarray(0).
@@ -67,16 +72,17 @@ CBOR_MAP_3 = bytes([0xA3]) + b"\x65proto\x63rrc\x61v\x01\x63hub\x67hubname"
 CBOR_ARRAY_16 = bytes([0x90]) + bytes(range(16))
 
 
-def verify_cbor_map_raises():
-    """0xa3 is outside both msgpack ranges -> raw-UTF-8 branch -> raises."""
+def verify_cbor_map_returns_none():
+    """0xa3 is outside both msgpack ranges -> raw-UTF-8 branch -> decode
+    fails -> None since LXMF 1.3 (raised UnicodeDecodeError through 1.2.x)."""
     try:
         got = LXMF_helpers.display_name_from_app_data(CBOR_MAP_3)
-    except UnicodeDecodeError:
-        print("PASS S4.6 CBOR map (0xa3) -> UnicodeDecodeError from the raw-UTF-8 branch")
-        return
     except Exception as e:
-        fail(f"S4.6 CBOR map: expected UnicodeDecodeError, got {type(e).__name__}: {e}")
-    fail(f"S4.6 CBOR map: expected UnicodeDecodeError, got a value: {got!r}")
+        fail(f"S4.6 CBOR map: expected None (LXMF >= 1.3 swallows the decode error), "
+             f"got {type(e).__name__}: {e}")
+    if got is not None:
+        fail(f"S4.6 CBOR map: expected None, got {got!r}")
+    print("PASS S4.6 CBOR map (0xa3) -> None from the raw-UTF-8 branch, no error raised")
 
 
 def verify_cbor_text_corrupts_silently():
@@ -99,23 +105,26 @@ def verify_cbor_array_collides_with_fixarray():
 
 
 def verify_dispatch_is_first_byte_only():
-    """The three branch heads in display_name_from_app_data are 0x90..0x9f and 0xdc."""
-    msgpack_leaders = [b for b in range(0x90, 0xA0)] + [0xDC]
-    for lead in msgpack_leaders:
-        payload = bytes([lead]) + b"\x00" * 8
-        try:
-            LXMF_helpers.display_name_from_app_data(payload)
-        except UnicodeDecodeError:
-            fail(f"S4.6 dispatch: 0x{lead:02x} should take the msgpack branch, took raw-UTF-8")
-        except Exception:
-            pass  # malformed msgpack raising from inside the branch is still the msgpack branch
-    # A byte just outside the range must take the raw-UTF-8 branch instead.
-    try:
-        LXMF_helpers.display_name_from_app_data(bytes([0x8F]) + b"\xff\xff")
-    except UnicodeDecodeError:
-        print("PASS S4.6 dispatch is first-byte-only (0x90..0x9f, 0xdc msgpack; 0x8f raw-UTF-8)")
-        return
-    fail("S4.6 dispatch: 0x8f should have taken the raw-UTF-8 branch and raised")
+    """The branch heads in display_name_from_app_data are 0x90..0x9f and 0xdc.
+
+    Neither branch raises since LXMF 1.3, so the branch is observed by its
+    result: a msgpack array holding bin "ab" decodes to "ab" only through the
+    msgpack branch (the bytes are not valid UTF-8 as a whole)."""
+    for n in range(1, 16):
+        payload = bytes([0x90 | n]) + bytes([0xC4, 0x02]) + b"ab" + b"\xc0" * (n - 1)
+        got = LXMF_helpers.display_name_from_app_data(payload)
+        if got != "ab":
+            fail(f"S4.6 dispatch: 0x{0x90 | n:02x} should take the msgpack branch, got {got!r}")
+    got = LXMF_helpers.display_name_from_app_data(bytes([0xDC, 0x00, 0x01, 0xC4, 0x02]) + b"ab")
+    if got != "ab":
+        fail(f"S4.6 dispatch: 0xdc should take the msgpack branch, got {got!r}")
+    # 0x81 is msgpack fixmap(1) and 0xdd array32: neither is a branch head,
+    # so both go to the raw-UTF-8 branch, fail to decode and return None.
+    for lead in (0x81, 0xDD):
+        got = LXMF_helpers.display_name_from_app_data(bytes([lead]) + bytes([0xC4, 0x02]) + b"ab")
+        if got is not None:
+            fail(f"S4.6 dispatch: 0x{lead:02x} should take the raw-UTF-8 branch and give None, got {got!r}")
+    print("PASS S4.6 dispatch is first-byte-only (0x90..0x9f, 0xdc msgpack; others raw-UTF-8)")
 
 
 def verify_lxmf_shapes_still_parse():
@@ -128,13 +137,29 @@ def verify_lxmf_shapes_still_parse():
     print("PASS S4.6 control: genuine 3-element LXMF app_data still parses to 'Reticulum5'")
 
 
+def verify_stamp_trailer_tolerated():
+    """S4.7: LXMF app_data + the 18-byte RNS announce-stamp trailer.
+
+    Upstream leaves the trailer on app_data when the stamp does not validate,
+    and receivers that do not implement stamps never strip it. LXMF's readers
+    still work because umsgpack.unpackb stops after the first object."""
+    trailer = bytes([0xC1, 0x00]) + bytes(14) + bytes([0x80, 0x0C])
+    app_data = RNS.vendor.umsgpack.packb([b"Reticulum5", 8, [0x00]]) + trailer
+    name = LXMF_helpers.display_name_from_app_data(app_data)
+    cost = LXMF_helpers.stamp_cost_from_app_data(app_data)
+    if name != "Reticulum5" or cost != 8:
+        fail(f"S4.7 trailer: LXMF parsed name {name!r} / stamp_cost {cost!r}, want 'Reticulum5' / 8")
+    print("PASS S4.7 LXMF app_data followed by the 18-byte stamp trailer still parses (trailing bytes ignored)")
+
+
 def main():
     print(f"verify_app_data_dispatch.py against RNS {RNS.__version__} / LXMF {LXMF.__version__}")
-    verify_cbor_map_raises()
+    verify_cbor_map_returns_none()
     verify_cbor_text_corrupts_silently()
     verify_cbor_array_collides_with_fixarray()
     verify_dispatch_is_first_byte_only()
     verify_lxmf_shapes_still_parse()
+    verify_stamp_trailer_tolerated()
     print("ALL PASS")
 
 

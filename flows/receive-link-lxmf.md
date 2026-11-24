@@ -14,7 +14,7 @@ A Reticulum DATA packet with `packet_type = LINKREQUEST (2)`, addressed to the r
 initiator_X25519_pub(32) || initiator_Ed25519_pub(32) || [signalling(3)]
 ```
 
-`Transport.inbound` (`RNS/Transport.py:2940` → `elif packet.packet_type == RNS.Packet.LINKREQUEST and not link_request_handled:`) recognizes `packet_type == LINKREQUEST + destination_type == SINGLE`, looks up the destination in `destinations_map`, and calls `Destination.receive(packet)` which routes to `Destination.incoming_link_request(data, packet)` per `RNS/Destination.py:513-534` → `def receive(self,` (`receive` at 414 → `if packet.packet_type == RNS.Packet.LINKREQUEST:`, dispatching to `incoming_link_request` at `:530` → `def incoming_link_request(self,`):
+`Transport.inbound` (`RNS/Transport.py:2940` → `elif packet.packet_type == RNS.Packet.LINKREQUEST and not link_request_handled:`) recognizes `packet_type == LINKREQUEST + destination_type == SINGLE`, looks up the destination in `destinations_map`, and calls `Destination.receive(packet)` which routes to `Destination.incoming_link_request(data, packet)` per `RNS/Destination.py:513-534` → `def receive(self,` (`receive` at 414 → `if packet.packet_type == RNS.Packet.LINKREQUEST:`, dispatching to `incoming_link_request` at `:530` → `def incoming_link_request(self,`; RNS 1.6 only reformats it as `if link != None: self.links.append(link)`):
 
 ```python
 def receive(self, packet):
@@ -26,7 +26,8 @@ def receive(self, packet):
 
 `RNS/Link.py:187-237` → `def validate_request(owner, data, packet)`. Length-checks the body (`ECPUBSIZE` or `ECPUBSIZE + LINK_MTU_SIZE`), rejects otherwise. On success:
 
-1. Build a `Link` object with `peer_pub_bytes = data[:32]` and `peer_sig_pub_bytes = data[32:64]`.
+1. Measure the link-request stamp (since RNS 1.6, SPEC §6.1.1). The value of the initiator's X25519 key over `owner.hash || peer_sig_pub_bytes` is computed on every request. The request is refused only when `LR_STAMPS_ENFORCED` is set and that value misses `owner.get_link_cost()` (`RNS/Link.py:195` → `if RNS.Transport.LR_STAMPS_ENFORCED and not stamp_valid(`). Enforcement is off by default, so by default every well-formed request passes this step.
+1a. Build a `Link` object with `peer_pub_bytes = data[:32]` and `peer_sig_pub_bytes = data[32:64]`.
 2. `set_link_id(packet)` per §6.3 — the link_id derives from `Packet.get_hashable_part`, invariant under HEADER_1↔HEADER_2 conversion.
 3. If signalling present, parse MTU and mode per §6.6.
 4. Call `link.handshake()` — ECDH with the initiator's X25519 ephemeral pub, HKDF over the shared secret with `salt=link_id`, derives `signing_key || encrypt_key`. Status `PENDING → HANDSHAKE`.
