@@ -4402,12 +4402,21 @@ Only entries whose `source` is this node's own transport identity are persisted 
 > **Hazard: a publisher can make its entries permanent on your node.**
 > Step 1 above stores each fetched entry exactly as received, **including its
 > `source` field**. A publisher, or anyone its list was learned from, can set
-> `source` to the *subscriber's* transport identity hash, which is public.
+> `source` to the *subscriber's* transport identity hash. On a transport
+> node that hash is static and visible on the network: it is the
+> `transport_id` in every packet the node relays. A non-transport node uses
+> a fresh ephemeral transport identity on each run, which narrows the
+> window, but an entry written to `local` stays there either way.
 > The next time the subscriber persists its local list, which happens on any
 > local blackhole or unblackhole, `persist_blackhole` treats those entries as
 > the subscriber's own and writes them to `storage/blackhole/local`. They then
 > survive removing that source from `blackhole_sources`. Verified by
-> `tools/verify_blackhole_list.py`. An implementation SHOULD set `source` to
+> `tools/verify_blackhole_list.py`. Also reproduced end to end against
+> RNS 1.6.1, with two separate transport-node processes connected over TCP.
+> The subscriber's unmodified `BlackholeUpdater` fetched `/list` over a real
+> Link, one ordinary local blackhole followed, and after a restart with the
+> source unsubscribed the planted entry was still enforced. Announces from it
+> returned `"blackholed"`. The publisher's honestly attributed entry was gone. An implementation SHOULD set `source` to
 > the publisher's identity hash when merging a fetched list, as
 > `reload_blackhole` already does, and SHOULD ignore keys that are not
 > 16 bytes. Merged entries are also not checked for expiry, nor are their
