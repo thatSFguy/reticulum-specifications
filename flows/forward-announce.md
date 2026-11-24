@@ -1,6 +1,6 @@
 # Flow: forward an announce (transport-node rebroadcast)
 
-What a transport-mode node does when it receives an inbound announce destined for a non-local destination. This is the flow that makes the mesh actually mesh — without it, announces never propagate beyond direct radio range. Pinned against **RNS 1.5.7**; cross-references [`../SPEC.md`](../SPEC.md) §4.5 (validation), §12.3 (rebroadcast rules), §12.4 (path table).
+What a transport-mode node does when it receives an inbound announce destined for a non-local destination. This is the flow that makes the mesh actually mesh — without it, announces never propagate beyond direct radio range. Pinned against **RNS 1.6.1**; cross-references [`../SPEC.md`](../SPEC.md) §4.5 (validation), §12.3 (rebroadcast rules), §12.4 (path table).
 
 This flow only runs on a node with `enable_transport = Yes` per §12.1. Leaf clients can ignore it entirely.
 
@@ -14,7 +14,7 @@ The receive-announce flow ([`receive-announce.md`](receive-announce.md)) runs fi
 
 ### 2. Eligibility checks
 
-`RNS/Transport.py:2351-2355` → `if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.context != RNS.Packet.PATH_RESPONSE:`. Three conditions all must hold, but they are **not** one boolean — the rate check is nested inside the gate:
+`RNS/Transport.py:2722-2726` → `if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.context != RNS.Packet.PATH_RESPONSE:`. Three conditions all must hold, but they are **not** one boolean — the rate check is nested inside the gate:
 
 ```python
 if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.context != RNS.Packet.PATH_RESPONSE:
@@ -27,11 +27,11 @@ if (RNS.Reticulum.transport_enabled() or is_from_local_client) and packet.contex
 
 - `transport_enabled OR is_from_local_client` — leaf clients only forward announces that came from a local-client interface (the rare "client behind shared rnsd" case).
 - `packet.context != PATH_RESPONSE` — path-response announces are NOT rebroadcast (they go on a single specific interface back to the requester per [`path-discovery.md`](path-discovery.md) step 7).
-- `not rate_blocked` — per-interface announce-rate limits aren't tripped for this destination. A rate-blocked announce still passes the outer gate; it is logged and simply never inserted into `announce_table`, which is what suppresses the rebroadcast. `rate_blocked` is computed at `:2302-2330` → `rate_blocked = False` against `interface.announce_rate_target`.
+- `not rate_blocked` — per-interface announce-rate limits aren't tripped for this destination. A rate-blocked announce still passes the outer gate; it is logged and simply never inserted into `announce_table`, which is what suppresses the rebroadcast. `rate_blocked` is computed at `:2702-2730` → `rate_blocked = False` against `interface.announce_rate_target`.
 
 ### 3. Insert into `announce_table`
 
-`RNS/Transport.py:2363-2374` → `Transport.announce_table[packet.destination_hash] = [`. The relay adds an entry:
+`RNS/Transport.py:2736-2747` → `Transport.announce_table[packet.destination_hash] = [`. The relay adds an entry:
 
 ```python
 Transport.announce_table[packet.destination_hash] = [
@@ -70,11 +70,11 @@ for dest_hash, entry in announce_table.items():
     entry[RETRIES] -= 1
 ```
 
-The actual code is in `RNS/Transport.py:737-800` → `Transport.links_last_checked =` (the `jobs` drain) and `:2090-2290` → `link_entry = [ now,` (the inbound announce path); the structure above is a simplification for the spec.
+The actual code is in `RNS/Transport.py:937-1001` → `Transport.links_last_checked =` (the `jobs` drain) and `:2468-2683` → `link_entry = [ now,` (the inbound announce path); the structure above is a simplification for the spec.
 
 ### 5. Per-interface `announce_queue` drain
 
-Each interface independently throttles its outbound announces against `interface.announce_cap`, a **fraction** of airtime: `Reticulum.ANNOUNCE_CAP = 2` is a percentage, divided by 100 wherever an interface is configured (`RNS/Reticulum.py:948` → `announce_cap = Reticulum.ANNOUNCE_CAP/100.0`), so the default is `0.02`. The lazy fallback for an interface that reaches the rebroadcast path without one does the same (`RNS/Transport.py:1524` → `interface.announce_cap = RNS.Reticulum.ANNOUNCE_CAP/100.0`); through RNS 1.5.2 that fallback assigned the raw `2`, a 200% cap that throttled nothing. `Interface.process_announce_queue` (`RNS/Interfaces/Interface.py:391-432` → `min_hops = min(entry["hops"] for entry in self.announce_queue)`) drains the queue at a rate the cap permits, **picking the lowest-hop-count entry first** so closer destinations propagate before further ones:
+Each interface independently throttles its outbound announces against `interface.announce_cap`, a **fraction** of airtime: `Reticulum.ANNOUNCE_CAP = 2` is a percentage, divided by 100 wherever an interface is configured (`RNS/Reticulum.py:1153` → `announce_cap = Reticulum.ANNOUNCE_CAP/100.0`), so the default is `0.02`. The lazy fallback for an interface that reaches the rebroadcast path without one does the same (`RNS/Transport.py:1524` → `interface.announce_cap = RNS.Reticulum.ANNOUNCE_CAP/100.0`); through RNS 1.5.2 that fallback assigned the raw `2`, a 200% cap that throttled nothing. `Interface.process_announce_queue` (`RNS/Interfaces/Interface.py:456-499` → `min_hops = min(entry["hops"] for entry in self.announce_queue)`) drains the queue at a rate the cap permits, **picking the lowest-hop-count entry first** so closer destinations propagate before further ones:
 
 ```python
 min_hops = min(e["hops"] for e in self.announce_queue)
@@ -90,11 +90,11 @@ The `wait_time` is what enforces the cap: on a 5kbps LoRa channel, a 200-byte an
 
 ### 6. Rebroadcast emission with hop increment
 
-When the queue actually emits, the wire bytes are the original announce's `packet.raw` with the `hops` byte already incremented (`Transport.inbound` did this at `RNS/Transport.py:1800` → `packet.hops += 1` on receive). No re-signing — the signature in the announce body covers the original hop=0 emission, and signature validation ignores the outer hops byte (it's not in `signed_data`). What's wire-visible is the same body, the same dest_hash, the same random_hash, and a hops byte that's now (hops_received + 1).
+When the queue actually emits, the wire bytes are the original announce's `packet.raw` with the `hops` byte already incremented (`Transport.inbound` did this at `RNS/Transport.py:2114` → `packet.hops += 1` on receive). No re-signing — the signature in the announce body covers the original hop=0 emission, and signature validation ignores the outer hops byte (it's not in `signed_data`). What's wire-visible is the same body, the same dest_hash, the same random_hash, and a hops byte that's now (hops_received + 1).
 
 ### 7. Local-rebroadcast counter cleanup
 
-If the relay later **hears its own rebroadcast** (a peer further along in the chain re-emitted it), `Transport.inbound` at `RNS/Transport.py:2188-2198` → `announce_entry[IDX_AT_LCL_RBRD] += 1` increments `entry[IDX_AT_LCL_RBRD]`. Once `local_rebroadcasts >= LOCAL_REBROADCASTS_MAX`, the entry is removed from `announce_table`:
+If the relay later **hears its own rebroadcast** (a peer further along in the chain re-emitted it), `Transport.inbound` at `RNS/Transport.py:2577-2587` → `announce_entry[IDX_AT_LCL_RBRD] += 1` increments `entry[IDX_AT_LCL_RBRD]`. Once `local_rebroadcasts >= LOCAL_REBROADCASTS_MAX`, the entry is removed from `announce_table`:
 
 ```python
 if announce_entry[IDX_AT_LCL_RBRD] >= LOCAL_REBROADCASTS_MAX:

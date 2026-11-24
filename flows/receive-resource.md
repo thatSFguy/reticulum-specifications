@@ -1,6 +1,6 @@
 # Flow: receive a Resource (large body) over a Link
 
-The inverse of [`send-resource.md`](send-resource.md). What happens chronologically on the receiver when an inbound Resource transfer arrives. Pinned against **RNS 1.5.7**; see [`../SPEC.md`](../SPEC.md) §10 for the wire bytes.
+The inverse of [`send-resource.md`](send-resource.md). What happens chronologically on the receiver when an inbound Resource transfer arrives. Pinned against **RNS 1.6.1**; see [`../SPEC.md`](../SPEC.md) §10 for the wire bytes.
 
 ---
 
@@ -15,7 +15,7 @@ The inverse of [`send-resource.md`](send-resource.md). What happens chronologica
 
 ### 1. RESOURCE_ADV arrives
 
-Inbound Link DATA packet with `context = RESOURCE_ADV (0x02)`. `Link.__receive` at `RNS/Link.py:1031-1101` → `elif packet.context == RNS.Packet.RESOURCE_ADV:` decrypts it and runs `RNS.ResourceAdvertisement.unpack` against the plaintext to extract the msgpack dict (§10.4).
+Inbound Link DATA packet with `context = RESOURCE_ADV (0x02)`. `Link.__receive` at `RNS/Link.py:1120-1190` → `elif packet.context == RNS.Packet.RESOURCE_ADV:` decrypts it and runs `RNS.ResourceAdvertisement.unpack` against the plaintext to extract the msgpack dict (§10.4).
 
 ### 2. Resource accept / reject decision
 
@@ -25,11 +25,11 @@ Branch by `resource_strategy`:
 - **`ACCEPT_APP`** → run the application callback `link.callbacks.resource(adv)`. If it returns truthy, `RNS.Resource.accept(...)`; otherwise reject.
 - **`ACCEPT_ALL`** → unconditional `RNS.Resource.accept(...)`.
 
-`Resource.accept` (`RNS/Resource.py:168-244` → `def accept(advertisement_packet`) constructs a receiver-side Resource object, copies fields from the advertisement, sets `status = TRANSFERRING`, and queues the first request.
+`Resource.accept` (`RNS/Resource.py:169-246` → `def accept(advertisement_packet`) constructs a receiver-side Resource object, copies fields from the advertisement, sets `status = TRANSFERRING`, and queues the first request.
 
 ### 3. Receiver issues the first RESOURCE_REQ
 
-`Resource.request_next()` (`RNS/Resource.py:942-991` → `def request_next(self)`) builds the request body per §10.5:
+`Resource.request_next()` (`RNS/Resource.py:947-1006` → `def request_next(self)`) builds the request body per §10.5:
 
 ```
 exhausted_flag(1) [|| last_map_hash(4)] || resource_hash(32) || requested_map_hashes(N × 4)
@@ -39,7 +39,7 @@ exhausted_flag(1) [|| last_map_hash(4)] || resource_hash(32) || requested_map_ha
 
 ### 4. Sender fulfills with RESOURCE part packets
 
-For each requested map_hash, the sender (per `flows/send-resource.md` step 5) emits one Link DATA packet with `context = RESOURCE (0x01)`, body = pre-encrypted part bytes. The receiver matches each arriving part to the hashmap by recomputing its 4-byte map_hash (`Resource.receive_part`, `RNS/Resource.py:842-939` → `def receive_part(self,`).
+For each requested map_hash, the sender (per `flows/send-resource.md` step 5) emits one Link DATA packet with `context = RESOURCE (0x01)`, body = pre-encrypted part bytes. The receiver matches each arriving part to the hashmap by recomputing its 4-byte map_hash (`Resource.receive_part`, `RNS/Resource.py:847-944` → `def receive_part(self,`).
 
 Successful match: `parts[i] = part_data`, `consecutive_completed_height` advances. The window grows by 1 each successful round (capped at `window_max`, with rate-detection upgrades to FAST or VERY_SLOW per §10.10).
 
@@ -49,7 +49,7 @@ When the receiver has consumed every map_hash in the current segment, it issues 
 
 ### 6. `Resource.assemble()` reassembles, validates, decrypts
 
-`Resource.py:685-762` → `def assemble(self):`:
+`Resource.py:689-766` → `def assemble(self):`:
 
 1. `stream = b"".join(self.parts)` — concatenate every part.
 2. `data = link.decrypt(stream)` — single Link Token decrypt of the whole blob (§10.12: encryption was applied to the whole concatenated body before splitting).
@@ -62,7 +62,7 @@ When the receiver has consumed every map_hash in the current segment, it issues 
 
 ### 7. RESOURCE_PRF emission
 
-`Resource.prove()` (`RNS/Resource.py:765-777` → `def prove(self):`) sends back:
+`Resource.prove()` (`RNS/Resource.py:769-781` → `def prove(self):`) sends back:
 
 ```
 proof_data = resource_hash(32) || full_proof(32)
@@ -77,7 +77,7 @@ If `segment_index < total_segments`, the sender prepares and sends the next RESO
 
 ### 9. Cancellation paths
 
-`RESOURCE_ICL` (sender cancel) → receiver pops the matching incoming Resource and discards accumulated parts (`Link.py:1112-1120` → `elif packet.context == RNS.Packet.RESOURCE_ICL:`).
+`RESOURCE_ICL` (sender cancel) → receiver pops the matching incoming Resource and discards accumulated parts (`Link.py:1201-1209` → `elif packet.context == RNS.Packet.RESOURCE_ICL:`).
 `RESOURCE_RCL` (sender hears the receiver rejected) → already handled receiver-side at step 2.
 
 ---

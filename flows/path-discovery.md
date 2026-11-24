@@ -2,7 +2,7 @@
 
 What happens chronologically when one node wants to reach another whose path is missing from `Transport.path_table`. This flow drives the well-known `rnstransport.path.request` destination (dest_hash `6b9f66014d9853faab220fba47d02761`, see [`../SPEC.md`](../SPEC.md) §1.2 and §7.1) and the path-response announce that returns along the reverse path.
 
-Pinned against **RNS 1.5.7**.
+Pinned against **RNS 1.6.1**.
 
 Out of scope: the LXMF outbound retry that gates this flow (`flows/send-opportunistic-lxmf.md` step 4); the periodic `Transport.jobs` cycle that ages out stale paths; transport-mode rebroadcast of a known path on behalf of a remote requester (Tier 3 spec gap, see `../todo.md`).
 
@@ -20,7 +20,7 @@ Out of scope: the LXMF outbound retry that gates this flow (`flows/send-opportun
 
 ### 1. Initiator: `RNS.Transport.request_path(dest_hash)`
 
-`RNS/Transport.py:3279-3322` → `def request_path(destination_hash, on_interface=None, tag=None, recursive=False)`. Triggered by:
+`RNS/Transport.py:3905-3961` → `def request_path(destination_hash, on_interface=None, tag=None, recursive=False)`. Triggered by:
 
 - `LXMRouter.handle_outbound` when `not has_path(dest) and method == OPPORTUNISTIC` (see `send-opportunistic-lxmf.md` step 4).
 - `LXMRouter.process_outbound` retry path after `MAX_PATHLESS_TRIES`.
@@ -45,7 +45,7 @@ Transport.path_requests[destination_hash] = time.time()
 
 The well-known dest hash `6b9f66014d9853faab220fba47d02761` is computed as `SHA256(SHA256("rnstransport.path.request")[:10])[:16]` per [`../SPEC.md`](../SPEC.md) §1.2 (the `identity=None` branch of `Destination.hash`). It is the same on every node — no per-node uniqueness — because the destination is `PLAIN` with no identity attached.
 
-The packet is `DATA` (not ANNOUNCE), `BROADCAST` transport, `HEADER_1`, and `context = NONE`. The body is **unencrypted** because the outer destination is `PLAIN` — `Packet.pack` falls through to `self.destination.encrypt(self.data)` at `RNS/Packet.py::pack` → `self.ciphertext = self.destination.encrypt(self.data)`, and `Destination.encrypt` returns `plaintext` unchanged for `Destination.PLAIN` (`RNS/Destination.py:592-593` → `raise TypeError("Only the`).
+The packet is `DATA` (not ANNOUNCE), `BROADCAST` transport, `HEADER_1`, and `context = NONE`. The body is **unencrypted** because the outer destination is `PLAIN` — `Packet.pack` falls through to `self.destination.encrypt(self.data)` at `RNS/Packet.py::pack` → `self.ciphertext = self.destination.encrypt(self.data)`, and `Destination.encrypt` returns `plaintext` unchanged for `Destination.PLAIN` (`RNS/Destination.py:690-691` → `raise TypeError("Only the`).
 
 Initiator records `Transport.path_requests[destination_hash] = time.time()` for `PATH_REQUEST_GATE_TIMEOUT = 120s` rate-limiting (prevents the same node from repeating identical path? requests faster than `PATH_REQUEST_MI = 20s`).
 
@@ -57,9 +57,9 @@ If the initiator is a transport node, the broadcast is subject to `announce_cap`
 
 ### 3. Each peer: `Transport.inbound` recognizes the path-request destination
 
-Every node on every interface that hears the broadcast packet runs it through `Transport.inbound`. The dispatch by `(packet_type, destination_type)` lands in the `DATA + PLAIN` branch (`RNS/Transport.py:1465` → `local_destination = Transport.destinations_map[packet.destination_hash]` — same code as the opportunistic-LXMF DATA dispatch in `flows/receive-opportunistic-lxmf.md` step 6, but for a PLAIN destination instead of SINGLE).
+Every node on every interface that hears the broadcast packet runs it through `Transport.inbound`. The dispatch by `(packet_type, destination_type)` lands in the `DATA + PLAIN` branch (`RNS/Transport.py:1768` → `local_destination = Transport.destinations_map[packet.destination_hash]` — same code as the opportunistic-LXMF DATA dispatch in `flows/receive-opportunistic-lxmf.md` step 6, but for a PLAIN destination instead of SINGLE).
 
-The destination lookup hits `Transport.destinations_map[dest_hash]` for the well-known path-request destination — every node has this destination registered automatically during Transport start-up at `RNS/Transport.py:356-357` → `Transport.path_request_destination = RNS.Destination(None, RNS.Destination.IN, RNS.Destination.PLAIN, Transport.APP_NAME, "path", "request")`:
+The destination lookup hits `Transport.destinations_map[dest_hash]` for the well-known path-request destination — every node has this destination registered automatically during Transport start-up at `RNS/Transport.py:496-497` → `Transport.path_request_destination = RNS.Destination(None, RNS.Destination.IN, RNS.Destination.PLAIN, Transport.APP_NAME, "path", "request")`:
 
 ```python
 Transport.path_request_destination = RNS.Destination(
@@ -73,7 +73,7 @@ Control reaches `Destination.receive` → `path_request_handler(data, packet)`.
 
 ### 4. Each peer: parse and dedup
 
-`RNS/Transport.py:3380-3417` → `def path_request_handler(data, packet)`. Per [`../SPEC.md`](../SPEC.md) §7.2.1, the handler extracts:
+`RNS/Transport.py:3964-3983` → `def path_request_handler(data, packet)`. Per [`../SPEC.md`](../SPEC.md) §7.2.1, the handler extracts:
 
 ```
 data[ 0:16]  destination_hash      — the requested target
@@ -85,7 +85,7 @@ Tagless requests are dropped. Otherwise `unique_tag = destination_hash || tag_by
 
 ### 5. Each peer: dispatch in `Transport.path_request`
 
-`RNS/Transport.py:3420-3599` → `def path_request(destination_hash,`, also documented in [`../SPEC.md`](../SPEC.md) §7.2.3. Five mutually-exclusive branches:
+`RNS/Transport.py:3986-4185` → `def path_request(destination_hash,`, also documented in [`../SPEC.md`](../SPEC.md) §7.2.3. Five mutually-exclusive branches:
 
 - **Branch 1 — local destination (the responder we want):** `destination_hash` is in `Transport.destinations_map`. Call `local_destination.announce(path_response=True, tag=tag, attached_interface=...)`. **Goto step 6.**
 - **Branch 2 — transit relay knows the path:** `transport_enabled` AND `dest_hash` in `path_table`. Pull the cached announce packet from `path_table[dest_hash][IDX_PT_PACKET]`, queue it for rebroadcast on the receiving interface with `PATH_REQUEST_GRACE = 0.4s` delay (or `+1.5s` on roaming-mode interfaces). Out of scope for this flow doc — see Tier 3 todo.
@@ -97,7 +97,7 @@ For a leaf client only Branches 1 and 5 matter. Branches 2-4 are transport-node 
 
 ### 6. Responder: `Destination.announce(path_response=True, tag=tag, ...)`
 
-`RNS/Destination.py:244-318` → `def announce(self`. Builds an announce packet identical in body to a regular periodic announce (see `flows/receive-announce.md` for the validation side and [`../SPEC.md`](../SPEC.md) §4.1 for the body bytes), with two distinctions:
+`RNS/Destination.py:286-379` → `def announce(self`. Builds an announce packet identical in body to a regular periodic announce (see `flows/receive-announce.md` for the validation side and [`../SPEC.md`](../SPEC.md) §4.1 for the body bytes), with two distinctions:
 
 1. **Outer packet context = `PATH_RESPONSE (0x0B)`** instead of `NONE (0x00)`:
    ```python
@@ -106,7 +106,7 @@ For a leaf client only Branches 1 and 5 matter. Branches 2-4 are transport-node 
    ```
    This is the only wire-byte difference between a path response and a regular re-announce.
 
-2. **`tag` parameter caches the body for `PR_TAG_WINDOW = 30s`** (`Destination.py:260-279` → `announce_data = self.path_responses[tag][1]`). A repeat of the same tag within the window would get the **same announce bytes** back — same `random_hash`, same `signature`. In current RNS that branch is never reached: Transport drops a repeated tag in its own dedup (step 4) before it gets to the destination, and upstream says so at the branch (`Destination.py:270` → `# This code is currently not used, since Transport will block duplicate`). The cache is there for future multi-path support; an implementation can omit it (see [`../SPEC.md`](../SPEC.md) §7.2.4 and §7.2.6).
+2. **`tag` parameter caches the body for `PR_TAG_WINDOW = 30s`** (`Destination.py:310-329` → `announce_data = self.path_responses[tag][1]`). A repeat of the same tag within the window would get the **same announce bytes** back — same `random_hash`, same `signature`. In current RNS that branch is never reached: Transport drops a repeated tag in its own dedup (step 4) before it gets to the destination, and upstream says so at the branch (`Destination.py:320` → `# This code is currently not used, since Transport will block duplicate`). The cache is there for future multi-path support; an implementation can omit it (see [`../SPEC.md`](../SPEC.md) §7.2.4 and §7.2.6).
 
 The path-response announce is sent on `attached_interface` only (the interface the request arrived on), not broadcast on all interfaces — so the response travels back along the same path the request came in on.
 
@@ -115,10 +115,10 @@ The path-response announce is sent on `attached_interface` only (the interface t
 The path-response announce is itself a regular ANNOUNCE packet, broadcast-routed. As it traverses each transit node, the standard receive-announce flow runs (`flows/receive-announce.md`):
 
 - Step 2: signature-only quick check, increment per-interface ingress-frequency deque.
-- Step 3: ingress-rate limit check — but **path-responses bypass ingress limiting** because the destination is in `Transport.path_requests` (recently-requested-by-us) or `Transport.discovery_path_requests` (recently-requested-on-behalf-of). See `RNS/Transport.py:1819-1821` → `if packet.destination_hash in Transport.path_requests or packet.destination_hash in Transport.discovery_path_requests:`.
+- Step 3: ingress-rate limit check — but **path-responses bypass ingress limiting** because the destination is in `Transport.path_requests` (recently-requested-by-us) or `Transport.discovery_path_requests` (recently-requested-on-behalf-of). See `RNS/Transport.py:2160-2162` → `if packet.destination_hash in Transport.path_requests or packet.destination_hash in Transport.discovery_path_requests:`.
 - Step 5: full `validate_announce` — same signature, dest_hash, collision checks as any announce.
-- Step 7: path table population. **The hop count is whatever the cached announce stored** (`RNS/Transport.py:3346-3524` → `def remote_path_handler(path,`: `packet.hops = path_table[dest_hash][IDX_PT_HOPS]` if served from cache by Branch 2); for Branch 1 responses, hops counts up naturally as the announce traverses back.
-- Step 8: announce handler fan-out. **Path-response announces are filtered OUT of regular handler dispatch by default** (`RNS/Transport.py:2486-2537` → `for handler in Transport.announce_handlers:`):
+- Step 7: path table population. **The hop count is whatever the cached announce stored** (`RNS/Transport.py:3930-4090` → `def remote_path_handler(path,`: `packet.hops = path_table[dest_hash][IDX_PT_HOPS]` if served from cache by Branch 2); for Branch 1 responses, hops counts up naturally as the announce traverses back.
+- Step 8: announce handler fan-out. **Path-response announces are filtered OUT of regular handler dispatch by default** (`RNS/Transport.py:2896-2937` → `for handler in Transport.announce_handlers:`):
   ```python
   if packet.context == RNS.Packet.PATH_RESPONSE:
       execute_callback = handler.receive_path_responses == True
@@ -133,9 +133,9 @@ When the path-response announce arrives back at the initiator, `validate_announc
 
 ### 9. Timeout and escalation
 
-If no response arrives within `Transport.PATH_REQUEST_TIMEOUT = 15s` (`RNS/Transport.py:134` → `PATH_REQUEST_TIMEOUT        = 15`), the `discovery_path_requests` entry on transit relays is aged out by the `Transport.jobs` cycle (`RNS/Transport.py:851-858` → `with Transport.discovery_pr_tags_lock:`). The originating LXM stays in `pending_outbound`; on the next retry tick after `LXMRouter.PATH_REQUEST_WAIT`, `LXMRouter.process_outbound` checks `has_path()` again, finds it still False, and re-issues `request_path`. This continues up to `LXMRouter.MAX_DELIVERY_ATTEMPTS` (typically 5) before the message is marked failed.
+If no response arrives within `Transport.PATH_REQUEST_TIMEOUT = 15s` (`RNS/Transport.py:177` → `PATH_REQUEST_TIMEOUT        = 15`), the `discovery_path_requests` entry on transit relays is aged out by the `Transport.jobs` cycle (`RNS/Transport.py:1052-1077` → `with Transport.discovery_pr_tags_lock:`). The originating LXM stays in `pending_outbound`; on the next retry tick after `LXMRouter.PATH_REQUEST_WAIT`, `LXMRouter.process_outbound` checks `has_path()` again, finds it still False, and re-issues `request_path`. This continues up to `LXMRouter.MAX_DELIVERY_ATTEMPTS` (typically 5) before the message is marked failed.
 
-The full outer retry behaviour (drop_path then re-request, the `MAX_PATHLESS_TRIES + 1` rediscovery branch at `LXMRouter.py:2853-2899` → `if lxmessage.method == LXMessage.OPPORTUNISTIC:`) is documented in `flows/send-opportunistic-lxmf.md` step 12.
+The full outer retry behaviour (drop_path then re-request, the `MAX_PATHLESS_TRIES + 1` rediscovery branch at `LXMRouter.py:3108-3154` → `if lxmessage.method == LXMessage.OPPORTUNISTIC:`) is documented in `flows/send-opportunistic-lxmf.md` step 12.
 
 ---
 

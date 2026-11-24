@@ -1,6 +1,6 @@
 # Flow: send an announce
 
-What happens chronologically when a node emits an announce — the periodic broadcast that lets the rest of the mesh discover or refresh a path to this destination. Pinned against **RNS 1.5.7**.
+What happens chronologically when a node emits an announce — the periodic broadcast that lets the rest of the mesh discover or refresh a path to this destination. Pinned against **RNS 1.6.1**.
 
 Out of scope: the relay-side rebroadcast (`forward-announce.md` — see [`../SPEC.md`](../SPEC.md) §12.3) and path-response announces (already covered in [`path-discovery.md`](path-discovery.md)).
 
@@ -10,7 +10,7 @@ Out of scope: the relay-side rebroadcast (`forward-announce.md` — see [`../SPE
 
 ### 1. Caller invokes `Destination.announce(app_data=...)`
 
-`RNS/Destination.py:244-318` → `def announce(self`. Triggers:
+`RNS/Destination.py:286-379` → `def announce(self`. Triggers:
 
 - Periodic re-announce loop (every 5-15 minutes per §7.5; LXMF runs this from `LXMRouter.jobs`).
 - Application-explicit announce (e.g. user clicks "announce now" in Sideband).
@@ -26,7 +26,7 @@ random_hash = RNS.Identity.get_random_hash()[:5] + int(time.time()).to_bytes(5, 
 
 ### 3. Optional ratchet rotation
 
-If the destination has ratchets enabled (`destination.ratchets != None`), `rotate_ratchets()` runs (`Destination.py:228-242` → `new_ratchet = RNS.Identity._generate_ratchet()`):
+If the destination has ratchets enabled (`destination.ratchets != None`), `rotate_ratchets()` runs (`Destination.py:250-264` → `new_ratchet = RNS.Identity._generate_ratchet()`):
 
 ```python
 if now > self.latest_ratchet_time + self.ratchet_interval:
@@ -64,7 +64,7 @@ The `dest_hash` is **not** in `announce_data` even though it's in `signed_data` 
 
 ### 6. Cache the body for path-response replay
 
-`Destination.py:306` → `self.path_responses[tag] = [time.time(), announce_data]`: stored if a `tag` was supplied (path-response branch). The cache TTL is `PR_TAG_WINDOW = 30s` per §7.2.4 — same wire bytes served to multiple racing relays for dedup convergence.
+`Destination.py:367` → `self.path_responses[tag] = [time.time(), announce_data]`: stored if a `tag` was supplied (path-response branch). The cache TTL is `PR_TAG_WINDOW = 30s` per §7.2.4 — same wire bytes served to multiple racing relays for dedup convergence.
 
 ### 7. Construct and emit the Reticulum ANNOUNCE packet
 
@@ -85,11 +85,11 @@ Wire form per §4.1:
 - `context = NONE (0x00)` for periodic re-announces, `PATH_RESPONSE (0x0B)` for path-response announces
 - `context_flag = 1` if ratchet present (signals the optional ratchet_pub slot in the body)
 
-Announce packets are NOT encrypted — `Packet.pack` (`RNS/Packet.py:194-196` → `# Announce packets are not encrypted`) special-cases ANNOUNCE to skip encryption. The body is signed but plaintext, so anyone in earshot can validate the signature and decode the public key.
+Announce packets are NOT encrypted — `Packet.pack` (`RNS/Packet.py:196-198` → `# Announce packets are not encrypted`) special-cases ANNOUNCE to skip encryption. The body is signed but plaintext, so anyone in earshot can validate the signature and decode the public key.
 
 ### 8. `Transport.outbound` broadcasts on every OUT interface
 
-Same broadcast branch as a path? request (`flows/path-discovery.md` step 2) — the dest_hash isn't in `path_table` (it's our own destination, not a remote one), so the broadcast branch at `RNS/Transport.py:1439-1455` → `# If we don't have a known path for the destination, we'll` fires, emitting on every interface where `interface.OUT == True`. Per §7.5 the announce is rate-limited by `ANNOUNCE_CAP = 2.0` (2% airtime) on each interface.
+Same broadcast branch as a path? request (`flows/path-discovery.md` step 2) — the dest_hash isn't in `path_table` (it's our own destination, not a remote one), so the broadcast branch at `RNS/Transport.py:1740-1758` → `# If we don't have a known path for the destination, we'll` fires, emitting on every interface where `interface.OUT == True`. Per §7.5 the announce is rate-limited by `ANNOUNCE_CAP = 2.0` (2% airtime) on each interface.
 
 ### 9. Periodic re-announce loop
 

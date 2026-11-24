@@ -2,7 +2,7 @@
 
 What happens chronologically when an app calls `LXMRouter.handle_outbound(lxm)` for an `LXMessage` whose `desired_method == OPPORTUNISTIC` and whose payload fits in a single Reticulum packet.
 
-Pinned against **RNS 1.5.7 / LXMF 1.2.1**. Line numbers below are from those versions.
+Pinned against **RNS 1.6.1 / LXMF 1.3.1**. Line numbers below are from those versions.
 
 Out of scope: messages that need a Reticulum Link (`DIRECT` method, larger payloads), propagation-node delivery (`PROPAGATED`), and paper messages (`PAPER`). Each gets its own flow document.
 
@@ -36,7 +36,7 @@ router.handle_outbound(lxm)
 
 ### 2. `LXMessage.pack()` builds the body and signs it
 
-`LXMF/LXMessage.py:362-468` → `def pack(self, payload_updated=False)`. Runs once per message. Constructs the LXMF body that will eventually become the Reticulum packet payload after Token encryption.
+`LXMF/LXMessage.py:370-476` → `def pack(self, payload_updated=False)`. Runs once per message. Constructs the LXMF body that will eventually become the Reticulum packet payload after Token encryption.
 
 ```
 payload      = msgpack.packb([timestamp_double, title_bytes, content_bytes, fields_dict])
@@ -51,10 +51,10 @@ The dual `payload` packing (once for the hash, then again with optional `stamp` 
 
 ### 3. Method and representation are fixed
 
-`LXMF/LXMessage.py:404-418` → `Falling back to link-based delivery.`. With `desired_method == OPPORTUNISTIC`:
+`LXMF/LXMessage.py:412-426` → `Falling back to link-based delivery.`. With `desired_method == OPPORTUNISTIC`:
 
 - If the destination is `SINGLE` and the payload size exceeds `ENCRYPTED_PACKET_MAX_CONTENT`, `pack` **silently downgrades** to `DIRECT` (Link) and the rest of this flow does not apply — see [`send-link-lxmf.md`](send-link-lxmf.md).
-- If the destination is `PLAIN` and the payload exceeds `PLAIN_PACKET_MAX_CONTENT`, there is no downgrade: `pack` raises `TypeError` (`:411-418` → `raise TypeError(f"LXMessage desired opportunistic delivery method`).
+- If the destination is `PLAIN` and the payload exceeds `PLAIN_PACKET_MAX_CONTENT`, there is no downgrade: `pack` raises `TypeError` (`:419-426` → `raise TypeError(f"LXMessage desired opportunistic delivery method`).
 - Otherwise, `self.method = OPPORTUNISTIC`, `self.representation = PACKET`, `self.__delivery_destination = self.__destination`.
 
 ### 4. Path preamble (conditional)
@@ -73,7 +73,7 @@ When this preamble fires the message is queued, not sent — control returns; se
 
 ### 5. `LXMessage.send()` chooses the wire path
 
-`LXMF/LXMessage.py:470-524` → `def send(self)`. For `OPPORTUNISTIC`:
+`LXMF/LXMessage.py:478-532` → `def send(self)`. For `OPPORTUNISTIC`:
 
 ```python
 self.determine_transport_encryption()
@@ -87,7 +87,7 @@ self.state = LXMessage.SENT
 
 ### 6. `__as_packet()` constructs the `RNS.Packet`
 
-`LXMF/LXMessage.py:648-660` → `def __as_packet(self)`:
+`LXMF/LXMessage.py:656-668` → `def __as_packet(self)`:
 
 ```python
 RNS.Packet(self.__delivery_destination, self.packed[LXMessage.DESTINATION_LENGTH:])
@@ -97,7 +97,7 @@ Note the slice `[16:]`: the recipient's dest_hash is removed because it is impli
 
 ### 7. `RNS.Packet.pack()` encrypts and frames
 
-`RNS/Packet.py:180-242` → `def pack(self)`. For a `SINGLE` destination, packet_type `DATA`, context `CTX_NONE`, header_type `HEADER_1`:
+`RNS/Packet.py:182-249` → `def pack(self)`. For a `SINGLE` destination, packet_type `DATA`, context `CTX_NONE`, header_type `HEADER_1`:
 
 1. **Header bytes**: `flags(1) || hops(1) || dest_hash(16) || context(1)` — SPEC.md §2.1, §2.2.
 2. **Encryption** (line 217): `self.ciphertext = self.destination.encrypt(self.data)` — calls `RNS.Destination.encrypt` which delegates to the Token construction (SPEC.md §3):
@@ -114,7 +114,7 @@ ephemeral_pub(32) || iv(16) || aes_ciphertext(...) || hmac_sha256(32)
 
 ### 8. `Transport.outbound(packet)` — path-table-aware framing
 
-`RNS/Transport.py:1353-1605` → `def _outbound(packet)`. Verified by [`../tools/verify_packet_header.py`](../tools/verify_packet_header.py).
+`RNS/Transport.py:1655-1897` → `def _outbound(packet)`. Verified by [`../tools/verify_packet_header.py`](../tools/verify_packet_header.py).
 
 - If `path_table[dest][HOPS] > 1`: convert HEADER_1 → HEADER_2 (SPEC.md §2.3). The originator inserts `path_table[dest][NEXT_HOP]` (16-byte transport_id) at offset 2 and flips the flag bits to `HEADER_2 | TRANSPORT | (orig_low_nibble)`. Resulting wire packet is 35 + ciphertext bytes.
 - If `path_table[dest][HOPS] == 1` AND the local node is connected to a shared instance: same conversion applies (lines 1094-1105).
@@ -149,7 +149,7 @@ The receive flow is its own document; see `receive-opportunistic-lxmf.md` (TODO)
 
 ### 12. PROOF receipt returns
 
-`RNS/Transport.py:1369-1386` → `generate_receipt = True`. Because the packet is `DATA` for a non-PLAIN, non-LINK destination with `create_receipt == True`, `Transport.outbound` registered a `PacketReceipt` on the sender side. When the recipient calls `Packet.prove`, a PROOF packet flies back containing `SHA256(packet.hashable_part)`; the sender's `PacketReceipt` matches it, fires the delivery callback registered at step 5, and the LXMessage state advances `SENT → DELIVERED`.
+`RNS/Transport.py:1671-1688` → `generate_receipt = True`. Because the packet is `DATA` for a non-PLAIN, non-LINK destination with `create_receipt == True`, `Transport.outbound` registered a `PacketReceipt` on the sender side. When the recipient calls `Packet.prove`, a PROOF packet flies back containing `SHA256(packet.hashable_part)`; the sender's `PacketReceipt` matches it, fires the delivery callback registered at step 5, and the LXMessage state advances `SENT → DELIVERED`.
 
 If no proof arrives within the receipt timeout, `__link_packet_timed_out` runs on the receipt's timeout callback and the LXMessage state can drive a retry (see `LXMRouter.py::process_outbound` retry logic at `:2571+`, which may itself trigger a fresh `request_path` after `MAX_PATHLESS_TRIES`).
 
