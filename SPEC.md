@@ -4416,7 +4416,17 @@ Only entries whose `source` is this node's own transport identity are persisted 
 > The subscriber's unmodified `BlackholeUpdater` fetched `/list` over a real
 > Link, one ordinary local blackhole followed, and after a restart with the
 > source unsubscribed the planted entry was still enforced. Announces from it
-> returned `"blackholed"`. The publisher's honestly attributed entry was gone. An implementation SHOULD set `source` to
+> returned `"blackholed"`. The publisher's honestly attributed entry was gone.
+>
+> **Affected versions: since RNS 1.1.0 (2026-01-04), and through at least the
+> current pin.** Blackhole lists first shipped in 1.1.0; 1.0.4 has none. Every
+> released wheel from 1.1.0 onward was checked for the three ingredients: the
+> verbatim merge in `update_link_established`, the `source` filter in
+> `persist_blackhole`, and the rewrite of `source` only in `reload_blackhole`.
+> All are present unchanged. The two-process reproduction above was also run
+> against a clean RNS 1.1.0 install, with the same outcome. Through RNS 1.4.2,
+> `validate_announce` has no `signal_blackholed` parameter and simply returns
+> `False` (§4.5 step 5). An implementation SHOULD set `source` to
 > the publisher's identity hash when merging a fetched list, as
 > `reload_blackhole` already does, and SHOULD ignore keys that are not
 > 16 bytes. Merged entries are also not checked for expiry, nor are their
